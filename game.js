@@ -40,11 +40,8 @@ const CONFIG = {
  *  게임 모드 / 월드
  * -----------------------------------------------------------------------------
  *  - survival : 5000² 오픈 맵. 머리로 받혀 죽으면 모드 선택으로 복귀.
- *  - racing   : 긴 0자(수평 캡슐 링) 트랙. 죽음 없음. 트랙 이탈 시 감속.
- *  RACE 트랙 좌표는 server.js 의 RACE 와 반드시 일치해야 한다(부활 위치 계산).
+ *  - racing   : 사진 같은 꼬불꼬불한 카트 서킷. 죽음 없음. 트랙 이탈 시 감속.
  * ========================================================================== */
-const RACE = { AX: 3000, BX: 7000, CY: 3000, R_IN: 1500, R_OUT: 2500 };
-
 const WORLD = {
   survival: { w: 5000, h: 5000, type: "open" },
   racing: { w: 10000, h: 6000, type: "track" },
@@ -56,7 +53,61 @@ let world = WORLD.survival;  // 현재 월드 치수/타입
 let gameState = "menu";      // "menu" | "playing"
 let playerName = "Player";
 
-const OFFTRACK_DRAG = 2.2;   // 트랙 이탈 시 추가 감속 계수 (클수록 풀밭처럼 느려짐)
+const OFFTRACK_DRAG = 2.4;   // 트랙 이탈 시 추가 감속 계수 (클수록 풀밭처럼 느려짐)
+
+/* 레이싱 트랙(카트 서킷) ------------------------------------------------------
+ *  중심선을 "별모양 보장(자기교차 없음)" 극좌표식 폐곡선으로 생성한다.
+ *      point(θ) = center + ( R(θ)·cosθ , R(θ)·sinθ ),  R(θ) > 0
+ *  여러 주파수의 사인을 더해 코너가 많은 굽이진 서킷을 만든다. R 이 항상
+ *  양수라 중심에서 별모양이라 절대 자기 자신과 교차하지 않는다.
+ *  생성 후 bbox 를 월드(트랙 폭 여백 포함)에 자동으로 맞춰 스케일/이동한다. */
+const TRACK = {
+  halfWidth: 230,     // 트랙 절반 폭 (전체 폭 460px)
+  kerb: 26,           // 빨강/흰 커브 폭
+  centerline: [],     // 월드 좌표 중심선 점들 (닫힌 루프)
+  path: null,         // 렌더용 캐시 Path2D (중심선)
+  start: { x: 0, y: 0, angle: 0 }, // 출발 위치/방향
+};
+
+// 트랙 중심선을 생성한다 (init 에서 1회 호출). world.racing 치수에 맞춰 자동 피팅.
+function generateTrack() {
+  const N = 260; // 중심선 해상도
+  // 1) 단위 극좌표 곡선 샘플 (여러 하모닉 → 굽이진 서킷)
+  const raw = [];
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * Math.PI * 2;
+    const R = 1
+      + 0.16 * Math.sin(2 * a + 0.6)
+      + 0.30 * Math.sin(3 * a + 0.4)
+      + 0.18 * Math.sin(5 * a + 1.3)
+      + 0.10 * Math.sin(7 * a + 0.2);
+    raw.push({ x: Math.cos(a) * R * 1.7, y: Math.sin(a) * R }); // x 를 늘려 가로로 길게
+  }
+  // 2) bbox 계산
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of raw) {
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  }
+  // 3) 월드(트랙 폭 + 여백 만큼 안쪽) 에 맞춰 스케일/이동
+  const W = WORLD.racing.w, H = WORLD.racing.h;
+  const inset = TRACK.halfWidth + TRACK.kerb + 120;
+  const scale = Math.min((W - 2 * inset) / (maxX - minX), (H - 2 * inset) / (maxY - minY));
+  const offX = (W - (maxX - minX) * scale) / 2 - minX * scale;
+  const offY = (H - (maxY - minY) * scale) / 2 - minY * scale;
+
+  TRACK.centerline = raw.map(p => ({ x: p.x * scale + offX, y: p.y * scale + offY }));
+
+  // 4) 렌더용 Path2D (닫힌 루프)
+  const path = new Path2D();
+  TRACK.centerline.forEach((p, i) => i ? path.lineTo(p.x, p.y) : path.moveTo(p.x, p.y));
+  path.closePath();
+  TRACK.path = path;
+
+  // 5) 출발 위치/방향 = 중심선 0번 점, 다음 점 방향
+  const a0 = TRACK.centerline[0], a1 = TRACK.centerline[1];
+  TRACK.start = { x: a0.x, y: a0.y, angle: Math.atan2(a1.y - a0.y, a1.x - a0.x) };
+}
 
 // km/h -> px/s 변환 계수.  (km/h ÷ 3.6 = m/s) × (m -> px)
 const KMH_TO_PXS = (1 / 3.6) * CONFIG.PIXELS_PER_METER;
@@ -77,16 +128,18 @@ const CAR = {
   acceleration: 165,      // 트랙션 한계 가속도 (px/s²) — 출발 시 최대 가속(접지력 한계)
   brakePower: 230,        // 브레이크 감속도 (px/s²) — 강력하지만 즉시정지 X (ABS 느낌)
 
-  grip: 13.0,             // 저속 측면 그립 계수 (1/s) — 클수록 측면미끄럼 즉시 제거
-  driftGrip: 2.0,         // 고속 측면 그립 계수 (1/s) — 작을수록 잘 미끄러짐(드리프트)
+  grip: 13.0,             // 평상시 측면 그립 계수 (1/s) — 클수록 미끄럼 즉시 제거(드리프트 X)
+  driftGrip: 1.2,         // 브레이크 드리프트 시 측면 그립 (1/s) — 작을수록 더 크게 옆으로 미끄러짐
+  brakeDriftSpeed: 110,   // 이 속도(km/h) 이상에서 브레이크를 밟아야 드리프트 발생
 
   steering: 3.0,          // 최대 조향 각속도 (rad/s) — 풀 카운터 시 1초에 회전하는 라디안
   highSpeedSteer: 0.40,   // 고속에서 남는 조향 권한 비율 (0~1) — 고속일수록 핸들 둔해짐
+  driftSteerBoost: 1.7,   // 드리프트 중 조향 권한 배수 — 뒤가 풀려 차가 더 잘 돌아 슬립각↑
 
   weight: 1500,           // 차량 질량 (kg) — 무게감/반응속도(조향 램프, 그립 회복)에 사용
 
-  airResistance: 1.15e-4, // 공기저항 계수 — 감속 ∝ 속도² (고속에서 급격히 커짐)
-  rollingResistance: 0.022, // 구름저항 계수 — 감속 ∝ 속도 (저속 코스팅을 서서히 멈춤)
+  airResistance: 7.0e-5,  // 공기저항 계수 — 감속 ∝ 속도² (고속에서 커짐). 낮출수록 관성↑
+  rollingResistance: 0.012, // 구름저항 계수 — 감속 ∝ 속도 (저속 코스팅). 낮출수록 더 오래 굴러감
 
   enginePower: 0,         // 엔진 출력 — init()에서 maxSpeed 기준으로 자동 산출
 
@@ -108,6 +161,7 @@ const CAR = {
   braking: 0,              // 0~1
   steerInput: 0,           // -1(좌) ~ +1(우), 부드럽게 램프됨
 
+  drifting: false,         // 현재 브레이크 드리프트 중인지 (자국/조향/네트워크 공통 기준)
   invulnUntil: 0,          // 이 시각(performance.now ms)까지 무적 — 부활 직후 보호
 };
 
@@ -169,6 +223,8 @@ function init() {
   CAR.enginePower =
     CAR.airResistance * vmax * vmax * vmax +
     CAR.rollingResistance * vmax * vmax;
+
+  generateTrack(); // 레이싱 트랙 중심선/경로 생성
 }
 
 
@@ -208,7 +264,11 @@ function updateSteering(car, dt) {
   const lowSpeedGate = clamp(speed / (25 * KMH_TO_PXS), 0, 1);
 
   // 고속 권한 감소 : 1(저속) → highSpeedSteer(고속) 로 보간
-  const authority = lerp(1, car.highSpeedSteer, speedRatio);
+  let authority = lerp(1, car.highSpeedSteer, speedRatio);
+
+  // 드리프트 중엔 뒤가 풀려 차가 더 잘 돈다 → 조향 권한을 키워 슬립각을 크게 만든다
+  //  (car.drifting 은 직전 프레임 updateGrip 에서 갱신된 값 — 한 프레임 지연은 무시 가능)
+  if (car.drifting) authority *= car.driftSteerBoost;
 
   const turnRate = car.steering * car.steerInput * authority * lowSpeedGate;
   car.angle += turnRate * dt;
@@ -262,24 +322,31 @@ function updateResistance(car, dt) {
   car.lf = Math.max(0, car.lf - (drag + roll) * dt);
 }
 
-/* 6) 그립 (측면 마찰) — 드리프트의 핵심 -------------------------------------
- *  측면 속도 성분 ll 을 매 프레임 지수적으로 감쇠시킨다.
- *      ll *= e^(-grip · dt)
- *  - grip(감쇠율)이 크면 측면속도가 즉시 사라져 v 가 heading 에 빠르게 정렬
- *    → 깔끔하고 회전반경 작은 코너링(저속).
- *  - grip 이 작으면 측면속도가 오래 남아 차 뒤가 미끄러진다 → 드리프트(고속).
- *  속도가 높을수록 grip → driftGrip 으로 낮아져 자연히 드리프트가 발생.
- *  추가로 고속에서 핸들을 많이 꺾으면 그립이 더 떨어지도록 해 드리프트 유도. */
+/* 6) 그립 (측면 마찰) — 브레이크 드리프트 -----------------------------------
+ *  측면 속도 성분 ll 을 매 프레임 지수적으로 감쇠시킨다.  ll *= e^(-grip · dt)
+ *  - 평상시엔 grip(높음)을 유지 → 측면속도가 즉시 사라져 v 가 heading 에 빠르게
+ *    정렬된다. 따라서 고속에서도 드리프트 없이 깔끔하게 회전한다.
+ *  - "고속 + 브레이크(SPACE)" 일 때만 그립을 driftGrip(낮음)으로 떨어뜨려 뒤가
+ *    미끄러지게 한다. 이때 조향을 같이 넣으면 슬립 앵글이 생겨 드리프트가 된다.
+ *    (브레이크만 밟고 직진하면 미끄러지지 않고 그냥 감속) */
 function updateGrip(car, dt) {
   const speed = speedOf(car);
-  const speedRatio = clamp(speed / (car.maxSpeed * KMH_TO_PXS), 0, 1);
 
-  // 속도에 따른 기본 그립 (저속:grip → 고속:driftGrip)
-  let lateralFriction = lerp(car.grip, car.driftGrip, speedRatio);
+  // 기본은 항상 높은 그립 → 드리프트 없음
+  let lateralFriction = car.grip;
+  car.drifting = false;
 
-  // 고속 + 큰 조향 시 그립 추가 감소 → 뒤가 더 잘 흘러나간다
-  const steerLoad = Math.abs(car.steerInput) * speedRatio;
-  lateralFriction *= lerp(1.0, 0.55, steerLoad);
+  // 고속에서 브레이크를 밟는 동안에만 그립을 낮춰 브레이크 드리프트 유발
+  const driftSpeed = car.brakeDriftSpeed * KMH_TO_PXS;
+  if (car.braking > 0 && speed > driftSpeed) {
+    // 빠를수록 더 잘 미끄러지게 (driftGrip 쪽으로 강하게)
+    const over = clamp((speed - driftSpeed) / (car.maxSpeed * KMH_TO_PXS - driftSpeed), 0, 1);
+    lateralFriction = lerp(car.grip * 0.35, car.driftGrip, over);
+
+    // 실제로 옆으로 미끄러지고 있을 때(측면 속도 충분)만 "드리프트 중"으로 본다.
+    //  → 브레이크만 밟고 직진하면 자국/부스트 없음. 조향을 같이 넣어야 드리프트.
+    if (Math.abs(car.ll) > 30) car.drifting = true;
+  }
 
   // 지수 감쇠 (프레임레이트 독립적)
   car.ll *= Math.exp(-lateralFriction * dt);
@@ -327,20 +394,28 @@ function updateSurface(car, dt) {
   car.ll *= f;
 }
 
-/* 점이 레이싱 트랙(수평 캡슐 링) 위에 있는지 : 중심선 세그먼트까지의 거리가
- *  R_IN ~ R_OUT 사이면 트랙(아스팔트), 아니면 이탈(구멍/바깥). */
+/* 점이 트랙 위에 있는지 : 중심선(폐곡선)까지의 최단 거리가 트랙 절반 폭 이내면
+ *  아스팔트, 아니면 이탈(잔디). 중심선의 모든 세그먼트를 훑어 최소 거리를 구한다. */
 function isOnTrack(x, y) {
-  const d = distToSegment(x, y, RACE.AX, RACE.CY, RACE.BX, RACE.CY);
-  return d >= RACE.R_IN && d <= RACE.R_OUT;
+  const pts = TRACK.centerline;
+  const n = pts.length;
+  let minD2 = Infinity;
+  for (let i = 0; i < n; i++) {
+    const a = pts[i], b = pts[(i + 1) % n];
+    const d2 = distToSegmentSq(x, y, a.x, a.y, b.x, b.y);
+    if (d2 < minD2) minD2 = d2;
+  }
+  return minD2 <= TRACK.halfWidth * TRACK.halfWidth;
 }
 
-// 점(px,py)에서 선분 (x1,y1)-(x2,y2) 까지의 최단 거리
-function distToSegment(px, py, x1, y1, x2, y2) {
+// 점(px,py)에서 선분까지의 거리 제곱 (sqrt 생략으로 빠르게)
+function distToSegmentSq(px, py, x1, y1, x2, y2) {
   const dx = x2 - x1, dy = y2 - y1;
   const len2 = dx * dx + dy * dy;
   const t = len2 ? clamp(((px - x1) * dx + (py - y1) * dy) / len2, 0, 1) : 0;
   const cx = x1 + t * dx, cy = y1 + t * dy;
-  return Math.hypot(px - cx, py - cy);
+  const ex = px - cx, ey = py - cy;
+  return ex * ex + ey * ey;
 }
 
 /* 플레이어 간 킬 판정은 서버 권위(server.js runCollisions)로 처리한다.
@@ -450,11 +525,9 @@ function pushSkid(x, y, angle, color) {
   while (skidMarks.length > MAX_SKID) skidMarks.shift();
 }
 
-// 내 차 : 측면 미끄럼이 크고 속도가 충분하면 내 색으로 자국을 남긴다.
+// 내 차 : 드리프트 중일 때만 내 색으로 타이어 자국을 남긴다.
 function updateSkid(car) {
-  const lateral = Math.abs(car.ll);
-  const speed = speedOf(car);
-  if (lateral > 18 && speed > 40 * KMH_TO_PXS) {
+  if (car.drifting) {
     pushSkid(car.x, car.y, car.angle, skidColorForId(net.id ?? 0));
   }
 }
@@ -559,44 +632,58 @@ function drawSurvivalGround() {
   ctx.strokeRect(0, 0, W, H);
 }
 
-// 수평 캡슐(스타디움) 경로를 ctx 에 만든다 : 세그먼트 (ax..bx, cy) 의 반경 r
-function capsulePath(ax, bx, cy, r) {
-  roundRect(ax - r, cy - r, (bx - ax) + 2 * r, 2 * r, r);
+// 트랙 리본(커브+아스팔트+중앙선)을 주어진 컨텍스트에 그린다.
+//  중심선 Path2D 를 폭을 달리해 여러 번 stroke 해서 층층이 쌓는다.
+function strokeTrack(c, opt) {
+  const p = TRACK.path;
+  const tw = TRACK.halfWidth * 2;
+  c.lineJoin = "round";
+  c.lineCap = "round";
+
+  // 1) 커브(빨강) — 트랙보다 넓게
+  c.strokeStyle = "#c0392b";
+  c.lineWidth = tw + 2 * TRACK.kerb;
+  c.stroke(p);
+  // 2) 흰 점선을 같은 폭으로 덮어 빨강/흰 커브 무늬 (가운데는 곧 아스팔트가 덮음)
+  if (opt.kerbDash) {
+    c.setLineDash(opt.kerbDash);
+    c.strokeStyle = "#ecf0f1";
+    c.lineWidth = tw + 2 * TRACK.kerb;
+    c.stroke(p);
+    c.setLineDash([]);
+  }
+  // 3) 아스팔트 — 트랙 폭만큼 덮어 가운데를 메우고 커브 링만 남긴다
+  c.strokeStyle = "#3a3f44";
+  c.lineWidth = tw;
+  c.stroke(p);
+  // 4) 중앙 점선
+  if (opt.center) {
+    c.setLineDash([50, 60]);
+    c.strokeStyle = "rgba(255,255,255,0.35)";
+    c.lineWidth = 4;
+    c.stroke(p);
+    c.setLineDash([]);
+  }
 }
 
 function drawRacingGround() {
-  const W = world.w, H = world.h, cy = RACE.CY;
+  const W = world.w, H = world.h;
 
   // 잔디
-  ctx.fillStyle = "#3b6b3a";
+  ctx.fillStyle = "#4a7a44";
   ctx.fillRect(0, 0, W, H);
 
-  // 트랙(아스팔트) : 외곽 캡슐을 채우고 안쪽 캡슐을 잔디색으로 도려내 링을 만든다
-  ctx.fillStyle = "#3a3f44";
-  capsulePath(RACE.AX, RACE.BX, cy, RACE.R_OUT); ctx.fill();
-  ctx.fillStyle = "#3b6b3a";
-  capsulePath(RACE.AX, RACE.BX, cy, RACE.R_IN); ctx.fill();
+  // 트랙 리본
+  strokeTrack(ctx, { kerbDash: [55, 55], center: true });
 
-  // 트랙 가장자리 흰 선
-  ctx.strokeStyle = "rgba(255,255,255,0.65)";
-  ctx.lineWidth = 6;
-  capsulePath(RACE.AX, RACE.BX, cy, RACE.R_OUT); ctx.stroke();
-  capsulePath(RACE.AX, RACE.BX, cy, RACE.R_IN); ctx.stroke();
-
-  // 중앙 점선
-  ctx.setLineDash([45, 45]);
-  ctx.strokeStyle = "rgba(255,220,0,0.5)";
-  ctx.lineWidth = 4;
-  capsulePath(RACE.AX, RACE.BX, cy, (RACE.R_IN + RACE.R_OUT) / 2); ctx.stroke();
-  ctx.setLineDash([]);
-
-  // 스타트/피니시 라인 (아래쪽 직선 가운데, 트랙 폭을 가로지름)
-  const sx = (RACE.AX + RACE.BX) / 2;
+  // 스타트/피니시 라인 (출발점에서 진행방향에 수직으로 트랙 폭을 가로지름)
+  const s = TRACK.start;
+  const nx = Math.cos(s.angle + Math.PI / 2), ny = Math.sin(s.angle + Math.PI / 2);
   ctx.strokeStyle = "#ffffff";
   ctx.lineWidth = 10;
   ctx.beginPath();
-  ctx.moveTo(sx, cy + RACE.R_IN);
-  ctx.lineTo(sx, cy + RACE.R_OUT);
+  ctx.moveTo(s.x - nx * TRACK.halfWidth, s.y - ny * TRACK.halfWidth);
+  ctx.lineTo(s.x + nx * TRACK.halfWidth, s.y + ny * TRACK.halfWidth);
   ctx.stroke();
 
   // 맵 경계
@@ -701,17 +788,19 @@ function drawMinimap(car) {
   mctx.fillStyle = "rgba(40,45,42,0.9)";
   mctx.fillRect(ox, oy, world.w * scale, world.h * scale);
 
-  // 레이싱 트랙 링
-  if (world.type === "track") {
+  // 레이싱 트랙 (중심선을 굵게 stroke → 미니맵 트랙 모양)
+  if (world.type === "track" && TRACK.path) {
     mctx.save();
     mctx.translate(ox, oy);
     mctx.scale(scale, scale);
-    mctx.fillStyle = "#566";
-    roundRect(RACE.AX - RACE.R_OUT, RACE.CY - RACE.R_OUT,
-      (RACE.BX - RACE.AX) + 2 * RACE.R_OUT, 2 * RACE.R_OUT, RACE.R_OUT, mctx); mctx.fill();
-    mctx.fillStyle = "rgba(40,45,42,0.9)";
-    roundRect(RACE.AX - RACE.R_IN, RACE.CY - RACE.R_IN,
-      (RACE.BX - RACE.AX) + 2 * RACE.R_IN, 2 * RACE.R_IN, RACE.R_IN, mctx); mctx.fill();
+    mctx.lineJoin = "round";
+    mctx.lineCap = "round";
+    mctx.strokeStyle = "#7a8a76";
+    mctx.lineWidth = TRACK.halfWidth * 2 + 2 * TRACK.kerb;
+    mctx.stroke(TRACK.path);
+    mctx.strokeStyle = "#566";
+    mctx.lineWidth = TRACK.halfWidth * 2;
+    mctx.stroke(TRACK.path);
     mctx.restore();
   }
 
@@ -870,12 +959,11 @@ function netSend(car, now) {
   if (now - net.lastSend < net.sendInterval) return;
   net.lastSend = now;
 
-  const drifting = Math.abs(car.ll) > 18 && speedOf(car) > 40 * KMH_TO_PXS;
   const msg = {
     type: "state",
     x: Math.round(car.x), y: Math.round(car.y),
     angle: +car.angle.toFixed(3),
-    drifting,
+    drifting: car.drifting, // 드리프트 중일 때만 → 남들 화면에도 그때만 자국
   };
   // 막 텔레포트(벽/플레이어 리스폰)했으면 서버·남들에게 스냅하라고 알린다
   if (net.pendingTeleport) { msg.teleport = true; net.pendingTeleport = false; }
@@ -962,11 +1050,20 @@ function startGame(mode) {
   CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
   keys.w = keys.a = keys.d = keys.space = false; // 메뉴 조작으로 눌린 키 초기화
 
+  // 레이싱은 클라이언트가 트랙 출발점에서 시작(서버 spawn 없음).
+  // 서바이벌은 서버가 'spawn' 으로 위치를 정해 보내준다.
+  if (mode === "racing") {
+    CAR.x = TRACK.start.x; CAR.y = TRACK.start.y; CAR.angle = TRACK.start.angle;
+    CAR.invulnUntil = performance.now() + 1500;
+    net.pendingTeleport = true;
+    updateCamera(CAR, 0); // 카메라 즉시 출발점으로
+  }
+
   gameState = "playing";
   document.getElementById("menu").classList.remove("show");
   document.getElementById("exitBtn").style.display = "block";
 
-  sendJoin(); // 서버에 입장 → 서버가 spawn 위치 통지
+  sendJoin(); // 서버에 입장 (서바이벌이면 서버가 spawn 통지)
 }
 
 function toMenu() {

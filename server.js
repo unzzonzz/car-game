@@ -31,9 +31,7 @@ const CAR_WID = 18;
 const INVULN_MS = 1500;     // 부활/입장 후 무적 시간 (이 동안 죽지도 죽이지도 못함)
 const GRACE_MS = 500;       // 입장 직후 클라이언트의 옛 위치 전송을 무시하는 시간
 const TELEPORT_DIST = 200;  // 한 틱에 이 이상 움직이면 텔레포트로 간주(스윕 생략)
-
-// 레이싱 트랙(긴 0자 = 수평 캡슐 링) — 클라이언트 game.js 의 RACE 와 일치해야 함
-const RACE = { AX: 3000, BX: 7000, CY: 3000, R_IN: 1500, R_OUT: 2500 };
+//  레이싱은 충돌/킬이 없어 서버가 트랙 좌표를 알 필요 없다(클라가 출발점 결정).
 
 // --- 정적 파일 서버 ---------------------------------------------------------
 const MIME = {
@@ -91,16 +89,24 @@ wss.on("connection", (ws) => {
     if (!p) return;
 
     if (msg.type === "join") {
-      // 모드 선택 화면에서 입장 : 모드/이름 등록 + 부활 위치 결정 후 통지
+      // 모드 선택 화면에서 입장 : 모드/이름 등록
       p.mode = msg.mode === "racing" ? "racing" : "survival";
       p.name = sanitizeName(msg.name);
       p.active = true;
-      const spawn = p.mode === "racing" ? pickRacingSpawn() : pickSpawn(id);
-      p.state = { x: spawn.x, y: spawn.y, angle: spawn.angle, drifting: false, teleport: true };
-      p.prevHead = headOf(p.state);
-      p.invulnUntil = Date.now() + INVULN_MS;
-      p.graceUntil = Date.now() + GRACE_MS; // 클라가 spawn 반영 전 보내는 옛 위치 무시
-      send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
+      if (p.mode === "survival") {
+        // 서바이벌 : 서버가 안전한 부활 위치를 정해 통지
+        const spawn = pickSpawn(id);
+        p.state = { x: spawn.x, y: spawn.y, angle: spawn.angle, drifting: false, teleport: true };
+        p.prevHead = headOf(p.state);
+        p.invulnUntil = Date.now() + INVULN_MS;
+        p.graceUntil = Date.now() + GRACE_MS; // 클라가 spawn 반영 전 옛 위치 무시
+        send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
+      } else {
+        // 레이싱 : 클라이언트가 트랙 출발점에서 시작. 위치는 곧 state 로 들어온다.
+        p.state = null;
+        p.invulnUntil = 0;
+        p.graceUntil = 0;
+      }
       console.log(`[>] player ${id} joined ${p.mode} as "${p.name}"`);
 
     } else if (msg.type === "leave") {
@@ -206,15 +212,6 @@ function pickSpawn(selfId) {
     if (minD > safe) break;
   }
   return { x: best.x, y: best.y, angle: Math.random() * Math.PI * 2 };
-}
-
-// 레이싱 시작 위치 : 트랙(캡슐 링)의 아래쪽 직선 구간 위 무작위 지점
-function pickRacingSpawn() {
-  const midR = (RACE.R_IN + RACE.R_OUT) / 2;
-  const x = RACE.AX + Math.random() * (RACE.BX - RACE.AX);
-  const jitter = (Math.random() - 0.5) * (RACE.R_OUT - RACE.R_IN - 200);
-  const y = RACE.CY + midR + jitter; // 아래쪽 직선
-  return { x, y, angle: 0 };
 }
 
 function send(p, obj) {
