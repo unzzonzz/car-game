@@ -114,6 +114,13 @@ wss.on("connection", (ws) => {
       p.active = false;
       p.state = null;
 
+    } else if (msg.type === "chat") {
+      // 같은 모드 플레이어들에게 채팅 릴레이 (이름/시간은 서버 기준)
+      if (!p.active) return;
+      const text = sanitizeChat(msg.text);
+      if (!text) return;
+      broadcastMode(p.mode, { type: "chat", id, name: p.name, text, t: Date.now() });
+
     } else if (msg.type === "state") {
       if (!p.active) return; // 메뉴 상태에선 무시
       // 입장 직후 유예 시간 동안엔 클라가 spawn 을 반영하기 전 옛 위치를 보낼 수
@@ -193,6 +200,13 @@ function sanitizeName(name) {
   let s = (typeof name === "string" ? name : "").replace(/[\x00-\x1f]/g, "").trim();
   if (s.length > 12) s = s.slice(0, 12);
   return s || "Player";
+}
+
+// 채팅 정리 : 제어문자 제거, 좌우 공백 제거, 200자 제한
+function sanitizeChat(text) {
+  let s = (typeof text === "string" ? text : "").replace(/[\x00-\x1f]/g, "").trim();
+  if (s.length > 200) s = s.slice(0, 200);
+  return s;
 }
 
 // 서바이벌 부활 위치 : 다른 서바이벌 플레이어로부터 가장 멀리 떨어진 곳

@@ -908,6 +908,9 @@ function connect() {
       spawnExplosion(msg.x, msg.y, color);
       // 내가 죽인 경우 내 화면을 흔든다 (타격감)
       if (msg.killerId === net.id) addShake(34);
+    } else if (msg.type === "chat") {
+      // 채팅 수신 → 로그에 추가 (이름은 보낸 사람 색)
+      addChatLine(msg.name, msg.text, colorForId(msg.id), msg.t);
     } else if (msg.type === "snapshot") {
       const seen = new Set();
       for (const p of msg.players) {
@@ -951,6 +954,75 @@ function sendJoin() {
 function sendLeave() {
   if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
   net.ws.send(JSON.stringify({ type: "leave" }));
+}
+
+/* =============================================================================
+ *  채팅 (미니맵 하단)
+ * ========================================================================== */
+const MAX_CHAT_LINES = 80;
+
+// 입력창 내용을 서버로 전송
+function sendChat() {
+  const input = document.getElementById("chatInput");
+  const text = (input.value || "").trim();
+  if (!text) return;
+  if (net.connected && net.ws.readyState === WebSocket.OPEN && gameState === "playing") {
+    net.ws.send(JSON.stringify({ type: "chat", text }));
+  }
+  input.value = "";
+}
+
+// 시간 H:i (24시간 HH:MM)
+function fmtTime(t) {
+  const d = new Date(t || Date.now());
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  return `${h}:${m}`;
+}
+
+// 채팅 로그에 한 줄 추가 (textContent 로만 넣어 HTML 주입 방지)
+function addChatLine(name, text, color, t) {
+  const log = document.getElementById("chatLog");
+  const wasBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+
+  const line = document.createElement("div");
+  line.className = "chat-msg";
+
+  const timeEl = document.createElement("span");
+  timeEl.className = "chat-time";
+  timeEl.textContent = fmtTime(t);
+
+  const nameEl = document.createElement("span");
+  nameEl.className = "chat-name";
+  nameEl.style.color = color || "#fff";
+  nameEl.textContent = name + ":";
+
+  const textEl = document.createElement("span");
+  textEl.className = "chat-text";
+  textEl.textContent = text;
+
+  line.append(timeEl, nameEl, document.createTextNode(" "), textEl);
+  log.appendChild(line);
+
+  // 오래된 줄 정리
+  while (log.children.length > MAX_CHAT_LINES) log.removeChild(log.firstChild);
+
+  // 사용자가 맨 아래를 보고 있었으면 자동 스크롤
+  if (wasBottom) log.scrollTop = log.scrollHeight;
+}
+
+// 채팅 UI 배선 (전송 버튼 + Enter)
+function setupChat() {
+  document.getElementById("chatSend").addEventListener("click", () => {
+    sendChat();
+    document.getElementById("chatInput").focus(); // 버튼 클릭 후 계속 입력 가능
+  });
+  document.getElementById("chatInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      sendChat();
+      e.target.blur(); // Enter 로 보내면 입력창에서 빠져나와 운전 복귀
+    }
+  });
 }
 
 // 내 차 상태를 주기적으로 서버에 전송
@@ -1047,6 +1119,7 @@ function startGame(mode) {
   skidMarks.length = 0;
   explosions.length = 0;
   camera.shake = 0;
+  document.getElementById("chatLog").innerHTML = ""; // 새 방 → 채팅 비움
   CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
   keys.w = keys.a = keys.d = keys.space = false; // 메뉴 조작으로 눌린 키 초기화
 
@@ -1092,4 +1165,5 @@ function setupMenu() {
 
 init();
 setupMenu();
+setupChat();
 requestAnimationFrame(frame);
