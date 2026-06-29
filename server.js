@@ -25,12 +25,15 @@ const TICK_RATE = 30;       // 초당 스냅샷 브로드캐스트 횟수
 const COLLISION_HZ = 60;    // 초당 충돌 판정 횟수 (브로드캐스트보다 잦게 → 터널링 완화)
 
 // 판정용 월드/차량 상수 (클라이언트 game.js 의 값과 반드시 일치)
-const MAP_SIZE = 5000;
+const MAP_SIZE = 5000;      // 서바이벌 맵 크기 (정사각형)
 const CAR_LEN = 38;
 const CAR_WID = 18;
-const INVULN_MS = 1500;     // 부활 후 무적 시간 (이 동안 죽지도 죽이지도 못함)
-const GRACE_MS = 500;       // 부활 직후 클라이언트의 옛 위치 전송을 무시하는 시간
+const INVULN_MS = 1500;     // 부활/입장 후 무적 시간 (이 동안 죽지도 죽이지도 못함)
+const GRACE_MS = 500;       // 입장 직후 클라이언트의 옛 위치 전송을 무시하는 시간
 const TELEPORT_DIST = 200;  // 한 틱에 이 이상 움직이면 텔레포트로 간주(스윕 생략)
+
+// 레이싱 트랙(긴 0자 = 수평 캡슐 링) — 클라이언트 game.js 의 RACE 와 일치해야 함
+const RACE = { AX: 3000, BX: 7000, CY: 3000, R_IN: 1500, R_OUT: 2500 };
 
 // --- 정적 파일 서버 ---------------------------------------------------------
 const MIME = {
@@ -64,12 +67,13 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server });
 
 let nextId = 1;
-// id -> { ws, state }   state = { x, y, angle, drifting }
+// id -> { ws, state, active, mode, name, invulnUntil, graceUntil, prevHead }
+//  active=false : 메뉴 화면(미입장). 스냅샷/판정에서 제외된다.
 const players = new Map();
 
 wss.on("connection", (ws) => {
   const id = nextId++;
-  players.set(id, { ws, state: null });
+  players.set(id, { ws, state: null, active: false, mode: "survival", name: "" });
 
   // heartbeat : 클라이언트가 살아있는지 추적 (프록시가 유휴 연결을 끊는 것 방지)
   ws.isAlive = true;
@@ -83,17 +87,37 @@ wss.on("connection", (ws) => {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
 
-    if (msg.type === "state") {
-      const p = players.get(id);
-      if (!p) return;
-      // 부활 직후 유예 시간 동안엔 클라이언트가 아직 텔레포트를 반영하기 전
-      // 옛 위치를 보낼 수 있으므로 무시한다(서버가 정한 부활 위치 유지).
+    const p = players.get(id);
+    if (!p) return;
+
+    if (msg.type === "join") {
+      // 모드 선택 화면에서 입장 : 모드/이름 등록 + 부활 위치 결정 후 통지
+      p.mode = msg.mode === "racing" ? "racing" : "survival";
+      p.name = sanitizeName(msg.name);
+      p.active = true;
+      const spawn = p.mode === "racing" ? pickRacingSpawn() : pickSpawn(id);
+      p.state = { x: spawn.x, y: spawn.y, angle: spawn.angle, drifting: false, teleport: true };
+      p.prevHead = headOf(p.state);
+      p.invulnUntil = Date.now() + INVULN_MS;
+      p.graceUntil = Date.now() + GRACE_MS; // 클라가 spawn 반영 전 보내는 옛 위치 무시
+      send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
+      console.log(`[>] player ${id} joined ${p.mode} as "${p.name}"`);
+
+    } else if (msg.type === "leave") {
+      // 나가기 버튼 등으로 메뉴 복귀 → 스냅샷/판정에서 제외
+      p.active = false;
+      p.state = null;
+
+    } else if (msg.type === "state") {
+      if (!p.active) return; // 메뉴 상태에선 무시
+      // 입장 직후 유예 시간 동안엔 클라가 spawn 을 반영하기 전 옛 위치를 보낼 수
+      // 있으므로 무시한다(서버가 정한 부활 위치 유지).
       if (Date.now() < (p.graceUntil || 0)) return;
       // 이동은 클라이언트 권위 — 위치는 신뢰해 저장(충돌 판정만 서버가 함)
       p.state = {
         x: msg.x, y: msg.y, angle: msg.angle,
         drifting: !!msg.drifting,
-        teleport: !!msg.teleport, // 벽 리스폰 등으로 순간이동했음을 알림
+        teleport: !!msg.teleport,
       };
     }
   });
@@ -158,7 +182,14 @@ function sweptHeadHit(prevHead, curHead, target) {
   return false;
 }
 
-// 다른 플레이어들로부터 가장 멀리 떨어진 부활 위치를 고른다(서버가 모든 좌표를 앎)
+// 이름 정리 : 좌우 공백 제거, 제어문자 제거, 12자 제한, 비면 기본값
+function sanitizeName(name) {
+  let s = (typeof name === "string" ? name : "").replace(/[\x00-\x1f]/g, "").trim();
+  if (s.length > 12) s = s.slice(0, 12);
+  return s || "Player";
+}
+
+// 서바이벌 부활 위치 : 다른 서바이벌 플레이어로부터 가장 멀리 떨어진 곳
 function pickSpawn(selfId) {
   const margin = 250, safe = 700;
   let best = { x: MAP_SIZE / 2, y: MAP_SIZE / 2 }, bestD = -1;
@@ -167,7 +198,7 @@ function pickSpawn(selfId) {
     const y = margin + Math.random() * (MAP_SIZE - 2 * margin);
     let minD = Infinity;
     for (const [id, p] of players) {
-      if (id === selfId || !p.state) continue;
+      if (id === selfId || !p.active || p.mode !== "survival" || !p.state) continue;
       const d = Math.hypot(x - p.state.x, y - p.state.y);
       if (d < minD) minD = d;
     }
@@ -177,44 +208,48 @@ function pickSpawn(selfId) {
   return { x: best.x, y: best.y, angle: Math.random() * Math.PI * 2 };
 }
 
+// 레이싱 시작 위치 : 트랙(캡슐 링)의 아래쪽 직선 구간 위 무작위 지점
+function pickRacingSpawn() {
+  const midR = (RACE.R_IN + RACE.R_OUT) / 2;
+  const x = RACE.AX + Math.random() * (RACE.BX - RACE.AX);
+  const jitter = (Math.random() - 0.5) * (RACE.R_OUT - RACE.R_IN - 200);
+  const y = RACE.CY + midR + jitter; // 아래쪽 직선
+  return { x, y, angle: 0 };
+}
+
 function send(p, obj) {
   if (p.ws.readyState === p.ws.OPEN) p.ws.send(JSON.stringify(obj));
 }
-function broadcast(obj) {
+// 같은 모드의 활성 플레이어들에게만 전송
+function broadcastMode(mode, obj) {
   const payload = JSON.stringify(obj);
   for (const [, p] of players) {
-    if (p.ws.readyState === p.ws.OPEN) p.ws.send(payload);
+    if (p.active && p.mode === mode && p.ws.readyState === p.ws.OPEN) p.ws.send(payload);
   }
 }
 
-// 사망 처리 : 부활 위치 결정 → 본인에게 통지 → 모두에게 폭발 통지
+// 사망 처리 : 죽은 자리 폭발 통지 → 본인은 메뉴로(비활성). 서바이벌 전용.
 function killPlayer(victimId, victim, killerId) {
   const deathX = victim.state.x, deathY = victim.state.y;
-  const spawn = pickSpawn(victimId);
 
-  // 서버 상태를 부활 위치로 즉시 이동 + 무적/유예 부여
-  victim.state.x = spawn.x;
-  victim.state.y = spawn.y;
-  victim.state.angle = spawn.angle;
-  victim.state.teleport = true;       // 다음 스냅샷에서 클라들이 슬라이드 없이 스냅
-  victim.invulnUntil = Date.now() + INVULN_MS;
-  victim.graceUntil = Date.now() + GRACE_MS;
-  victim.prevHead = headOf(victim.state); // 스윕 궤적 리셋(텔레포트 경로 오판 방지)
+  // 본인에게 사망 통지 → 클라는 모드 선택 화면으로 복귀
+  send(victim, { type: "death" });
 
-  // 본인에게 "여기서 부활하라" 통지 (권위 위치)
-  send(victim, { type: "death", x: spawn.x, y: spawn.y, angle: spawn.angle });
-  // 모두에게 폭발 통지 (죽은 자리, 죽은 차 색은 클라가 victimId 로 계산)
-  broadcast({ type: "killed", victimId, killerId, x: deathX, y: deathY });
+  // 같은 모드 플레이어에게 폭발 통지 (죽은 자리, 색은 클라가 victimId 로 계산)
+  broadcastMode("survival", { type: "killed", victimId, killerId, x: deathX, y: deathY });
+
+  // 비활성화 → 스냅샷/판정에서 제외
+  victim.active = false;
+  victim.state = null;
 }
 
-// 충돌 판정 1틱
+// 충돌 판정 1틱 (서바이벌 모드만)
 function runCollisions() {
-  const now = Date.now();
-
-  // 판정 대상 : 상태가 있고 무적이 아닌 플레이어
+  // 판정 대상 : 활성 + 서바이벌 + 무적 아님
   const live = [];
+  const now = Date.now();
   for (const [id, p] of players) {
-    if (!p.state) continue;
+    if (!p.active || p.mode !== "survival" || !p.state) continue;
     // 머리 궤적(prev→cur) 준비. 텔레포트(과도한 이동)면 스윕 생략.
     const cur = headOf(p.state);
     if (!p.prevHead || Math.hypot(cur.x - p.prevHead.x, cur.y - p.prevHead.y) > TELEPORT_DIST) {
@@ -251,21 +286,27 @@ function runCollisions() {
 setInterval(runCollisions, 1000 / COLLISION_HZ);
 
 // --- 브로드캐스트 루프 ------------------------------------------------------
-//  모든 플레이어의 최신 상태를 모아 30Hz 로 전송한다.
+//  모드별로 활성 플레이어들의 최신 상태를 모아 30Hz 로 전송한다.
+//  (서바이벌/레이싱 플레이어는 서로 보이지 않도록 분리)
 setInterval(() => {
   const now = Date.now();
-  const snapshot = [];
+  const byMode = { survival: [], racing: [] };
+
   for (const [id, p] of players) {
-    if (!p.state) continue;
-    snapshot.push({
-      id,
+    if (!p.active || !p.state) continue;
+    byMode[p.mode].push({
+      id, name: p.name,
       x: p.state.x, y: p.state.y, angle: p.state.angle,
       drifting: p.state.drifting,
       teleport: !!p.state.teleport,       // 1회성 스냅 신호
       invuln: now < (p.invulnUntil || 0), // 원격 무적 표시(깜빡임)용
     });
   }
-  broadcast({ type: "snapshot", players: snapshot });
+
+  for (const [, p] of players) {
+    if (!p.active) continue;
+    send(p, { type: "snapshot", players: byMode[p.mode] });
+  }
 
   // teleport 는 1회성 → 보낸 뒤 해제
   for (const [, p] of players) {

@@ -26,7 +26,7 @@
  *  단위 / 전역 설정
  * ========================================================================== */
 const CONFIG = {
-  // 월드(맵) 크기 : 5000 x 5000 px
+  // 서바이벌 맵 크기 : 5000 x 5000 px
   MAP_SIZE: 5000,
 
   // 픽셀 <-> 미터 환산 (물리 계산은 px/s 로 하되, 화면 표시는 km/h 로 변환)
@@ -35,6 +35,28 @@ const CONFIG = {
   // 한 프레임 dt 상한 (탭 비활성 등으로 인한 물리 폭발 방지)
   MAX_DT: 1 / 30,
 };
+
+/* =============================================================================
+ *  게임 모드 / 월드
+ * -----------------------------------------------------------------------------
+ *  - survival : 5000² 오픈 맵. 머리로 받혀 죽으면 모드 선택으로 복귀.
+ *  - racing   : 긴 0자(수평 캡슐 링) 트랙. 죽음 없음. 트랙 이탈 시 감속.
+ *  RACE 트랙 좌표는 server.js 의 RACE 와 반드시 일치해야 한다(부활 위치 계산).
+ * ========================================================================== */
+const RACE = { AX: 3000, BX: 7000, CY: 3000, R_IN: 1500, R_OUT: 2500 };
+
+const WORLD = {
+  survival: { w: 5000, h: 5000, type: "open" },
+  racing: { w: 10000, h: 6000, type: "track" },
+};
+
+// 현재 모드/월드/게임 상태
+let gameMode = "survival";   // "survival" | "racing"
+let world = WORLD.survival;  // 현재 월드 치수/타입
+let gameState = "menu";      // "menu" | "playing"
+let playerName = "Player";
+
+const OFFTRACK_DRAG = 2.2;   // 트랙 이탈 시 추가 감속 계수 (클수록 풀밭처럼 느려짐)
 
 // km/h -> px/s 변환 계수.  (km/h ÷ 3.6 = m/s) × (m -> px)
 const KMH_TO_PXS = (1 / 3.6) * CONFIG.PIXELS_PER_METER;
@@ -95,7 +117,14 @@ const CAR = {
  * ========================================================================== */
 const keys = { w: false, a: false, d: false, space: false };
 
+// 텍스트 입력(이름창)에 포커스가 있거나 메뉴 화면이면 게임 키 입력을 무시한다.
+function typingInInput() {
+  const el = document.activeElement;
+  return el && el.tagName === "INPUT";
+}
+
 window.addEventListener("keydown", (e) => {
+  if (typingInInput()) return; // 이름 입력 중엔 WASD/Space 가로채지 않음
   switch (e.code) {
     case "KeyW": keys.w = true; break;
     case "KeyA": keys.a = true; break;
@@ -276,67 +305,53 @@ function updatePhysics(car, dt) {
 }
 
 /* 8) 충돌 처리 — 맵 경계 ------------------------------------------------------
- *  맵 벽에 차체가 닿으면 "사망" 처리하고 맵 중앙에서 리스폰한다. */
+ *  두 모드 모두 맵 밖으로 못 나가게 차체를 벽 안쪽에 가둔다(죽음 없음). */
 function updateCollision(car) {
-  const r = CONFIG.MAP_SIZE;
   const half = car.length / 2;
-
-  if (car.x < half || car.x > r - half ||
-      car.y < half || car.y > r - half) {
-    respawn(car);
-  }
+  let hit = false;
+  if (car.x < half) { car.x = half; car.vx = 0; hit = true; }
+  if (car.x > world.w - half) { car.x = world.w - half; car.vx = 0; hit = true; }
+  if (car.y < half) { car.y = half; car.vy = 0; hit = true; }
+  if (car.y > world.h - half) { car.y = world.h - half; car.vy = 0; hit = true; }
+  if (hit) decompose(car); // 벽에 흡수된 속도를 차체 성분에 반영
 }
 
-/* 벽 충돌 시 로컬에서 차량을 "다른 플레이어가 없는" 랜덤 위치로 되살린다.
- *  (플레이어 간 킬에 의한 부활은 서버가 위치를 정해 handleDeath 로 처리한다.)
- *  - 맵 위 여러 후보 중 알고 있는 원격 플레이어로부터 가장 먼 지점을 고른다.
- *  - 부활 직후 잠깐 무적을 주고, teleport 플래그로 남들 화면 슬라이드를 막는다. */
-function respawn(car) {
-  const S = CONFIG.MAP_SIZE;
-  const margin = 250;            // 벽에서 떨어뜨릴 여백
-  const safeDist = 700;          // 이 거리 이상 떨어지면 충분히 안전하다고 판단
-
-  let bx = S / 2, by = S / 2, bestDist = -1;
-  for (let i = 0; i < 30; i++) {
-    const x = margin + Math.random() * (S - 2 * margin);
-    const y = margin + Math.random() * (S - 2 * margin);
-
-    // 이 후보에서 가장 가까운 플레이어까지의 거리
-    let minD = Infinity;
-    for (const r of remotePlayers.values()) {
-      const d = Math.hypot(x - r.x, y - r.y);
-      if (d < minD) minD = d;
-    }
-
-    if (minD > bestDist) { bestDist = minD; bx = x; by = y; }
-    if (minD > safeDist) break; // 충분히 안전한 곳 발견 → 종료
-  }
-
-  car.x = bx; car.y = by;
-  car.angle = Math.random() * Math.PI * 2; // 무작위 방향
-  car.vx = 0; car.vy = 0;
-  car.lf = 0; car.ll = 0;
-  car.steerInput = 0;
-  car.invulnUntil = performance.now() + 1500; // 1.5초 무적
-  net.pendingTeleport = true; // 남들 화면에서 슬라이드 없이 스냅되도록
-  skidMarks.length = 0; // 이전 타이어 자국 정리
+/* 9) 노면 — 레이싱 트랙 이탈 시 감속 ------------------------------------------
+ *  트랙(캡슐 링) 밖(풀밭/안쪽 구멍)에서는 전진 속도를 추가로 깎아 느려지게 한다. */
+function updateSurface(car, dt) {
+  if (gameMode !== "racing") return;
+  if (isOnTrack(car.x, car.y)) return;
+  // 풀밭 저항 : 전진/측면 속도를 지수적으로 감쇠
+  const f = Math.exp(-OFFTRACK_DRAG * dt);
+  car.lf *= f;
+  car.ll *= f;
 }
 
-/* 플레이어 간 킬 판정은 이제 서버 권위로 처리한다(server.js 의 runCollisions).
- *  클라이언트는 더 이상 스스로 죽음을 판정하지 않고, 서버의 통지를 따른다.
- *  - "death"  : 내가 죽었으니 지정 위치에서 부활하라 (handleDeath)
- *  - "killed" : 누군가 죽었으니 그 자리에 폭발을 띄워라 (모두에게)
- *  → 두 PC의 판정 불일치 / "내가 박았는데 내가 죽음" 문제가 사라진다. */
+/* 점이 레이싱 트랙(수평 캡슐 링) 위에 있는지 : 중심선 세그먼트까지의 거리가
+ *  R_IN ~ R_OUT 사이면 트랙(아스팔트), 아니면 이탈(구멍/바깥). */
+function isOnTrack(x, y) {
+  const d = distToSegment(x, y, RACE.AX, RACE.CY, RACE.BX, RACE.CY);
+  return d >= RACE.R_IN && d <= RACE.R_OUT;
+}
 
-// 서버가 내 사망을 통지 → 권위 위치로 부활
-function handleDeath(x, y, angle) {
-  CAR.x = x; CAR.y = y; CAR.angle = angle;
-  CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0;
-  CAR.steerInput = 0;
-  CAR.invulnUntil = performance.now() + 1500;
-  net.pendingTeleport = true; // 다음 송신에 teleport 표시 → 남들 화면에서 슬라이드 방지
-  skidMarks.length = 0;
-  showDeathScreen();
+// 점(px,py)에서 선분 (x1,y1)-(x2,y2) 까지의 최단 거리
+function distToSegment(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 ? clamp(((px - x1) * dx + (py - y1) * dy) / len2, 0, 1) : 0;
+  const cx = x1 + t * dx, cy = y1 + t * dy;
+  return Math.hypot(px - cx, py - cy);
+}
+
+/* 플레이어 간 킬 판정은 서버 권위(server.js runCollisions)로 처리한다.
+ *  클라이언트는 서버 통지를 따른다.
+ *  - "death"  : 내가 죽었다 → 모드 선택 화면으로 복귀 (서바이벌 전용)
+ *  - "killed" : 누군가 죽었다 → 그 자리에 폭발을 띄운다 (같은 모드 모두) */
+
+// 서버가 내 사망을 통지 → 모드 선택 화면으로 (죽으면 다시 모드 선택)
+function handleDeath() {
+  showDeathScreen();      // 잠깐 사망 표시
+  setTimeout(toMenu, 900); // 곧 모드 선택 메뉴로 복귀
 }
 
 
@@ -502,6 +517,10 @@ function render(car) {
   // 내 차량 (내 고유 색)
   drawCar(car, myColor());
 
+  // 이름표 (차 아래) — 회전 영향 안 받게 차량 그린 뒤 별도로
+  for (const r of remotePlayers.values()) drawName(r.name, r.x, r.y);
+  drawName(playerName, car.x, car.y);
+
   // 폭발 이펙트 (차량 위에)
   drawExplosions();
 
@@ -511,13 +530,16 @@ function render(car) {
   drawSpeed(car);
 }
 
-// 바닥 : 초록 배경 + 도로 그리드
+// 바닥 : 모드에 따라 오픈 맵(그리드) 또는 레이싱 트랙
 function drawGround() {
-  const S = CONFIG.MAP_SIZE;
+  if (world.type === "track") drawRacingGround();
+  else drawSurvivalGround();
+}
 
-  // 맵 영역
+function drawSurvivalGround() {
+  const W = world.w, H = world.h;
   ctx.fillStyle = "#46504a";
-  ctx.fillRect(0, 0, S, S);
+  ctx.fillRect(0, 0, W, H);
 
   // 그리드 (위치 파악용) — 화면에 보이는 영역만 그린다
   const grid = 250;
@@ -525,21 +547,76 @@ function drawGround() {
   ctx.lineWidth = 2;
   ctx.beginPath();
   const x0 = Math.max(0, Math.floor(camera.x / grid) * grid);
-  const x1 = Math.min(S, camera.x + canvas.width);
+  const x1 = Math.min(W, camera.x + canvas.width);
   const y0 = Math.max(0, Math.floor(camera.y / grid) * grid);
-  const y1 = Math.min(S, camera.y + canvas.height);
-  for (let x = x0; x <= x1; x += grid) {
-    ctx.moveTo(x, y0); ctx.lineTo(x, y1);
-  }
-  for (let y = y0; y <= y1; y += grid) {
-    ctx.moveTo(x0, y); ctx.lineTo(x1, y);
-  }
+  const y1 = Math.min(H, camera.y + canvas.height);
+  for (let x = x0; x <= x1; x += grid) { ctx.moveTo(x, y0); ctx.lineTo(x, y1); }
+  for (let y = y0; y <= y1; y += grid) { ctx.moveTo(x0, y); ctx.lineTo(x1, y); }
+  ctx.stroke();
+
+  ctx.strokeStyle = "#d8d040";
+  ctx.lineWidth = 8;
+  ctx.strokeRect(0, 0, W, H);
+}
+
+// 수평 캡슐(스타디움) 경로를 ctx 에 만든다 : 세그먼트 (ax..bx, cy) 의 반경 r
+function capsulePath(ax, bx, cy, r) {
+  roundRect(ax - r, cy - r, (bx - ax) + 2 * r, 2 * r, r);
+}
+
+function drawRacingGround() {
+  const W = world.w, H = world.h, cy = RACE.CY;
+
+  // 잔디
+  ctx.fillStyle = "#3b6b3a";
+  ctx.fillRect(0, 0, W, H);
+
+  // 트랙(아스팔트) : 외곽 캡슐을 채우고 안쪽 캡슐을 잔디색으로 도려내 링을 만든다
+  ctx.fillStyle = "#3a3f44";
+  capsulePath(RACE.AX, RACE.BX, cy, RACE.R_OUT); ctx.fill();
+  ctx.fillStyle = "#3b6b3a";
+  capsulePath(RACE.AX, RACE.BX, cy, RACE.R_IN); ctx.fill();
+
+  // 트랙 가장자리 흰 선
+  ctx.strokeStyle = "rgba(255,255,255,0.65)";
+  ctx.lineWidth = 6;
+  capsulePath(RACE.AX, RACE.BX, cy, RACE.R_OUT); ctx.stroke();
+  capsulePath(RACE.AX, RACE.BX, cy, RACE.R_IN); ctx.stroke();
+
+  // 중앙 점선
+  ctx.setLineDash([45, 45]);
+  ctx.strokeStyle = "rgba(255,220,0,0.5)";
+  ctx.lineWidth = 4;
+  capsulePath(RACE.AX, RACE.BX, cy, (RACE.R_IN + RACE.R_OUT) / 2); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 스타트/피니시 라인 (아래쪽 직선 가운데, 트랙 폭을 가로지름)
+  const sx = (RACE.AX + RACE.BX) / 2;
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 10;
+  ctx.beginPath();
+  ctx.moveTo(sx, cy + RACE.R_IN);
+  ctx.lineTo(sx, cy + RACE.R_OUT);
   ctx.stroke();
 
   // 맵 경계
   ctx.strokeStyle = "#d8d040";
   ctx.lineWidth = 8;
-  ctx.strokeRect(0, 0, S, S);
+  ctx.strokeRect(0, 0, W, H);
+}
+
+// 차 아래에 이름표를 그린다 (회전 없이, 가독성 위해 어두운 외곽선 + 흰 글자)
+function drawName(text, x, y) {
+  if (!text) return;
+  ctx.font = "600 14px 'Segoe UI', Arial, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  const ny = y + CAR.length / 2 + 6;
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(0,0,0,0.85)";
+  ctx.strokeText(text, x, ny);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText(text, x, ny);
 }
 
 function drawSkid() {
@@ -593,14 +670,14 @@ function drawCar(car, color = "#e23b2e") {
   ctx.restore();
 }
 
-function roundRect(x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
+function roundRect(x, y, w, h, r, c = ctx) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
 }
 
 function drawSpeed(car) {
@@ -609,38 +686,51 @@ function drawSpeed(car) {
   speedEl.textContent = kmh;
 }
 
-// 미니맵 : 맵 전체 + 차량 위치 + 차량 방향
+// 미니맵 : 맵 전체 + 차량 위치 + 차량 방향 (월드가 비정사각형이어도 비율 유지)
 function drawMinimap(car) {
   const size = minimap.width;
-  const scale = size / CONFIG.MAP_SIZE;
+  const scale = Math.min(size / world.w, size / world.h); // 박스에 맞춰 축소
+  const ox = (size - world.w * scale) / 2;                // 가운데 정렬 오프셋
+  const oy = (size - world.h * scale) / 2;
+  const wx = (x) => ox + x * scale;                       // 월드 x → 미니맵 x
+  const wy = (y) => oy + y * scale;
 
   mctx.clearRect(0, 0, size, size);
 
-  // 맵 바닥
-  mctx.fillStyle = "rgba(70,80,74,0.9)";
-  mctx.fillRect(0, 0, size, size);
+  // 월드 영역 바닥
+  mctx.fillStyle = "rgba(40,45,42,0.9)";
+  mctx.fillRect(ox, oy, world.w * scale, world.h * scale);
+
+  // 레이싱 트랙 링
+  if (world.type === "track") {
+    mctx.save();
+    mctx.translate(ox, oy);
+    mctx.scale(scale, scale);
+    mctx.fillStyle = "#566";
+    roundRect(RACE.AX - RACE.R_OUT, RACE.CY - RACE.R_OUT,
+      (RACE.BX - RACE.AX) + 2 * RACE.R_OUT, 2 * RACE.R_OUT, RACE.R_OUT, mctx); mctx.fill();
+    mctx.fillStyle = "rgba(40,45,42,0.9)";
+    roundRect(RACE.AX - RACE.R_IN, RACE.CY - RACE.R_IN,
+      (RACE.BX - RACE.AX) + 2 * RACE.R_IN, 2 * RACE.R_IN, RACE.R_IN, mctx); mctx.fill();
+    mctx.restore();
+  }
 
   // 현재 화면(뷰포트) 영역 표시
   mctx.strokeStyle = "rgba(255,255,255,0.4)";
   mctx.lineWidth = 1;
-  mctx.strokeRect(
-    camera.x * scale, camera.y * scale,
-    canvas.width * scale, canvas.height * scale
-  );
+  mctx.strokeRect(wx(camera.x), wy(camera.y), canvas.width * scale, canvas.height * scale);
 
   // 다른 플레이어 (작은 점)
   for (const [id, r] of remotePlayers) {
     mctx.fillStyle = colorForId(id);
     mctx.beginPath();
-    mctx.arc(r.x * scale, r.y * scale, 3, 0, Math.PI * 2);
+    mctx.arc(wx(r.x), wy(r.y), 3, 0, Math.PI * 2);
     mctx.fill();
   }
 
   // 내 차량 위치 + 방향(삼각형)
-  const cx = car.x * scale;
-  const cy = car.y * scale;
   mctx.save();
-  mctx.translate(cx, cy);
+  mctx.translate(wx(car.x), wy(car.y));
   mctx.rotate(car.angle);
   mctx.fillStyle = myColor();
   mctx.beginPath();
@@ -702,7 +792,11 @@ function connect() {
     return; // file:// 등으로 열면 접속 실패 → 1인 모드
   }
 
-  net.ws.onopen = () => { net.connected = true; };
+  net.ws.onopen = () => {
+    net.connected = true;
+    // 재접속 시, 플레이 중이었다면 같은 모드로 자동 재입장
+    if (gameState === "playing") sendJoin();
+  };
 
   net.ws.onmessage = (ev) => {
     let msg;
@@ -710,11 +804,17 @@ function connect() {
 
     if (msg.type === "welcome") {
       net.id = msg.id;
+    } else if (msg.type === "spawn") {
+      // 서버가 정한 입장/부활 위치 → 거기서 시작
+      CAR.x = msg.x; CAR.y = msg.y; CAR.angle = msg.angle;
+      CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
+      CAR.invulnUntil = performance.now() + 1500;
+      net.pendingTeleport = true; // 남들 화면에서 슬라이드 없이 스냅되도록
     } else if (msg.type === "death") {
-      // 서버 판정: 내가 죽었다 → 권위 위치로 부활
-      handleDeath(msg.x, msg.y, msg.angle);
+      // 서버 판정: 내가 죽었다 → 모드 선택 화면으로 복귀
+      handleDeath();
     } else if (msg.type === "killed") {
-      // 서버 통지: 누군가 죽었다 → 그 자리에서 그 차 색으로 폭발 (모두에게)
+      // 서버 통지: 누군가 죽었다 → 그 자리에서 그 차 색으로 폭발
       const color = msg.victimId === net.id ? myColor() : colorForId(msg.victimId);
       spawnExplosion(msg.x, msg.y, color);
       // 내가 죽인 경우 내 화면을 흔든다 (타격감)
@@ -733,6 +833,7 @@ function connect() {
         r.tx = p.x; r.ty = p.y; r.tangle = p.angle;
         r.drifting = p.drifting;
         r.invuln = p.invuln;
+        r.name = p.name;
         // 텔레포트(부활 등) 신호면 보간하지 말고 즉시 스냅 → 맵 가로지르는 슬라이드 방지
         if (p.teleport) { r.x = p.x; r.y = p.y; r.angle = p.angle; }
       }
@@ -750,6 +851,17 @@ function connect() {
   };
 
   net.ws.onerror = () => { net.ws.close(); };
+}
+
+// 모드 선택 → 서버에 입장 요청 (이름/모드 전달)
+function sendJoin() {
+  if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
+  net.ws.send(JSON.stringify({ type: "join", mode: gameMode, name: playerName }));
+}
+// 메뉴 복귀 → 서버에 퇴장 통지
+function sendLeave() {
+  if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
+  net.ws.send(JSON.stringify({ type: "leave" }));
 }
 
 // 내 차 상태를 주기적으로 서버에 전송
@@ -800,6 +912,12 @@ function frame(now) {
   lastTime = now;
   dt = Math.min(dt, CONFIG.MAX_DT);
 
+  // 메뉴 화면(미입장)에선 물리/네트워크를 멈춘다 (메뉴 오버레이가 화면을 덮음)
+  if (gameState !== "playing") {
+    requestAnimationFrame(frame);
+    return;
+  }
+
   // ----- 물리 파이프라인 (역할 분리) -----
   updateInput(CAR, dt);       // 입력
   updateSteering(CAR, dt);    // 조향 (heading 회전)
@@ -807,6 +925,7 @@ function frame(now) {
   updateEngine(CAR, dt);      // 엔진 가속
   updateBrake(CAR, dt);       // 브레이크
   updateResistance(CAR, dt);  // 공기/구름 저항
+  updateSurface(CAR, dt);     // 노면(레이싱 트랙 이탈 시 감속)
   updateGrip(CAR, dt);        // 그립 (측면 마찰) → 드리프트
   updatePhysics(CAR, dt);     // 속도/위치 합성·적분
   updateCollision(CAR);       // 맵 경계 충돌
@@ -823,5 +942,57 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
+/* =============================================================================
+ *  모드 선택 / 메뉴 전환
+ * ========================================================================== */
+function startGame(mode) {
+  gameMode = mode;
+  world = WORLD[mode];
+
+  // 이름 확정 + 저장
+  const input = document.getElementById("nameInput");
+  playerName = (input.value || "").trim().slice(0, 12) || "Player";
+  try { localStorage.setItem("carGameName", playerName); } catch {}
+
+  // 상태 초기화
+  remotePlayers.clear();
+  skidMarks.length = 0;
+  explosions.length = 0;
+  camera.shake = 0;
+  CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
+  keys.w = keys.a = keys.d = keys.space = false; // 메뉴 조작으로 눌린 키 초기화
+
+  gameState = "playing";
+  document.getElementById("menu").classList.remove("show");
+  document.getElementById("exitBtn").style.display = "block";
+
+  sendJoin(); // 서버에 입장 → 서버가 spawn 위치 통지
+}
+
+function toMenu() {
+  if (gameState === "menu") return;
+  gameState = "menu";
+  sendLeave();
+  remotePlayers.clear();
+  skidMarks.length = 0;
+  document.getElementById("exitBtn").style.display = "none";
+  document.getElementById("death").classList.remove("show");
+  document.getElementById("menu").classList.add("show");
+}
+
+// 메뉴 UI 배선
+function setupMenu() {
+  const input = document.getElementById("nameInput");
+  // 저장된 이름 자동완성
+  try { input.value = localStorage.getItem("carGameName") || ""; } catch {}
+
+  document.getElementById("btnSurvival").addEventListener("click", () => startGame("survival"));
+  document.getElementById("btnRacing").addEventListener("click", () => startGame("racing"));
+  document.getElementById("exitBtn").addEventListener("click", toMenu);
+
+  document.getElementById("menu").classList.add("show"); // 시작은 메뉴
+}
+
 init();
+setupMenu();
 requestAnimationFrame(frame);

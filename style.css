@@ -98,3 +98,106 @@ html, body {
   from { background: rgba(255, 30, 20, 0.6); }
   to   { background: radial-gradient(circle, rgba(150, 0, 0, 0.2), rgba(90, 0, 0, 0.55)); }
 }
+
+/* 좌측 상단 나가기 버튼 */
+#exitBtn {
+  position: absolute;
+  left: 18px;
+  top: 16px;
+  display: none; /* 플레이 중에만 JS 가 표시 */
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 8px;
+  cursor: pointer;
+}
+#exitBtn:hover {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+/* 모드 선택 / 시작 화면 — 기본 숨김, .show 일 때만 */
+#menu {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 35%, #243042, #0d1117 75%);
+  z-index: 10;
+}
+#menu.show { display: flex; }
+
+.menu-card {
+  width: min(560px, 90vw);
+  padding: 36px 34px 40px;
+  background: rgba(20, 26, 34, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+  text-align: center;
+}
+.menu-card h1 {
+  font-size: 26px;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: 1px;
+  margin-bottom: 26px;
+}
+.menu-card label {
+  display: block;
+  text-align: left;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 6px;
+}
+#nameInput {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: 18px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  outline: none;
+  margin-bottom: 24px;
+}
+#nameInput:focus {
+  border-color: #3b82f6;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.mode-buttons {
+  display: flex;
+  gap: 14px;
+}
+.mode-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 20px 16px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 2px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  cursor: pointer;
+  transition: transform 0.1s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.mode-btn:hover {
+  transform: translateY(-3px);
+  background: rgba(255, 255, 255, 0.1);
+}
+.mode-btn.survival:hover { border-color: #ff5a4d; }
+.mode-btn.racing:hover { border-color: #3b82f6; }
+.mode-name {
+  font-size: 19px;
+  font-weight: 700;
+  color: #fff;
+}
+.mode-desc {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.4;
+}

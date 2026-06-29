@@ -10,6 +10,9 @@
   <!-- 게임 메인 캔버스 (월드 렌더링) -->
   <canvas id="game"></canvas>
 
+  <!-- 좌측 상단 나가기 버튼 (플레이 중에만 표시) -->
+  <button id="exitBtn">← 나가기</button>
+
   <!-- 좌측 하단 속도계 : 정수 km/h 숫자만 -->
   <div id="speed">0</div>
 
@@ -19,7 +22,27 @@
   <!-- 사망 화면 (받혀서 죽은 플레이어에게 표시) -->
   <div id="death">
     <div class="death-title">사망...</div>
-    <div class="death-sub">리스폰 중…</div>
+    <div class="death-sub">모드 선택으로…</div>
+  </div>
+
+  <!-- 시작/모드 선택 화면 (새로고침·사망·나가기 시 표시) -->
+  <div id="menu">
+    <div class="menu-card">
+      <h1>🏎️ TOP-VIEW SUPERCAR</h1>
+      <label for="nameInput">이름</label>
+      <input id="nameInput" type="text" maxlength="12" placeholder="이름을 입력하세요"
+             autocomplete="off" />
+      <div class="mode-buttons">
+        <button id="btnSurvival" class="mode-btn survival">
+          <span class="mode-name">서바이벌 모드</span>
+          <span class="mode-desc">머리로 들이받아 잡고 살아남기</span>
+        </button>
+        <button id="btnRacing" class="mode-btn racing">
+          <span class="mode-name">레이싱 모드</span>
+          <span class="mode-desc">긴 0자 트랙 자유 주행 · 죽음 없음</span>
+        </button>
+      </div>
+    </div>
   </div>
 
   <script src="game.js"></script>
