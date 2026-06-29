@@ -1,0 +1,15 @@
+# Render 배포 설정 (Infrastructure as Code)
+# - Render 대시보드에서 "New +" → "Blueprint" 로 이 repo 를 연결하면
+#   이 파일을 읽어 자동으로 서비스를 생성한다.
+services:
+  - type: web
+    name: car-game
+    runtime: node
+    plan: free            # 무료 플랜 (15분 미접속 시 잠듦 → 콜드스타트)
+    buildCommand: npm install
+    startCommand: node server.js
+    autoDeploy: true      # main 브랜치 푸시 시 자동 재배포
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: 20

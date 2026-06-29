@@ -1,0 +1,12 @@
+{
+  "name": "car-game",
+  "version": "1.0.0",
+  "description": "Top-view supercar physics game with online multiplayer",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
