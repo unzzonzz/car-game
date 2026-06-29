@@ -448,11 +448,19 @@ function updateSkid(car) {
 /* =============================================================================
  *  카메라 — 차량을 항상 화면 중앙에 두고 맵이 움직인다
  * ========================================================================== */
-const camera = { x: 0, y: 0 };
+const camera = { x: 0, y: 0, shake: 0 };
 
-function updateCamera(car) {
+// 화면 흔들림을 추가한다(상대를 죽였을 때 등). 값이 클수록 세게 흔들림.
+function addShake(amount) {
+  camera.shake = Math.min(camera.shake + amount, 45);
+}
+
+function updateCamera(car, dt) {
   camera.x = car.x - canvas.width / 2;
   camera.y = car.y - canvas.height / 2;
+  // 흔들림은 시간에 따라 빠르게 잦아든다(약 0.4초)
+  camera.shake *= Math.exp(-9 * dt);
+  if (camera.shake < 0.3) camera.shake = 0;
 }
 
 
@@ -477,8 +485,12 @@ function render(car) {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+  // 흔들림 오프셋 (킬 시 화면 진동)
+  const sx = camera.shake ? (Math.random() * 2 - 1) * camera.shake : 0;
+  const sy = camera.shake ? (Math.random() * 2 - 1) * camera.shake : 0;
+
   ctx.save();
-  ctx.translate(-camera.x, -camera.y); // 월드 → 화면 변환
+  ctx.translate(-camera.x + sx, -camera.y + sy); // 월드 → 화면 변환 (+흔들림)
 
   drawGround();
   drawSkid();
@@ -705,6 +717,8 @@ function connect() {
       // 서버 통지: 누군가 죽었다 → 그 자리에서 그 차 색으로 폭발 (모두에게)
       const color = msg.victimId === net.id ? myColor() : colorForId(msg.victimId);
       spawnExplosion(msg.x, msg.y, color);
+      // 내가 죽인 경우 내 화면을 흔든다 (타격감)
+      if (msg.killerId === net.id) addShake(34);
     } else if (msg.type === "snapshot") {
       const seen = new Set();
       for (const p of msg.players) {
@@ -797,7 +811,7 @@ function frame(now) {
   updatePhysics(CAR, dt);     // 속도/위치 합성·적분
   updateCollision(CAR);       // 맵 경계 충돌
   updateSkid(CAR);            // 스키드 마크
-  updateCamera(CAR);          // 카메라 추적
+  updateCamera(CAR, dt);      // 카메라 추적 (+ 흔들림 감쇠)
 
   // ----- 네트워크 -----
   netSend(CAR, now);          // 내 상태 송신

@@ -233,9 +233,12 @@ function runCollisions() {
       const aHitB = sweptHeadHit(A.p.prevHead, A.p.curHead, B.p.state);
       const bHitA = sweptHeadHit(B.p.prevHead, B.p.curHead, A.p.state);
 
-      if (aHitB && !bHitA) { killPlayer(B.id, B.p, A.id); dead.add(B.id); }
-      else if (bHitA && !aHitB) { killPlayer(A.id, A.p, B.id); dead.add(A.id); }
-      // 둘 다 명중 = 정면 무승부 → 아무도 죽지 않음
+      if (aHitB && bHitA) {
+        // 머리끼리 정면충돌 → 둘 다 터진다 (서로가 killer)
+        killPlayer(A.id, A.p, B.id); dead.add(A.id);
+        killPlayer(B.id, B.p, A.id); dead.add(B.id);
+      } else if (aHitB) { killPlayer(B.id, B.p, A.id); dead.add(B.id); }
+      else if (bHitA) { killPlayer(A.id, A.p, B.id); dead.add(A.id); }
     }
   }
 
