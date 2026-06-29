@@ -5,6 +5,7 @@ services:
   - type: web
     name: car-game
     runtime: node
+    region: singapore     # 한국에서 가장 가까운 Render 리전 (US West 대비 지연 大↓)
     plan: free            # 무료 플랜 (15분 미접속 시 잠듦 → 콜드스타트)
     buildCommand: npm install
     startCommand: node server.js

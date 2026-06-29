@@ -61,6 +61,10 @@ wss.on("connection", (ws) => {
   const id = nextId++;
   players.set(id, { ws, state: null });
 
+  // heartbeat : 클라이언트가 살아있는지 추적 (프록시가 유휴 연결을 끊는 것 방지)
+  ws.isAlive = true;
+  ws.on("pong", () => { ws.isAlive = true; });
+
   // 접속한 클라이언트에게 자신의 id 를 알려준다
   ws.send(JSON.stringify({ type: "welcome", id }));
   console.log(`[+] player ${id} connected (total ${players.size})`);
@@ -79,6 +83,12 @@ wss.on("connection", (ws) => {
           name: msg.name,
         };
       }
+    } else if (msg.type === "died") {
+      // 사망 이벤트를 다른 플레이어에게 릴레이 (폭발 이펙트용)
+      const payload = JSON.stringify({ type: "died", id, x: msg.x, y: msg.y });
+      for (const [oid, op] of players) {
+        if (oid !== id && op.ws.readyState === op.ws.OPEN) op.ws.send(payload);
+      }
     }
   });
 
@@ -89,6 +99,18 @@ wss.on("connection", (ws) => {
 
   ws.on("error", () => {}); // 비정상 종료 무시
 });
+
+// 주기적으로 ping 을 보내 죽은 연결을 정리하고 살아있는 연결은 유지한다.
+//  - 25초마다 ping → 응답(pong) 없으면 다음 주기에 강제 종료.
+//  - 활성 트래픽이 없어도 연결을 깨워 프록시 타임아웃으로 끊기는 것을 줄인다.
+const heartbeat = setInterval(() => {
+  for (const [, p] of players) {
+    if (p.ws.isAlive === false) { p.ws.terminate(); continue; }
+    p.ws.isAlive = false;
+    try { p.ws.ping(); } catch {}
+  }
+}, 25000);
+wss.on("close", () => clearInterval(heartbeat));
 
 // --- 브로드캐스트 루프 ------------------------------------------------------
 //  모든 플레이어의 최신 상태를 모아 30Hz 로 전송한다.

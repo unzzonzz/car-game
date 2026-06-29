@@ -343,16 +343,108 @@ function pointInCar(px, py, car) {
 function updatePlayerCollision(car) {
   if (performance.now() < car.invulnUntil) return; // 부활 직후 무적
 
+  // 내 머리(앞코) 월드 좌표
+  const myHx = car.x + Math.cos(car.angle) * (car.length / 2);
+  const myHy = car.y + Math.sin(car.angle) * (car.length / 2);
+
   for (const r of remotePlayers.values()) {
     const len = r.length || CAR.length;
     // 상대의 머리(앞코) 월드 좌표
     const hx = r.x + Math.cos(r.angle) * (len / 2);
     const hy = r.y + Math.sin(r.angle) * (len / 2);
-    if (pointInCar(hx, hy, car)) {
-      respawn(car); // 상대 머리가 내 몸에 닿음 → 사망 후 리스폰
+
+    const enemyHeadInMe = pointInCar(hx, hy, car); // 내가 받혔는가
+    const myHeadInEnemy = pointInCar(myHx, myHy, r); // 내가 들이받았는가
+
+    // 핵심: 상대 머리가 내 몸에 닿았더라도, "내 머리가 상대 몸에 박혀 있으면"
+    // 나는 공격자이므로 죽지 않는다(상대가 죽는다).
+    // → 옆/뒤를 내가 들이받았는데 내가 죽던 버그 해결.
+    // 정면 동시 충돌(둘 다 머리)은 무승부로 아무도 죽지 않는다.
+    if (enemyHeadInMe && !myHeadInEnemy) {
+      killSelf(car); // 일방적으로 받힘 → 사망
       return;
     }
   }
+}
+
+/* 사망 처리 : 폭발 이펙트 + 사망 화면 + 다른 사람에게 알림 + 안전한 곳 부활 */
+function killSelf(car) {
+  spawnExplosion(car.x, car.y, myColor()); // 죽은 자리에서 폭발
+  showDeathScreen();                        // 내 화면에 사망 표시
+  netSendDied(car.x, car.y);                // 다른 플레이어에게 폭발 알림
+  respawn(car);                             // 안전한 위치로 부활(무적 부여)
+}
+
+
+/* =============================================================================
+ *  폭발 이펙트 (사망 시) — 모든 플레이어 화면에 보인다
+ * ========================================================================== */
+const explosions = [];
+
+function spawnExplosion(x, y, color) {
+  const parts = [];
+  const n = 24;
+  for (let i = 0; i < n; i++) {
+    const a = (Math.PI * 2 * i) / n + Math.random() * 0.4;
+    const sp = 100 + Math.random() * 300;
+    parts.push({
+      x, y,
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      life: 0.5 + Math.random() * 0.6,
+      size: 2 + Math.random() * 4,
+    });
+  }
+  explosions.push({ cx: x, cy: y, parts, color, age: 0 });
+}
+
+function updateExplosions(dt) {
+  for (let i = explosions.length - 1; i >= 0; i--) {
+    const e = explosions[i];
+    e.age += dt;
+    let alive = e.age < 0.45; // 충격파 링이 살아있는 동안 유지
+    for (const p of e.parts) {
+      if (p.life > 0) {
+        p.life -= dt;
+        p.x += p.vx * dt; p.y += p.vy * dt;
+        p.vx *= 0.9; p.vy *= 0.9; // 공기저항으로 파편 감속
+        alive = true;
+      }
+    }
+    if (!alive) explosions.splice(i, 1);
+  }
+}
+
+function drawExplosions() {
+  const RING = 0.45;
+  for (const e of explosions) {
+    // 흰 충격파 링
+    if (e.age < RING) {
+      const t = e.age / RING;
+      ctx.globalAlpha = (1 - t) * 0.85;
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(e.cx, e.cy, 10 + t * 80, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // 파편 (죽은 차 색)
+    for (const p of e.parts) {
+      if (p.life <= 0) continue;
+      ctx.globalAlpha = Math.max(0, Math.min(1, p.life / 0.6));
+      ctx.fillStyle = e.color;
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* 사망 화면 오버레이 제어 */
+function showDeathScreen() {
+  const el = document.getElementById("death");
+  if (!el) return;
+  el.classList.add("show");
+  clearTimeout(showDeathScreen._t);
+  showDeathScreen._t = setTimeout(() => el.classList.remove("show"), 1500);
 }
 
 
@@ -434,6 +526,9 @@ function render(car) {
   // 내 차량 (내 고유 색)
   drawCar(car, myColor());
 
+  // 폭발 이펙트 (차량 위에)
+  drawExplosions();
+
   ctx.restore();
 
   drawMinimap(car);
@@ -505,6 +600,19 @@ function drawCar(car, color = "#e23b2e") {
   ctx.fillRect(L / 2 - 8, -W / 2 + 2, 6, W - 4); // 앞유리
   ctx.fillStyle = "#2a2a2a";
   ctx.fillRect(-L / 2 + 4, -W / 2 + 2, 6, W - 4); // 뒷유리
+
+  // 사이드미러 한 쌍 (앞유리 옆 = 차 앞쪽) — 앞뒤를 확실히 구분 ㅋㅋ
+  const mx = L / 2 - 12; // 앞유리 부근 x
+  const mLen = 5;        // 미러 길이(차 길이 방향)
+  const mDepth = 3.5;    // 차체 밖으로 튀어나온 깊이
+  // 미러 받침(스토크) — 차체 색
+  ctx.fillStyle = color;
+  ctx.fillRect(mx, -W / 2 - mDepth, mLen, mDepth);       // 왼쪽
+  ctx.fillRect(mx, W / 2, mLen, mDepth);                 // 오른쪽
+  // 미러 유리 — 어둡게
+  ctx.fillStyle = "#14181c";
+  ctx.fillRect(mx + 1, -W / 2 - mDepth, mLen - 2, mDepth - 1); // 왼쪽 유리
+  ctx.fillRect(mx + 1, W / 2 + 1, mLen - 2, mDepth - 1);       // 오른쪽 유리
 
   ctx.restore();
 }
@@ -625,6 +733,9 @@ function connect() {
 
     if (msg.type === "welcome") {
       net.id = msg.id;
+    } else if (msg.type === "died") {
+      // 다른 플레이어가 죽었다 → 그 자리에서 그 플레이어 색으로 폭발
+      spawnExplosion(msg.x, msg.y, colorForId(msg.id));
     } else if (msg.type === "snapshot") {
       const seen = new Set();
       for (const p of msg.players) {
@@ -668,6 +779,12 @@ function netSend(car, now) {
     angle: +car.angle.toFixed(3),
     drifting,
   }));
+}
+
+// 사망 사실을 서버에 알려 다른 플레이어 화면에도 폭발이 보이게 한다
+function netSendDied(x, y) {
+  if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
+  net.ws.send(JSON.stringify({ type: "died", x: Math.round(x), y: Math.round(y) }));
 }
 
 // 원격 차량을 목표 위치로 매 프레임 보간 (부드러운 이동)
@@ -717,6 +834,7 @@ function frame(now) {
   netSend(CAR, now);          // 내 상태 송신
   updateRemotes();            // 원격 차량 보간
   updatePlayerCollision(CAR); // 플레이어 간 충돌(머리에 받히면 사망)
+  updateExplosions(dt);       // 폭발 이펙트 갱신
 
   render(CAR);                // 렌더
 

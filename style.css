@@ -65,3 +65,36 @@ html, body {
   border-radius: 4px;
   font-weight: 600;
 }
+
+/* 사망 화면 — 기본 숨김, .show 일 때만 표시 */
+#death {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(150, 0, 0, 0.2), rgba(90, 0, 0, 0.55));
+}
+#death.show {
+  display: flex;
+  animation: deathflash 0.35s ease-out;
+}
+.death-title {
+  font-size: 92px;
+  font-weight: 800;
+  color: #ff3b30;
+  letter-spacing: 3px;
+  text-shadow: 0 4px 24px rgba(0, 0, 0, 0.7);
+}
+.death-sub {
+  margin-top: 6px;
+  font-size: 22px;
+  color: rgba(255, 255, 255, 0.85);
+  letter-spacing: 1px;
+}
+@keyframes deathflash {
+  from { background: rgba(255, 30, 20, 0.6); }
+  to   { background: radial-gradient(circle, rgba(150, 0, 0, 0.2), rgba(90, 0, 0, 0.55)); }
+}
