@@ -85,6 +85,8 @@ const CAR = {
   throttle: 0,             // 0~1
   braking: 0,              // 0~1
   steerInput: 0,           // -1(좌) ~ +1(우), 부드럽게 램프됨
+
+  invulnUntil: 0,          // 이 시각(performance.now ms)까지 무적 — 부활 직후 보호
 };
 
 
@@ -285,41 +287,104 @@ function updateCollision(car) {
   }
 }
 
-/* 맵 중앙에서 차량을 초기 상태로 되살린다. 모든 운동량을 0으로 리셋. */
+/* 차량을 "다른 플레이어가 없는" 랜덤 위치에서 초기 상태로 되살린다.
+ *  - 맵 위 여러 후보를 뽑아, 알고 있는 모든 원격 플레이어로부터 가장 멀리
+ *    떨어진 지점을 고른다(충분히 떨어진 곳을 찾으면 즉시 채택).
+ *  - 부활 직후 잠깐 무적(invuln)을 줘서 지연/겹침으로 인한 즉사를 막는다. */
 function respawn(car) {
-  car.x = CONFIG.MAP_SIZE / 2;
-  car.y = CONFIG.MAP_SIZE / 2;
-  car.angle = -Math.PI / 2; // 화면 위쪽을 보고 부활
+  const S = CONFIG.MAP_SIZE;
+  const margin = 250;            // 벽에서 떨어뜨릴 여백
+  const safeDist = 700;          // 이 거리 이상 떨어지면 충분히 안전하다고 판단
+
+  let bx = S / 2, by = S / 2, bestDist = -1;
+  for (let i = 0; i < 30; i++) {
+    const x = margin + Math.random() * (S - 2 * margin);
+    const y = margin + Math.random() * (S - 2 * margin);
+
+    // 이 후보에서 가장 가까운 플레이어까지의 거리
+    let minD = Infinity;
+    for (const r of remotePlayers.values()) {
+      const d = Math.hypot(x - r.x, y - r.y);
+      if (d < minD) minD = d;
+    }
+
+    if (minD > bestDist) { bestDist = minD; bx = x; by = y; }
+    if (minD > safeDist) break; // 충분히 안전한 곳 발견 → 종료
+  }
+
+  car.x = bx; car.y = by;
+  car.angle = Math.random() * Math.PI * 2; // 무작위 방향
   car.vx = 0; car.vy = 0;
   car.lf = 0; car.ll = 0;
   car.steerInput = 0;
+  car.invulnUntil = performance.now() + 1500; // 1.5초 무적
   skidMarks.length = 0; // 이전 타이어 자국 정리
+}
+
+/* 한 점(px, py)이 차량의 차체 사각형(OBB) 안에 있는지 검사한다.
+ *  점을 차체 로컬 좌표로 변환해 길이/폭 절반 안쪽인지 본다. */
+function pointInCar(px, py, car) {
+  const len = car.length || CAR.length;
+  const wid = car.width || CAR.width;
+  const dx = px - car.x;
+  const dy = py - car.y;
+  const cos = Math.cos(car.angle);
+  const sin = Math.sin(car.angle);
+  const localX = dx * cos + dy * sin;
+  const localY = -dx * sin + dy * cos;
+  return Math.abs(localX) <= len / 2 && Math.abs(localY) <= wid / 2;
+}
+
+/* 플레이어 간 충돌 판정 (아케이드 규칙 — 지렁이 키우기의 반대)
+ *  "상대 플레이어의 머리(앞코)가 내 차체에 닿으면 내가 죽는다."
+ *  → 머리가 공격 무기. 들이받히는 쪽이 죽는다.
+ *  클라이언트 권위 모델이므로 각자 "내가 죽었는지"만 판정한다.
+ *  (내 머리로 상대를 받으면, 그 상대의 클라이언트가 스스로 죽음 처리한다.) */
+function updatePlayerCollision(car) {
+  if (performance.now() < car.invulnUntil) return; // 부활 직후 무적
+
+  for (const r of remotePlayers.values()) {
+    const len = r.length || CAR.length;
+    // 상대의 머리(앞코) 월드 좌표
+    const hx = r.x + Math.cos(r.angle) * (len / 2);
+    const hy = r.y + Math.sin(r.angle) * (len / 2);
+    if (pointInCar(hx, hy, car)) {
+      respawn(car); // 상대 머리가 내 몸에 닿음 → 사망 후 리스폰
+      return;
+    }
+  }
 }
 
 
 /* =============================================================================
  *  스키드 마크 (드리프트 시 타이어 자국) — 주행감 시각 피드백
  * ========================================================================== */
+// 모든 플레이어(나 + 원격)의 타이어 자국을 한 배열에 모은다. 각 점은 주인 색을 가진다.
 const skidMarks = [];
-const MAX_SKID = 600;
+const MAX_SKID = 2000;
 
+// 임의의 차량 위치/방향/색으로 뒷바퀴 자국 두 점을 남긴다.
+function pushSkid(x, y, angle, color) {
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const rearOffset = -CAR.length * 0.35; // 뒷바퀴 위치
+  const halfW = CAR.width * 0.4;
+  for (const side of [-1, 1]) {
+    skidMarks.push({
+      x: x + cos * rearOffset - sin * halfW * side,
+      y: y + sin * rearOffset + cos * halfW * side,
+      color,
+    });
+  }
+  while (skidMarks.length > MAX_SKID) skidMarks.shift();
+}
+
+// 내 차 : 측면 미끄럼이 크고 속도가 충분하면 내 색으로 자국을 남긴다.
 function updateSkid(car) {
   const lateral = Math.abs(car.ll);
   const speed = speedOf(car);
-  // 측면 미끄럼이 일정 이상이고 속도가 충분할 때만 자국을 남긴다
   if (lateral > 18 && speed > 40 * KMH_TO_PXS) {
-    const cos = Math.cos(car.angle);
-    const sin = Math.sin(car.angle);
-    const rearOffset = -car.length * 0.35; // 뒷바퀴 위치
-    const halfW = car.width * 0.4;
-    // 좌/우 뒷바퀴 두 점
-    for (const side of [-1, 1]) {
-      skidMarks.push({
-        x: car.x + cos * rearOffset - sin * halfW * side,
-        y: car.y + sin * rearOffset + cos * halfW * side,
-      });
-    }
-    while (skidMarks.length > MAX_SKID) skidMarks.shift();
+    pushSkid(car.x, car.y, car.angle, skidColorForId(net.id ?? 0));
   }
 }
 
@@ -366,8 +431,8 @@ function render(car) {
   for (const [id, r] of remotePlayers) {
     drawCar(r, colorForId(id));
   }
-  // 내 차량
-  drawCar(car);
+  // 내 차량 (내 고유 색)
+  drawCar(car, myColor());
 
   ctx.restore();
 
@@ -407,8 +472,8 @@ function drawGround() {
 }
 
 function drawSkid() {
-  ctx.fillStyle = "rgba(20,20,20,0.5)";
   for (const m of skidMarks) {
+    ctx.fillStyle = m.color;
     ctx.fillRect(m.x - 2, m.y - 2, 4, 4);
   }
 }
@@ -417,6 +482,11 @@ function drawCar(car, color = "#e23b2e") {
   ctx.save();
   ctx.translate(car.x, car.y);
   ctx.rotate(car.angle);
+
+  // 부활 직후 무적 상태면 깜빡이게 표시
+  if (car.invulnUntil && performance.now() < car.invulnUntil) {
+    ctx.globalAlpha = 0.4 + 0.35 * Math.abs(Math.sin(performance.now() / 90));
+  }
 
   const L = car.length || CAR.length;
   const W = car.width || CAR.width;
@@ -488,7 +558,7 @@ function drawMinimap(car) {
   mctx.save();
   mctx.translate(cx, cy);
   mctx.rotate(car.angle);
-  mctx.fillStyle = "#ff3b30";
+  mctx.fillStyle = myColor();
   mctx.beginPath();
   mctx.moveTo(7, 0);    // 앞쪽 꼭지점
   mctx.lineTo(-5, -4);
@@ -519,10 +589,23 @@ const net = {
 // 다른 플레이어 : id -> { x, y, angle (렌더값), tx, ty, tangle (목표값), drifting }
 const remotePlayers = new Map();
 
-// id 로 색을 결정 (원격 차량 구분용 팔레트)
-const PALETTE = ["#3b82f6", "#22c55e", "#eab308", "#a855f7", "#ec4899", "#14b8a6", "#f97316"];
+// 플레이어 id 로부터 "고유 색"을 결정적으로 생성한다.
+//  - id 만으로 색이 정해지므로 모든 클라이언트가 같은 플레이어를 같은 색으로 본다
+//    → "난 파란 차야" 처럼 색으로 서로를 부르며 소통할 수 있다.
+//  - 황금각(137.508°)으로 hue 를 분산시켜 인원이 늘어도 색이 잘 겹치지 않는다.
+function hueForId(id) {
+  return ((id || 0) * 137.508) % 360;
+}
 function colorForId(id) {
-  return PALETTE[id % PALETTE.length];
+  return `hsl(${hueForId(id)}, 72%, 55%)`;
+}
+// 타이어 자국용 색 (어둡고 반투명한 같은 계열)
+function skidColorForId(id) {
+  return `hsla(${hueForId(id)}, 55%, 30%, 0.5)`;
+}
+// 내 차 색 (서버가 id 를 줄 때까지는 id 0 기준 색)
+function myColor() {
+  return colorForId(net.id ?? 0);
 }
 
 function connect() {
@@ -589,7 +672,7 @@ function netSend(car, now) {
 
 // 원격 차량을 목표 위치로 매 프레임 보간 (부드러운 이동)
 function updateRemotes() {
-  for (const r of remotePlayers.values()) {
+  for (const [id, r] of remotePlayers) {
     r.x = lerp(r.x, r.tx, 0.25);
     r.y = lerp(r.y, r.ty, 0.25);
     // 각도는 -π~π 경계를 고려해 최단 경로로 보간
@@ -597,6 +680,9 @@ function updateRemotes() {
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
     r.angle += diff * 0.25;
+
+    // 드리프트 중인 원격 차량의 타이어 자국도 그 차 색으로 남긴다
+    if (r.drifting) pushSkid(r.x, r.y, r.angle, skidColorForId(id));
   }
 }
 
@@ -630,6 +716,7 @@ function frame(now) {
   // ----- 네트워크 -----
   netSend(CAR, now);          // 내 상태 송신
   updateRemotes();            // 원격 차량 보간
+  updatePlayerCollision(CAR); // 플레이어 간 충돌(머리에 받히면 사망)
 
   render(CAR);                // 렌더
 
