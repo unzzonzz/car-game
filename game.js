@@ -287,10 +287,10 @@ function updateCollision(car) {
   }
 }
 
-/* 차량을 "다른 플레이어가 없는" 랜덤 위치에서 초기 상태로 되살린다.
- *  - 맵 위 여러 후보를 뽑아, 알고 있는 모든 원격 플레이어로부터 가장 멀리
- *    떨어진 지점을 고른다(충분히 떨어진 곳을 찾으면 즉시 채택).
- *  - 부활 직후 잠깐 무적(invuln)을 줘서 지연/겹침으로 인한 즉사를 막는다. */
+/* 벽 충돌 시 로컬에서 차량을 "다른 플레이어가 없는" 랜덤 위치로 되살린다.
+ *  (플레이어 간 킬에 의한 부활은 서버가 위치를 정해 handleDeath 로 처리한다.)
+ *  - 맵 위 여러 후보 중 알고 있는 원격 플레이어로부터 가장 먼 지점을 고른다.
+ *  - 부활 직후 잠깐 무적을 주고, teleport 플래그로 남들 화면 슬라이드를 막는다. */
 function respawn(car) {
   const S = CONFIG.MAP_SIZE;
   const margin = 250;            // 벽에서 떨어뜨릴 여백
@@ -318,61 +318,25 @@ function respawn(car) {
   car.lf = 0; car.ll = 0;
   car.steerInput = 0;
   car.invulnUntil = performance.now() + 1500; // 1.5초 무적
+  net.pendingTeleport = true; // 남들 화면에서 슬라이드 없이 스냅되도록
   skidMarks.length = 0; // 이전 타이어 자국 정리
 }
 
-/* 한 점(px, py)이 차량의 차체 사각형(OBB) 안에 있는지 검사한다.
- *  점을 차체 로컬 좌표로 변환해 길이/폭 절반 안쪽인지 본다. */
-function pointInCar(px, py, car) {
-  const len = car.length || CAR.length;
-  const wid = car.width || CAR.width;
-  const dx = px - car.x;
-  const dy = py - car.y;
-  const cos = Math.cos(car.angle);
-  const sin = Math.sin(car.angle);
-  const localX = dx * cos + dy * sin;
-  const localY = -dx * sin + dy * cos;
-  return Math.abs(localX) <= len / 2 && Math.abs(localY) <= wid / 2;
-}
+/* 플레이어 간 킬 판정은 이제 서버 권위로 처리한다(server.js 의 runCollisions).
+ *  클라이언트는 더 이상 스스로 죽음을 판정하지 않고, 서버의 통지를 따른다.
+ *  - "death"  : 내가 죽었으니 지정 위치에서 부활하라 (handleDeath)
+ *  - "killed" : 누군가 죽었으니 그 자리에 폭발을 띄워라 (모두에게)
+ *  → 두 PC의 판정 불일치 / "내가 박았는데 내가 죽음" 문제가 사라진다. */
 
-/* 플레이어 간 충돌 판정 (아케이드 규칙 — 지렁이 키우기의 반대)
- *  "상대 플레이어의 머리(앞코)가 내 차체에 닿으면 내가 죽는다."
- *  → 머리가 공격 무기. 들이받히는 쪽이 죽는다.
- *  클라이언트 권위 모델이므로 각자 "내가 죽었는지"만 판정한다.
- *  (내 머리로 상대를 받으면, 그 상대의 클라이언트가 스스로 죽음 처리한다.) */
-function updatePlayerCollision(car) {
-  if (performance.now() < car.invulnUntil) return; // 부활 직후 무적
-
-  // 내 머리(앞코) 월드 좌표
-  const myHx = car.x + Math.cos(car.angle) * (car.length / 2);
-  const myHy = car.y + Math.sin(car.angle) * (car.length / 2);
-
-  for (const r of remotePlayers.values()) {
-    const len = r.length || CAR.length;
-    // 상대의 머리(앞코) 월드 좌표
-    const hx = r.x + Math.cos(r.angle) * (len / 2);
-    const hy = r.y + Math.sin(r.angle) * (len / 2);
-
-    const enemyHeadInMe = pointInCar(hx, hy, car); // 내가 받혔는가
-    const myHeadInEnemy = pointInCar(myHx, myHy, r); // 내가 들이받았는가
-
-    // 핵심: 상대 머리가 내 몸에 닿았더라도, "내 머리가 상대 몸에 박혀 있으면"
-    // 나는 공격자이므로 죽지 않는다(상대가 죽는다).
-    // → 옆/뒤를 내가 들이받았는데 내가 죽던 버그 해결.
-    // 정면 동시 충돌(둘 다 머리)은 무승부로 아무도 죽지 않는다.
-    if (enemyHeadInMe && !myHeadInEnemy) {
-      killSelf(car); // 일방적으로 받힘 → 사망
-      return;
-    }
-  }
-}
-
-/* 사망 처리 : 폭발 이펙트 + 사망 화면 + 다른 사람에게 알림 + 안전한 곳 부활 */
-function killSelf(car) {
-  spawnExplosion(car.x, car.y, myColor()); // 죽은 자리에서 폭발
-  showDeathScreen();                        // 내 화면에 사망 표시
-  netSendDied(car.x, car.y);                // 다른 플레이어에게 폭발 알림
-  respawn(car);                             // 안전한 위치로 부활(무적 부여)
+// 서버가 내 사망을 통지 → 권위 위치로 부활
+function handleDeath(x, y, angle) {
+  CAR.x = x; CAR.y = y; CAR.angle = angle;
+  CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0;
+  CAR.steerInput = 0;
+  CAR.invulnUntil = performance.now() + 1500;
+  net.pendingTeleport = true; // 다음 송신에 teleport 표시 → 남들 화면에서 슬라이드 방지
+  skidMarks.length = 0;
+  showDeathScreen();
 }
 
 
@@ -578,8 +542,8 @@ function drawCar(car, color = "#e23b2e") {
   ctx.translate(car.x, car.y);
   ctx.rotate(car.angle);
 
-  // 부활 직후 무적 상태면 깜빡이게 표시
-  if (car.invulnUntil && performance.now() < car.invulnUntil) {
+  // 부활 직후 무적 상태면 깜빡이게 표시 (내 차: invulnUntil / 원격: 서버의 invuln 플래그)
+  if ((car.invulnUntil && performance.now() < car.invulnUntil) || car.invuln) {
     ctx.globalAlpha = 0.4 + 0.35 * Math.abs(Math.sin(performance.now() / 90));
   }
 
@@ -692,6 +656,7 @@ const net = {
   connected: false,
   sendInterval: 1000 / 30,
   lastSend: 0,
+  pendingTeleport: false, // true면 다음 상태 송신에 teleport 플래그를 실어 보낸다
 };
 
 // 다른 플레이어 : id -> { x, y, angle (렌더값), tx, ty, tangle (목표값), drifting }
@@ -733,9 +698,13 @@ function connect() {
 
     if (msg.type === "welcome") {
       net.id = msg.id;
-    } else if (msg.type === "died") {
-      // 다른 플레이어가 죽었다 → 그 자리에서 그 플레이어 색으로 폭발
-      spawnExplosion(msg.x, msg.y, colorForId(msg.id));
+    } else if (msg.type === "death") {
+      // 서버 판정: 내가 죽었다 → 권위 위치로 부활
+      handleDeath(msg.x, msg.y, msg.angle);
+    } else if (msg.type === "killed") {
+      // 서버 통지: 누군가 죽었다 → 그 자리에서 그 차 색으로 폭발 (모두에게)
+      const color = msg.victimId === net.id ? myColor() : colorForId(msg.victimId);
+      spawnExplosion(msg.x, msg.y, color);
     } else if (msg.type === "snapshot") {
       const seen = new Set();
       for (const p of msg.players) {
@@ -749,6 +718,9 @@ function connect() {
         }
         r.tx = p.x; r.ty = p.y; r.tangle = p.angle;
         r.drifting = p.drifting;
+        r.invuln = p.invuln;
+        // 텔레포트(부활 등) 신호면 보간하지 말고 즉시 스냅 → 맵 가로지르는 슬라이드 방지
+        if (p.teleport) { r.x = p.x; r.y = p.y; r.angle = p.angle; }
       }
       // 스냅샷에 없는 = 떠난 플레이어 제거
       for (const id of remotePlayers.keys()) {
@@ -773,18 +745,15 @@ function netSend(car, now) {
   net.lastSend = now;
 
   const drifting = Math.abs(car.ll) > 18 && speedOf(car) > 40 * KMH_TO_PXS;
-  net.ws.send(JSON.stringify({
+  const msg = {
     type: "state",
     x: Math.round(car.x), y: Math.round(car.y),
     angle: +car.angle.toFixed(3),
     drifting,
-  }));
-}
-
-// 사망 사실을 서버에 알려 다른 플레이어 화면에도 폭발이 보이게 한다
-function netSendDied(x, y) {
-  if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
-  net.ws.send(JSON.stringify({ type: "died", x: Math.round(x), y: Math.round(y) }));
+  };
+  // 막 텔레포트(벽/플레이어 리스폰)했으면 서버·남들에게 스냅하라고 알린다
+  if (net.pendingTeleport) { msg.teleport = true; net.pendingTeleport = false; }
+  net.ws.send(JSON.stringify(msg));
 }
 
 // 원격 차량을 목표 위치로 매 프레임 보간 (부드러운 이동)
@@ -833,8 +802,7 @@ function frame(now) {
   // ----- 네트워크 -----
   netSend(CAR, now);          // 내 상태 송신
   updateRemotes();            // 원격 차량 보간
-  updatePlayerCollision(CAR); // 플레이어 간 충돌(머리에 받히면 사망)
-  updateExplosions(dt);       // 폭발 이펙트 갱신
+  updateExplosions(dt);       // 폭발 이펙트 갱신 (킬 판정은 서버가 통지)
 
   render(CAR);                // 렌더
 
