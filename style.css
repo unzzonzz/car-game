@@ -239,6 +239,7 @@ html, body {
 }
 .mode-btn.survival:hover { border-color: #ff5a4d; }
 .mode-btn.racing:hover { border-color: #3b82f6; }
+.mode-btn.pro:hover { border-color: #f1c40f; }
 .mode-name {
   font-weight: 700;
   color: #fff;
@@ -247,4 +248,112 @@ html, body {
   font-size: 12px;
   color: rgba(255, 255, 255, 0.55);
   line-height: 1.4;
+}
+
+/* 순위판 (채팅 아래) */
+#standings {
+  position: absolute;
+  top: 438px;        /* 채팅(top206 + 약 218) 아래 */
+  right: 18px;
+  width: 240px;
+  display: none;
+  background: rgba(0, 0, 0, 0.42);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: #eee;
+  font-size: 12px;
+}
+.stand-title {
+  font-weight: 700;
+  color: #ffd83a;
+  margin-bottom: 5px;
+  letter-spacing: 1px;
+}
+.stand-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+.stand-rank { width: 18px; color: rgba(255,255,255,0.6); text-align: right; }
+.stand-star { width: 14px; text-align: center; }
+.stand-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stand-lap { color: rgba(255,255,255,0.8); font-variant-numeric: tabular-nums; }
+
+/* 프로 레이싱 로비 */
+#lobby {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 12, 18, 0.82);
+  z-index: 9;
+}
+#lobby.show { display: flex; }
+.lobby-card {
+  width: min(440px, 90vw);
+  padding: 28px 28px 24px;
+  background: rgba(20, 26, 34, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+}
+.lobby-card h2 {
+  font-size: 22px;
+  color: #fff;
+  text-align: center;
+  margin-bottom: 18px;
+}
+#lobbyList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.lobby-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 9px;
+}
+.lobby-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+.lobby-name { flex: 1; color: #fff; font-weight: 600; }
+.lobby-ready { font-size: 12px; font-weight: 700; }
+.lobby-ready.on { color: #3be066; }
+.lobby-ready.off { color: rgba(255, 255, 255, 0.4); }
+.lobby-hint {
+  text-align: center;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  margin-bottom: 16px;
+}
+.lobby-buttons { display: flex; gap: 10px; }
+#readyBtn {
+  flex: 2;
+  padding: 13px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  background: #2f6fd6;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+}
+#readyBtn.ready { background: #2faa54; }
+#readyBtn:disabled { background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.4); cursor: not-allowed; }
+#lobbyLeave {
+  flex: 1;
+  padding: 13px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  cursor: pointer;
 }

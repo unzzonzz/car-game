@@ -19,13 +19,19 @@
   <!-- 우측 상단 미니맵 -->
   <canvas id="minimap" width="180" height="180"></canvas>
 
-  <!-- 미니맵 하단 채팅창 (같은 모드 플레이어끼리) -->
+  <!-- 미니맵 하단 채팅창 (모든 모드 공유) -->
   <div id="chat">
     <div id="chatLog"></div>
     <div id="chatRow">
       <input id="chatInput" type="text" maxlength="200" placeholder="메시지 입력…" autocomplete="off" />
       <button id="chatSend">전송</button>
     </div>
+  </div>
+
+  <!-- 채팅 아래 플레이어 리스트/순위 (프로 레이싱) -->
+  <div id="standings">
+    <div class="stand-title">순위</div>
+    <div id="standingsList"></div>
   </div>
 
   <!-- 사망 화면 (받혀서 죽은 플레이어에게 표시) -->
@@ -50,6 +56,23 @@
           <span class="mode-name">레이싱 모드</span>
           <span class="mode-desc">꼬불꼬불 서킷 자유 주행 · 죽음 없음</span>
         </button>
+        <button id="btnPro" class="mode-btn pro">
+          <span class="mode-name">프로 레이싱</span>
+          <span class="mode-desc">최대 7명 · 로비 준비 → 3바퀴 경주</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 프로 레이싱 로비 -->
+  <div id="lobby">
+    <div class="lobby-card">
+      <h2>🏁 프로 레이싱 로비</h2>
+      <div id="lobbyList"></div>
+      <p id="lobbyHint" class="lobby-hint"></p>
+      <div class="lobby-buttons">
+        <button id="readyBtn">준비</button>
+        <button id="lobbyLeave">나가기</button>
       </div>
     </div>
   </div>

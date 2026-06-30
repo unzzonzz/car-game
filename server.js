@@ -89,54 +89,88 @@ wss.on("connection", (ws) => {
     if (!p) return;
 
     if (msg.type === "join") {
-      // 모드 선택 화면에서 입장 : 모드/이름 등록
-      p.mode = msg.mode === "racing" ? "racing" : "survival";
       p.name = sanitizeName(msg.name);
-      p.active = true;
-      if (p.mode === "survival") {
-        // 서바이벌 : 서버가 안전한 부활 위치를 정해 통지
+      const mode = (msg.mode === "racing") ? "racing"
+        : (msg.mode === "pro") ? "pro" : "survival";
+
+      if (mode === "pro") {
+        // 프로 레이싱 : 정원/상태 체크 후 로비 입장
+        if (proRoom.state !== "lobby") {
+          send(p, { type: "joinReject", reason: "레이스가 진행 중입니다. 잠시 후 다시 시도하세요." });
+          return;
+        }
+        if (proCount() >= PRO_MAX) {
+          send(p, { type: "joinReject", reason: `정원(${PRO_MAX}명)이 가득 찼습니다.` });
+          return;
+        }
+        p.mode = "pro"; p.active = true;
+        p.ready = false; p.lap = 0; p.prog = 0; p.finished = false; p.finishTime = 0;
+        p.slot = proAssignSlot();
+        p.state = null; p.invulnUntil = 0; p.graceUntil = 0;
+        send(p, { type: "proStart", slot: p.slot, laps: PRO_LAPS });
+        broadcastRace();
+        console.log(`[>] player ${id} joined pro (slot ${p.slot})`);
+        return;
+      }
+
+      p.mode = mode; p.active = true;
+      if (mode === "survival") {
         const spawn = pickSpawn(id);
         p.state = { x: spawn.x, y: spawn.y, angle: spawn.angle, drifting: false, teleport: true };
         p.prevHead = headOf(p.state);
         p.invulnUntil = Date.now() + INVULN_MS;
-        p.graceUntil = Date.now() + GRACE_MS; // 클라가 spawn 반영 전 옛 위치 무시
+        p.graceUntil = Date.now() + GRACE_MS;
         send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
-      } else {
-        // 레이싱 : 클라이언트가 트랙 출발점에서 시작. 위치는 곧 state 로 들어온다.
-        p.state = null;
-        p.invulnUntil = 0;
-        p.graceUntil = 0;
+      } else { // racing(자유)
+        p.state = null; p.invulnUntil = 0; p.graceUntil = 0;
       }
       console.log(`[>] player ${id} joined ${p.mode} as "${p.name}"`);
 
     } else if (msg.type === "leave") {
-      // 나가기 버튼 등으로 메뉴 복귀 → 스냅샷/판정에서 제외
-      p.active = false;
-      p.state = null;
+      const wasPro = p.mode === "pro" && p.active;
+      p.active = false; p.state = null;
+      if (wasPro) proOnLeave();
+
+    } else if (msg.type === "ready") {
+      // 프로 로비에서 준비 토글 → 모두 준비되면 카운트다운 시작
+      if (!p.active || p.mode !== "pro" || proRoom.state !== "lobby") return;
+      p.ready = !!msg.value;
+      broadcastRace();
+      maybeStartCountdown();
 
     } else if (msg.type === "chat") {
-      // 같은 모드 플레이어들에게 채팅 릴레이 (이름/시간은 서버 기준)
+      // 모든 모드가 공유하는 전역 채팅
       if (!p.active) return;
       const text = sanitizeChat(msg.text);
       if (!text) return;
-      broadcastMode(p.mode, { type: "chat", id, name: p.name, text, t: Date.now() });
+      broadcastAll({ type: "chat", id, name: p.name, text, t: Date.now() });
 
     } else if (msg.type === "state") {
-      if (!p.active) return; // 메뉴 상태에선 무시
-      // 입장 직후 유예 시간 동안엔 클라가 spawn 을 반영하기 전 옛 위치를 보낼 수
-      // 있으므로 무시한다(서버가 정한 부활 위치 유지).
+      if (!p.active) return;
       if (Date.now() < (p.graceUntil || 0)) return;
-      // 이동은 클라이언트 권위 — 위치는 신뢰해 저장(충돌 판정만 서버가 함)
       p.state = {
         x: msg.x, y: msg.y, angle: msg.angle,
         drifting: !!msg.drifting,
         teleport: !!msg.teleport,
       };
+      // 프로 레이싱 중이면 바퀴수/진행도 갱신 + 완주 감지
+      if (p.mode === "pro" && proRoom.state === "racing" && typeof msg.lap === "number") {
+        p.lap = msg.lap;
+        if (typeof msg.prog === "number") p.prog = msg.prog;
+        if (!p.finished && p.lap >= PRO_LAPS) {
+          p.finished = true; p.finishTime = Date.now();
+          if (proRoom.endAt === 0) proRoom.endAt = Date.now() + END_TIMER_MS; // 첫 완주 → 10초
+          broadcastRace();
+        }
+      }
     }
   });
 
   ws.on("close", () => {
+    const pc = players.get(id);
+    const wasPro = pc && pc.mode === "pro" && pc.active;
     players.delete(id);
+    if (wasPro) proOnLeave();
     console.log(`[-] player ${id} disconnected (total ${players.size})`);
   });
 
@@ -238,6 +272,113 @@ function broadcastMode(mode, obj) {
     if (p.active && p.mode === mode && p.ws.readyState === p.ws.OPEN) p.ws.send(payload);
   }
 }
+// 모든 활성 플레이어에게 전송 (전역 채팅 등)
+function broadcastAll(obj) {
+  const payload = JSON.stringify(obj);
+  for (const [, p] of players) {
+    if (p.active && p.ws.readyState === p.ws.OPEN) p.ws.send(payload);
+  }
+}
+
+// =============================================================================
+//  프로 레이싱 룸 (단일 공유 룸, 상태기계: lobby → countdown → racing → 종료)
+// -----------------------------------------------------------------------------
+//  - 최대 7명. 2명 이상 모두 ready 면 자동으로 5초 카운트다운 후 시작.
+//  - 카운트다운 동안 이동 불가(클라가 막음). 3바퀴 완주 순으로 순위.
+//  - 첫 완주자 발생 시각부터 10초 뒤 종료 → 전원 자유 레이싱으로 이동.
+//  바퀴/진행도는 클라가 트랙으로 계산해 보고(이동 권위와 동일), 서버는 순위/타이머 관리.
+// =============================================================================
+const PRO_MAX = 7;
+const PRO_LAPS = 3;
+const COUNTDOWN_MS = 5000;
+const END_TIMER_MS = 10000;
+const proRoom = { state: "lobby", countdownAt: 0, endAt: 0 };
+
+function proList() {
+  const a = [];
+  for (const [id, p] of players) if (p.active && p.mode === "pro") a.push({ id, p });
+  return a;
+}
+function proCount() {
+  let n = 0;
+  for (const [, p] of players) if (p.active && p.mode === "pro") n++;
+  return n;
+}
+function proAssignSlot() {
+  const used = new Set();
+  for (const [, p] of players) if (p.active && p.mode === "pro") used.add(p.slot);
+  for (let s = 0; s < PRO_MAX; s++) if (!used.has(s)) return s;
+  return 0;
+}
+
+// 순위 산정 : 완주자 먼저(빨리 완주한 순) → 미완주는 진행도 높은 순
+function rankedPro() {
+  const list = proList();
+  list.sort((a, b) => {
+    const A = a.p, B = b.p;
+    if (A.finished !== B.finished) return A.finished ? -1 : 1;
+    if (A.finished && B.finished) return A.finishTime - B.finishTime;
+    return (B.prog || 0) - (A.prog || 0);
+  });
+  return list.map((e, i) => ({
+    id: e.id, name: e.p.name, ready: !!e.p.ready,
+    lap: e.p.lap || 0, finished: !!e.p.finished, rank: i + 1,
+  }));
+}
+
+function broadcastRace() {
+  const now = Date.now();
+  const msg = {
+    type: "race",
+    state: proRoom.state,
+    laps: PRO_LAPS,
+    canReady: proCount() >= 2, // 혼자면 ready 비활성
+    countdownMs: proRoom.state === "countdown" ? Math.max(0, proRoom.countdownAt - now) : 0,
+    endMs: (proRoom.state === "racing" && proRoom.endAt > 0) ? Math.max(0, proRoom.endAt - now) : 0,
+    players: rankedPro(),
+  };
+  for (const { p } of proList()) send(p, msg);
+}
+
+function maybeStartCountdown() {
+  if (proRoom.state !== "lobby") return;
+  const list = proList();
+  if (list.length < 2 || !list.every((e) => e.p.ready)) return;
+  proRoom.state = "countdown";
+  proRoom.countdownAt = Date.now() + COUNTDOWN_MS;
+  proRoom.endAt = 0;
+  broadcastRace();
+}
+
+function proOnLeave() {
+  if (proCount() === 0) { proRoom.state = "lobby"; proRoom.countdownAt = 0; proRoom.endAt = 0; return; }
+  if (proRoom.state === "countdown" && proCount() < 2) { proRoom.state = "lobby"; proRoom.countdownAt = 0; }
+  broadcastRace();
+  maybeStartCountdown();
+}
+
+function endRace() {
+  for (const { p } of proList()) {
+    send(p, { type: "toFreeRacing" }); // 클라는 자유 레이싱으로 재입장
+    p.active = false; p.state = null;
+  }
+  proRoom.state = "lobby"; proRoom.countdownAt = 0; proRoom.endAt = 0;
+}
+
+function proTick() {
+  const now = Date.now();
+  if (proRoom.state === "countdown") {
+    if (now >= proRoom.countdownAt) {
+      proRoom.state = "racing"; proRoom.endAt = 0;
+      for (const { p } of proList()) { p.lap = 0; p.prog = 0; p.finished = false; p.finishTime = 0; }
+    }
+    broadcastRace();
+  } else if (proRoom.state === "racing") {
+    if (proRoom.endAt > 0 && now >= proRoom.endAt) endRace();
+    else broadcastRace(); // 순위/종료 카운트다운 갱신
+  }
+}
+setInterval(proTick, 200); // 5Hz
 
 // 사망 처리 : 죽은 자리 폭발 통지 → 본인은 메뉴로(비활성). 서바이벌 전용.
 function killPlayer(victimId, victim, killerId) {
@@ -301,7 +442,7 @@ setInterval(runCollisions, 1000 / COLLISION_HZ);
 //  (서바이벌/레이싱 플레이어는 서로 보이지 않도록 분리)
 setInterval(() => {
   const now = Date.now();
-  const byMode = { survival: [], racing: [] };
+  const byMode = { survival: [], racing: [], pro: [] };
 
   for (const [id, p] of players) {
     if (!p.active || !p.state) continue;

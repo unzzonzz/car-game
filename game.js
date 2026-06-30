@@ -44,14 +44,30 @@ const CONFIG = {
  * ========================================================================== */
 const WORLD = {
   survival: { w: 5000, h: 5000, type: "open" },
-  racing: { w: 10000, h: 6000, type: "track" },
+  racing: { w: 10000, h: 6000, type: "track", track: null },  // 자유 레이싱
+  pro: { w: 10000, h: 6000, type: "track", track: null },     // 프로 레이싱(다른 서킷)
 };
 
 // 현재 모드/월드/게임 상태
-let gameMode = "survival";   // "survival" | "racing"
+let gameMode = "survival";   // "survival" | "racing" | "pro"
 let world = WORLD.survival;  // 현재 월드 치수/타입
 let gameState = "menu";      // "menu" | "playing"
 let playerName = "Player";
+
+// 프로 레이싱 상태 (서버 'race' 메시지로 갱신)
+const race = {
+  state: "none",     // "none" | "lobby" | "countdown" | "racing"
+  laps: 3,
+  slot: 0,           // 내 그리드 슬롯
+  list: [],          // 순위 [{id,name,ready,lap,finished,rank}]
+  canReady: false,   // 2명 이상이면 true
+  myReady: false,
+  countdownEnd: 0,   // 로컬 시각(performance.now): 카운트다운 끝
+  endEnd: 0,         // 로컬 시각: 종료 타이머 끝 (0=없음)
+  goFlashUntil: 0,   // "GO!" 표시 끝 시각
+  // 내 바퀴 추적
+  lap: 0, prog: 0, lastPhase: 0, checkpoint: false,
+};
 
 const OFFTRACK_DRAG = 2.4;   // 트랙 이탈 시 추가 감속 계수 (클수록 풀밭처럼 느려짐)
 
@@ -60,53 +76,45 @@ const OFFTRACK_DRAG = 2.4;   // 트랙 이탈 시 추가 감속 계수 (클수�
  *      point(θ) = center + ( R(θ)·cosθ , R(θ)·sinθ ),  R(θ) > 0
  *  여러 주파수의 사인을 더해 코너가 많은 굽이진 서킷을 만든다. R 이 항상
  *  양수라 중심에서 별모양이라 절대 자기 자신과 교차하지 않는다.
- *  생성 후 bbox 를 월드(트랙 폭 여백 포함)에 자동으로 맞춰 스케일/이동한다. */
-const TRACK = {
-  halfWidth: 230,     // 트랙 절반 폭 (전체 폭 460px)
-  kerb: 26,           // 빨강/흰 커브 폭
-  centerline: [],     // 월드 좌표 중심선 점들 (닫힌 루프)
-  path: null,         // 렌더용 캐시 Path2D (중심선)
-  start: { x: 0, y: 0, angle: 0 }, // 출발 위치/방향
-};
-
-// 트랙 중심선을 생성한다 (init 에서 1회 호출). world.racing 치수에 맞춰 자동 피팅.
-function generateTrack() {
-  const N = 260; // 중심선 해상도
-  // 1) 단위 극좌표 곡선 샘플 (여러 하모닉 → 굽이진 서킷)
-  const raw = [];
+ *  자유/프로는 하모닉만 달리해 비슷하지만 다른 트랙을 만든다. */
+function makeTrack(opts) {
+  const N = 260, raw = [];
   for (let i = 0; i < N; i++) {
     const a = (i / N) * Math.PI * 2;
-    const R = 1
-      + 0.16 * Math.sin(2 * a + 0.6)
-      + 0.30 * Math.sin(3 * a + 0.4)
-      + 0.18 * Math.sin(5 * a + 1.3)
-      + 0.10 * Math.sin(7 * a + 0.2);
-    raw.push({ x: Math.cos(a) * R * 1.7, y: Math.sin(a) * R }); // x 를 늘려 가로로 길게
+    const R = opts.R(a);
+    raw.push({ x: Math.cos(a) * R * opts.stretch, y: Math.sin(a) * R });
   }
-  // 2) bbox 계산
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of raw) {
     if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
     if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
   }
-  // 3) 월드(트랙 폭 + 여백 만큼 안쪽) 에 맞춰 스케일/이동
-  const W = WORLD.racing.w, H = WORLD.racing.h;
-  const inset = TRACK.halfWidth + TRACK.kerb + 120;
-  const scale = Math.min((W - 2 * inset) / (maxX - minX), (H - 2 * inset) / (maxY - minY));
-  const offX = (W - (maxX - minX) * scale) / 2 - minX * scale;
-  const offY = (H - (maxY - minY) * scale) / 2 - minY * scale;
+  const inset = opts.halfWidth + opts.kerb + 120;
+  const scale = Math.min((opts.w - 2 * inset) / (maxX - minX), (opts.h - 2 * inset) / (maxY - minY));
+  const offX = (opts.w - (maxX - minX) * scale) / 2 - minX * scale;
+  const offY = (opts.h - (maxY - minY) * scale) / 2 - minY * scale;
+  const centerline = raw.map(p => ({ x: p.x * scale + offX, y: p.y * scale + offY }));
 
-  TRACK.centerline = raw.map(p => ({ x: p.x * scale + offX, y: p.y * scale + offY }));
-
-  // 4) 렌더용 Path2D (닫힌 루프)
   const path = new Path2D();
-  TRACK.centerline.forEach((p, i) => i ? path.lineTo(p.x, p.y) : path.moveTo(p.x, p.y));
+  centerline.forEach((p, i) => i ? path.lineTo(p.x, p.y) : path.moveTo(p.x, p.y));
   path.closePath();
-  TRACK.path = path;
 
-  // 5) 출발 위치/방향 = 중심선 0번 점, 다음 점 방향
-  const a0 = TRACK.centerline[0], a1 = TRACK.centerline[1];
-  TRACK.start = { x: a0.x, y: a0.y, angle: Math.atan2(a1.y - a0.y, a1.x - a0.x) };
+  const a0 = centerline[0], a1 = centerline[1];
+  const start = { x: a0.x, y: a0.y, angle: Math.atan2(a1.y - a0.y, a1.x - a0.x) };
+  return { halfWidth: opts.halfWidth, kerb: opts.kerb, centerline, path, start };
+}
+
+function generateTracks() {
+  WORLD.racing.track = makeTrack({
+    w: WORLD.racing.w, h: WORLD.racing.h, halfWidth: 230, kerb: 26, stretch: 1.7,
+    R: a => 1 + 0.16 * Math.sin(2 * a + 0.6) + 0.30 * Math.sin(3 * a + 0.4)
+          + 0.18 * Math.sin(5 * a + 1.3) + 0.10 * Math.sin(7 * a + 0.2),
+  });
+  WORLD.pro.track = makeTrack({
+    w: WORLD.pro.w, h: WORLD.pro.h, halfWidth: 200, kerb: 24, stretch: 1.5,
+    R: a => 1 + 0.22 * Math.sin(2 * a + 1.5) + 0.16 * Math.sin(3 * a + 2.2)
+          + 0.24 * Math.sin(4 * a + 0.5) + 0.12 * Math.sin(6 * a + 1.0),
+  });
 }
 
 // km/h -> px/s 변환 계수.  (km/h ÷ 3.6 = m/s) × (m -> px)
@@ -168,6 +176,30 @@ const CAR = {
   drifting: false,         // 현재 브레이크 드리프트 중인지 (자국/조향/네트워크 공통 기준)
   invulnUntil: 0,          // 이 시각(performance.now ms)까지 무적 — 부활 직후 보호
 };
+
+
+/* =============================================================================
+ *  우클릭 / 개발자도구 차단 (캐주얼 억제용 — 완전 차단은 불가)
+ * -----------------------------------------------------------------------------
+ *  주의: 브라우저 메뉴·JS 비활성화·디바이스 모드 등으로 우회 가능하므로
+ *  "보안"이 아니라 "초보 방지" 수준이다. 진짜 방지는 서버 권위 검증이 필요.
+ * ========================================================================== */
+// 우클릭(컨텍스트 메뉴) 차단
+window.addEventListener("contextmenu", (e) => e.preventDefault());
+
+// 개발자도구/소스보기 단축키 차단 (capture 단계에서 먼저 가로챔)
+window.addEventListener("keydown", (e) => {
+  const k = (e.key || "").toLowerCase();
+  const ctrlOrCmd = e.ctrlKey || e.metaKey;
+  if (
+    e.key === "F12" ||                                         // F12
+    (ctrlOrCmd && e.shiftKey && (k === "i" || k === "j" || k === "c")) || // 검사/콘솔
+    (ctrlOrCmd && k === "u")                                   // 소스 보기
+  ) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+}, true);
 
 
 /* =============================================================================
@@ -240,7 +272,7 @@ function init() {
     CAR.airResistance * vmax * vmax * vmax +
     CAR.rollingResistance * vmax * vmax;
 
-  generateTrack(); // 레이싱 트랙 중심선/경로 생성
+  generateTracks(); // 자유/프로 레이싱 트랙 생성
 }
 
 
@@ -255,6 +287,13 @@ function init() {
  *  특히 조향은 즉시 -1/+1 로 튀지 않고 목표값으로 "램프(ramp)" 시켜
  *  무거운 차의 핸들 반응 지연을 표현한다 (무게가 클수록 느리게 반응). */
 function updateInput(car, dt) {
+  // 프로 레이싱 로비/카운트다운 동안엔 움직일 수 없다 (그리드에서 정지)
+  if (gameMode === "pro" && (race.state === "lobby" || race.state === "countdown")) {
+    car.throttle = 0; car.braking = 0; car.reversing = 0; car.steerInput = 0;
+    car.vx = 0; car.vy = 0; car.lf = 0; car.ll = 0;
+    return;
+  }
+
   car.throttle = keys.w ? 1 : 0;
   car.braking = keys.space ? 1 : 0;
   car.reversing = keys.s ? 1 : 0;
@@ -434,7 +473,9 @@ function updateSurface(car, dt) {
 /* 점이 트랙 위에 있는지 : 중심선(폐곡선)까지의 최단 거리가 트랙 절반 폭 이내면
  *  아스팔트, 아니면 이탈(잔디). 중심선의 모든 세그먼트를 훑어 최소 거리를 구한다. */
 function isOnTrack(x, y) {
-  const pts = TRACK.centerline;
+  const track = world.track;
+  if (!track) return true;
+  const pts = track.centerline;
   const n = pts.length;
   let minD2 = Infinity;
   for (let i = 0; i < n; i++) {
@@ -442,7 +483,50 @@ function isOnTrack(x, y) {
     const d2 = distToSegmentSq(x, y, a.x, a.y, b.x, b.y);
     if (d2 < minD2) minD2 = d2;
   }
-  return minD2 <= TRACK.halfWidth * TRACK.halfWidth;
+  return minD2 <= track.halfWidth * track.halfWidth;
+}
+
+// 트랙 중심선상 위치(0~1 진행도) : 가장 가까운 세그먼트 인덱스+비율을 정규화
+function trackPhase(x, y, track) {
+  const pts = track.centerline, n = pts.length;
+  let best = 0, bestD2 = Infinity, bestFrac = 0;
+  for (let i = 0; i < n; i++) {
+    const a = pts[i], b = pts[(i + 1) % n];
+    const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+    const t = len2 ? clamp(((x - a.x) * dx + (y - a.y) * dy) / len2, 0, 1) : 0;
+    const cx = a.x + t * dx, cy = a.y + t * dy;
+    const d2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+    if (d2 < bestD2) { bestD2 = d2; best = i; bestFrac = t; }
+  }
+  return (best + bestFrac) / n;
+}
+
+// 프로 레이싱 : 바퀴수 추적 (중간 체크포인트를 지나야 시작선 통과를 1바퀴로 인정 → 역주행 악용 방지)
+function updateLap(car) {
+  if (gameMode !== "pro" || race.state !== "racing") return;
+  const ph = trackPhase(car.x, car.y, world.track);
+  if (ph > 0.4 && ph < 0.6) race.checkpoint = true;           // 중간 통과
+  if (race.checkpoint && race.lastPhase > 0.75 && ph < 0.25) { // 시작선 정방향 통과
+    race.lap++;
+    race.checkpoint = false;
+  }
+  race.lastPhase = ph;
+  race.prog = race.lap + ph;
+}
+
+// 프로 그리드 슬롯 위치 (시작선 뒤쪽, 2열 스태거)
+function proGridPosition(slot) {
+  const s = WORLD.pro.track.start;
+  const fwd = { x: Math.cos(s.angle), y: Math.sin(s.angle) };
+  const right = { x: Math.cos(s.angle + Math.PI / 2), y: Math.sin(s.angle + Math.PI / 2) };
+  const row = Math.floor(slot / 2), col = slot % 2;
+  const back = 70 + row * 75;
+  const lateral = (col === 0 ? -1 : 1) * 70;
+  return {
+    x: s.x - fwd.x * back + right.x * lateral,
+    y: s.y - fwd.y * back + right.y * lateral,
+    angle: s.angle,
+  };
 }
 
 // 점(px,py)에서 선분까지의 거리 제곱 (sqrt 생략으로 빠르게)
@@ -638,6 +722,60 @@ function render(car) {
 
   drawMinimap(car);
   drawSpeed(car);
+  drawRaceHud(); // 프로 레이싱 카운트다운/종료 타이머
+}
+
+/* 프로 레이싱 HUD : 화면 가운데 F1 신호등(5초) + 상단 종료 카운트다운(10초) */
+function drawRaceHud() {
+  if (gameMode !== "pro") return;
+  const now = performance.now();
+  const cx = canvas.width / 2;
+
+  // 카운트다운 : 빨간 신호등 5개가 1초마다 하나씩 켜진다
+  if (race.state === "countdown" && race.countdownEnd > now) {
+    const remain = race.countdownEnd - now;
+    const lit = clamp(5 - Math.floor(remain / 1000), 0, 5); // 1초마다 하나씩 차올라 5개 → 소등=출발
+    const r = 26, gap = 70, y = canvas.height * 0.32;
+    const startX = cx - (gap * 4) / 2;
+    // 신호등 패널 배경
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    roundRect(startX - 40, y - r - 22, gap * 4 + 80, r * 2 + 44, 16);
+    ctx.fill();
+    for (let i = 0; i < 5; i++) {
+      const x = startX + i * gap;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      if (i < lit) {
+        ctx.fillStyle = "#ff2b2b";
+        ctx.shadowColor = "#ff2b2b"; ctx.shadowBlur = 24;
+      } else {
+        ctx.fillStyle = "#3a0d0d"; ctx.shadowBlur = 0;
+      }
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+  }
+
+  // 신호 꺼짐 직후 GO!
+  if (race.goFlashUntil > now) {
+    ctx.fillStyle = "#3be066";
+    ctx.font = "800 90px 'Segoe UI', Arial, sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.shadowColor = "rgba(0,0,0,0.6)"; ctx.shadowBlur = 18;
+    ctx.fillText("GO!", cx, canvas.height * 0.32);
+    ctx.shadowBlur = 0;
+  }
+
+  // 종료 카운트다운 (상단 가운데, 텍스트)
+  if (race.state === "racing" && race.endEnd > now) {
+    const sec = Math.ceil((race.endEnd - now) / 1000);
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    roundRect(cx - 130, 16, 260, 46, 12); ctx.fill();
+    ctx.fillStyle = "#ffd83a";
+    ctx.font = "700 24px 'Segoe UI', Arial, sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(`종료까지 ${sec}초`, cx, 39);
+  }
 }
 
 // 바닥 : 모드에 따라 오픈 맵(그리드) 또는 레이싱 트랙
@@ -672,20 +810,21 @@ function drawSurvivalGround() {
 // 트랙 리본(커브+아스팔트+중앙선)을 주어진 컨텍스트에 그린다.
 //  중심선 Path2D 를 폭을 달리해 여러 번 stroke 해서 층층이 쌓는다.
 function strokeTrack(c, opt) {
-  const p = TRACK.path;
-  const tw = TRACK.halfWidth * 2;
+  const track = world.track;
+  const p = track.path;
+  const tw = track.halfWidth * 2;
   c.lineJoin = "round";
   c.lineCap = "round";
 
   // 1) 커브(빨강) — 트랙보다 넓게
   c.strokeStyle = "#c0392b";
-  c.lineWidth = tw + 2 * TRACK.kerb;
+  c.lineWidth = tw + 2 * track.kerb;
   c.stroke(p);
   // 2) 흰 점선을 같은 폭으로 덮어 빨강/흰 커브 무늬 (가운데는 곧 아스팔트가 덮음)
   if (opt.kerbDash) {
     c.setLineDash(opt.kerbDash);
     c.strokeStyle = "#ecf0f1";
-    c.lineWidth = tw + 2 * TRACK.kerb;
+    c.lineWidth = tw + 2 * track.kerb;
     c.stroke(p);
     c.setLineDash([]);
   }
@@ -714,13 +853,13 @@ function drawRacingGround() {
   strokeTrack(ctx, { kerbDash: [55, 55], center: true });
 
   // 스타트/피니시 라인 (출발점에서 진행방향에 수직으로 트랙 폭을 가로지름)
-  const s = TRACK.start;
+  const s = world.track.start;
   const nx = Math.cos(s.angle + Math.PI / 2), ny = Math.sin(s.angle + Math.PI / 2);
   ctx.strokeStyle = "#ffffff";
   ctx.lineWidth = 10;
   ctx.beginPath();
-  ctx.moveTo(s.x - nx * TRACK.halfWidth, s.y - ny * TRACK.halfWidth);
-  ctx.lineTo(s.x + nx * TRACK.halfWidth, s.y + ny * TRACK.halfWidth);
+  ctx.moveTo(s.x - nx * world.track.halfWidth, s.y - ny * world.track.halfWidth);
+  ctx.lineTo(s.x + nx * world.track.halfWidth, s.y + ny * world.track.halfWidth);
   ctx.stroke();
 
   // 맵 경계
@@ -825,19 +964,29 @@ function drawMinimap(car) {
   mctx.fillStyle = "rgba(40,45,42,0.9)";
   mctx.fillRect(ox, oy, world.w * scale, world.h * scale);
 
-  // 레이싱 트랙 (중심선을 굵게 stroke → 미니맵 트랙 모양)
-  if (world.type === "track" && TRACK.path) {
+  // 레이싱 트랙 (중심선을 굵게 stroke → 미니맵 트랙 모양) + 시작선
+  if (world.type === "track" && world.track) {
+    const track = world.track;
     mctx.save();
     mctx.translate(ox, oy);
     mctx.scale(scale, scale);
     mctx.lineJoin = "round";
     mctx.lineCap = "round";
     mctx.strokeStyle = "#7a8a76";
-    mctx.lineWidth = TRACK.halfWidth * 2 + 2 * TRACK.kerb;
-    mctx.stroke(TRACK.path);
+    mctx.lineWidth = track.halfWidth * 2 + 2 * track.kerb;
+    mctx.stroke(track.path);
     mctx.strokeStyle = "#566";
-    mctx.lineWidth = TRACK.halfWidth * 2;
-    mctx.stroke(TRACK.path);
+    mctx.lineWidth = track.halfWidth * 2;
+    mctx.stroke(track.path);
+    // 시작선 (흰색, 트랙 폭을 가로지름)
+    const s = track.start;
+    const nx = Math.cos(s.angle + Math.PI / 2), ny = Math.sin(s.angle + Math.PI / 2);
+    mctx.strokeStyle = "#ffffff";
+    mctx.lineWidth = Math.max(track.halfWidth * 0.5, 60);
+    mctx.beginPath();
+    mctx.moveTo(s.x - nx * track.halfWidth, s.y - ny * track.halfWidth);
+    mctx.lineTo(s.x + nx * track.halfWidth, s.y + ny * track.halfWidth);
+    mctx.stroke();
     mctx.restore();
   }
 
@@ -951,6 +1100,26 @@ function connect() {
     } else if (msg.type === "chat") {
       // 채팅 수신 → 로그에 추가 (이름은 보낸 사람 색)
       addChatLine(msg.name, msg.text, colorForId(msg.id), msg.t);
+    } else if (msg.type === "proStart") {
+      // 프로 입장 승인 → 내 그리드 슬롯에 배치
+      race.slot = msg.slot;
+      race.laps = msg.laps || 3;
+      const g = proGridPosition(msg.slot);
+      CAR.x = g.x; CAR.y = g.y; CAR.angle = g.angle;
+      CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
+      net.pendingTeleport = true;
+      updateCamera(CAR, 0);
+    } else if (msg.type === "joinReject") {
+      // 정원 초과/진행 중 → 메뉴로 복귀하며 사유 표시
+      gameMode = "survival"; race.state = "none";
+      toMenu();
+      alert(msg.reason || "입장할 수 없습니다.");
+    } else if (msg.type === "race") {
+      handleRaceMessage(msg);
+    } else if (msg.type === "toFreeRacing") {
+      // 프로 레이스 종료 → 모두 자유 레이싱으로 이동
+      race.state = "none";
+      enterFreeRacingFromPro();
     } else if (msg.type === "snapshot") {
       // 서버가 송신 시각(st)을 주면 그걸로 보간한다. 안 주면(재배포 전) 기존
       // 지수 스무딩으로 폴백하므로 손해는 없다.
@@ -1008,6 +1177,115 @@ function sendJoin() {
 function sendLeave() {
   if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
   net.ws.send(JSON.stringify({ type: "leave" }));
+}
+// 준비 토글 전송
+function sendReady(value) {
+  if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
+  net.ws.send(JSON.stringify({ type: "ready", value }));
+}
+
+/* =============================================================================
+ *  프로 레이싱 — 서버 'race' 메시지 처리 + 로비/순위 UI
+ * ========================================================================== */
+function handleRaceMessage(msg) {
+  const prevState = race.state;
+  race.state = msg.state;
+  race.laps = msg.laps || race.laps;
+  race.list = msg.players || [];
+  race.canReady = !!msg.canReady;
+
+  // 내 ready 상태를 서버 목록에서 동기화
+  const me = race.list.find((p) => p.id === net.id);
+  if (me) race.myReady = !!me.ready;
+
+  // 타이머는 로컬 시계로 환산해 매끄럽게 표시
+  race.countdownEnd = msg.countdownMs > 0 ? performance.now() + msg.countdownMs : 0;
+  race.endEnd = msg.endMs > 0 ? performance.now() + msg.endMs : 0;
+
+  // 카운트다운 → 레이싱 전환 시 : 바퀴 추적 초기화 + GO 표시
+  if (prevState !== "racing" && race.state === "racing") {
+    race.lap = 0; race.prog = 0; race.checkpoint = false;
+    race.lastPhase = trackPhase(CAR.x, CAR.y, world.track);
+    race.goFlashUntil = performance.now() + 1200;
+  }
+  updateRaceUI();
+}
+
+// 프로 종료 → 자유 레이싱으로 자연스럽게 입장
+function enterFreeRacingFromPro() {
+  gameMode = "racing";
+  world = WORLD.racing;
+  remotePlayers.clear();
+  skidMarks.length = 0;
+  explosions.length = 0;
+  const s = world.track.start;
+  CAR.x = s.x; CAR.y = s.y; CAR.angle = s.angle;
+  CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
+  net.pendingTeleport = true;
+  updateCamera(CAR, 0);
+  updateRaceUI();    // 로비/순위판 숨김
+  sendJoin();        // racing 으로 재입장
+}
+
+// 로비 패널 + 순위판 DOM 갱신
+function updateRaceUI() {
+  const lobby = document.getElementById("lobby");
+  const standings = document.getElementById("standings");
+  const inPro = gameMode === "pro" && race.state !== "none";
+
+  // 로비는 lobby 상태에서만
+  lobby.classList.toggle("show", gameMode === "pro" && race.state === "lobby");
+  standings.style.display = inPro ? "block" : "none";
+
+  // 로비 플레이어 목록
+  const lobbyList = document.getElementById("lobbyList");
+  lobbyList.innerHTML = "";
+  for (const p of race.list) {
+    const row = document.createElement("div");
+    row.className = "lobby-row";
+    const dot = document.createElement("span");
+    dot.className = "lobby-dot";
+    dot.style.background = colorForId(p.id);
+    const nm = document.createElement("span");
+    nm.className = "lobby-name";
+    nm.textContent = p.name + (p.id === net.id ? " (나)" : "");
+    const st = document.createElement("span");
+    st.className = "lobby-ready " + (p.ready ? "on" : "off");
+    st.textContent = p.ready ? "준비완료" : "대기중";
+    row.append(dot, nm, st);
+    lobbyList.appendChild(row);
+  }
+
+  // 준비 버튼
+  const btn = document.getElementById("readyBtn");
+  btn.disabled = !race.canReady;
+  btn.textContent = race.myReady ? "준비 취소" : "준비";
+  btn.classList.toggle("ready", race.myReady);
+  document.getElementById("lobbyHint").textContent =
+    race.canReady ? "모두 준비하면 자동으로 시작됩니다" : "2명 이상 모이면 시작할 수 있어요";
+
+  // 순위판
+  const sList = document.getElementById("standingsList");
+  sList.innerHTML = "";
+  for (const p of race.list) {
+    const row = document.createElement("div");
+    row.className = "stand-row";
+    const rank = document.createElement("span");
+    rank.className = "stand-rank";
+    rank.textContent = p.rank + ".";
+    const star = document.createElement("span");
+    star.className = "stand-star";
+    if (p.finished) { star.textContent = "★"; star.style.color = colorForId(p.id); }
+    const nm = document.createElement("span");
+    nm.className = "stand-name";
+    nm.style.color = colorForId(p.id);
+    nm.textContent = p.name;
+    const lap = document.createElement("span");
+    lap.className = "stand-lap";
+    lap.textContent = p.finished ? "완주" : `${p.lap}/${race.laps}`;
+    row.append(rank, star, nm, lap);
+    sList.appendChild(row);
+  }
 }
 
 /* =============================================================================
@@ -1095,6 +1373,11 @@ function netSend(car, now) {
   };
   // 막 텔레포트(벽/플레이어 리스폰)했으면 서버·남들에게 스냅하라고 알린다
   if (net.pendingTeleport) { msg.teleport = true; net.pendingTeleport = false; }
+  // 프로 레이싱 중이면 바퀴수/진행도 보고 (서버가 순위·완주 판정)
+  if (gameMode === "pro" && race.state === "racing") {
+    msg.lap = race.lap;
+    msg.prog = +race.prog.toFixed(3);
+  }
   net.ws.send(JSON.stringify(msg));
 }
 
@@ -1201,6 +1484,7 @@ function frame(now) {
   updateGrip(CAR, dt);        // 그립 (측면 마찰) → 드리프트
   updatePhysics(CAR, dt);     // 속도/위치 합성·적분
   updateCollision(CAR);       // 맵 경계 충돌
+  updateLap(CAR);             // 프로 레이싱 바퀴 추적
   updateSkid(CAR);            // 스키드 마크
   updateCamera(CAR, dt);      // 카메라 추적 (+ 흔들림 감쇠)
 
@@ -1236,31 +1520,41 @@ function startGame(mode) {
   CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
   keys.w = keys.a = keys.s = keys.d = keys.space = false; // 메뉴 조작으로 눌린 키 초기화
 
-  // 레이싱은 클라이언트가 트랙 출발점에서 시작(서버 spawn 없음).
-  // 서바이벌은 서버가 'spawn' 으로 위치를 정해 보내준다.
+  // 레이싱 위치 결정
+  //  - racing(자유) : 트랙 출발점에서 시작 (서버 spawn 없음)
+  //  - pro         : 로비 진입. 서버 proStart 가 그리드 슬롯을 정해줌.
+  //  - survival    : 서버가 spawn 으로 위치 통지.
+  race.state = "none"; race.myReady = false;
   if (mode === "racing") {
-    CAR.x = TRACK.start.x; CAR.y = TRACK.start.y; CAR.angle = TRACK.start.angle;
+    const s = world.track.start;
+    CAR.x = s.x; CAR.y = s.y; CAR.angle = s.angle;
     CAR.invulnUntil = performance.now() + 1500;
     net.pendingTeleport = true;
-    updateCamera(CAR, 0); // 카메라 즉시 출발점으로
+    updateCamera(CAR, 0);
+  } else if (mode === "pro") {
+    race.state = "lobby"; // proStart/race 메시지로 곧 갱신됨
   }
 
   gameState = "playing";
   document.getElementById("menu").classList.remove("show");
   document.getElementById("exitBtn").style.display = "block";
+  updateRaceUI();
 
-  sendJoin(); // 서버에 입장 (서바이벌이면 서버가 spawn 통지)
+  sendJoin(); // 서버에 입장
 }
 
 function toMenu() {
   if (gameState === "menu") return;
   gameState = "menu";
   sendLeave();
+  gameMode = "survival";
+  race.state = "none";
   remotePlayers.clear();
   skidMarks.length = 0;
   document.getElementById("exitBtn").style.display = "none";
   document.getElementById("death").classList.remove("show");
   document.getElementById("menu").classList.add("show");
+  updateRaceUI(); // 로비/순위판 숨김
 }
 
 // 메뉴 UI 배선
@@ -1271,7 +1565,17 @@ function setupMenu() {
 
   document.getElementById("btnSurvival").addEventListener("click", () => startGame("survival"));
   document.getElementById("btnRacing").addEventListener("click", () => startGame("racing"));
+  document.getElementById("btnPro").addEventListener("click", () => startGame("pro"));
   document.getElementById("exitBtn").addEventListener("click", toMenu);
+
+  // 프로 로비 준비 버튼
+  document.getElementById("readyBtn").addEventListener("click", () => {
+    race.myReady = !race.myReady;
+    sendReady(race.myReady);
+    updateRaceUI();
+  });
+  // 로비 나가기
+  document.getElementById("lobbyLeave").addEventListener("click", toMenu);
 
   document.getElementById("menu").classList.add("show"); // 시작은 메뉴
 }
