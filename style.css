@@ -89,15 +89,15 @@ html, body {
 }
 #chatInput::placeholder { color: rgba(255,255,255,0.4); }
 #chatSend {
-  padding: 0 12px;
+  padding: 0 14px;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 700;
   color: #fff;
-  background: #3b82f6;
+  background: rgba(255, 255, 255, 0.14);
   border: none;
   cursor: pointer;
 }
-#chatSend:hover { background: #2f6fd6; }
+#chatSend:hover { background: rgba(255, 255, 255, 0.22); }
 
 /* 조작 안내 */
 #help {
@@ -160,17 +160,20 @@ html, body {
   left: 18px;
   top: 16px;
   display: none; /* 플레이 중에만 JS 가 표시 */
-  padding: 8px 16px;
+  padding: 9px 18px;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 700;
   color: #fff;
-  background: rgba(0, 0, 0, 0.45);
-  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 100px;
   border: none;
   cursor: pointer;
+  z-index: 31;
+  transition: transform 0.1s ease, background 0.15s ease;
 }
 #exitBtn:hover {
-  background: rgba(0, 0, 0, 0.7);
+  background: rgba(0, 0, 0, 0.72);
+  transform: translateY(-2px);
 }
 
 /* 모드 선택 / 시작 화면 — 기본 숨김, .show 일 때만 */
@@ -275,7 +278,7 @@ html, body {
 }
 .stand-title {
   font-weight: 700;
-  color: #ffd83a;
+  color: rgba(255, 255, 255, 0.85);
   margin-bottom: 5px;
   letter-spacing: 1px;
 }
@@ -290,170 +293,126 @@ html, body {
 .stand-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stand-lap { color: rgba(255,255,255,0.8); font-variant-numeric: tabular-nums; }
 
-/* 프로 레이싱 로비 */
-/* 프로 방 브라우저 */
-#roomBrowser {
+/* =============================================================================
+ *  공통 오버레이 — 메인 메뉴 스타일로 통일
+ *  (보더 없음 · 카드 배경 없음 · 알약 버튼 · 반투명 흰 표면 · 라디얼 그라데이션)
+ * ========================================================================== */
+#roomBrowser, #createRoom, #lobby {
   position: absolute;
   inset: 0;
   display: none;
   align-items: center;
   justify-content: center;
-  background: rgba(8, 12, 18, 0.85);
-  z-index: 11;
+  background: radial-gradient(circle at 50% 35%, #243042, #0d1117 75%);
 }
-#roomBrowser.show { display: flex; }
-.browser-card {
+#roomBrowser.show, #createRoom.show, #lobby.show { display: flex; }
+#lobby { z-index: 9; }
+#roomBrowser { z-index: 11; }
+#createRoom { z-index: 12; }
+
+/* 카드 = 메뉴처럼 배경/보더 없는 투명 컨테이너 */
+.browser-card, .cr-card, .lobby-card {
   width: min(520px, 92vw);
-  padding: 24px 24px 18px;
-  background: rgba(20, 26, 34, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 16px;
+  padding: 36px 32px 30px;
+  background: none;
+  border: none;
+  box-shadow: none;
+  text-align: center;
 }
+.cr-card { width: min(400px, 90vw); }
+.lobby-card { width: min(460px, 90vw); }
+
+/* 알약 버튼 공통 (메뉴 mode-btn 과 동일 계열) */
+#createRoomBtn, .browser-leave, #crCreate, #crCancel, #readyBtn, #lobbyLeave {
+  border: none;
+  border-radius: 100px;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.08);
+  transition: transform 0.1s ease, background 0.15s ease;
+}
+#createRoomBtn:hover, .browser-leave:hover, #crCreate:hover,
+#crCancel:hover, #readyBtn:hover:not(:disabled), #lobbyLeave:hover {
+  background: rgba(255, 255, 255, 0.16);
+  transform: translateY(-2px);
+}
+/* 주요 액션은 조금 더 밝게 */
+#createRoomBtn, #crCreate, #readyBtn { background: rgba(255, 255, 255, 0.18); }
+#createRoomBtn:hover, #crCreate:hover, #readyBtn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.26); }
+
+/* 입력/셀렉트 공통 (메뉴 nameInput 과 동일 계열) */
+.cr-card input, .cr-card select {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: 14px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  border-radius: 12px;
+  outline: none;
+}
+.cr-card input:focus, .cr-card select:focus { background: rgba(255, 255, 255, 0.13); }
+.cr-card select option { color: #000; }
+
+/* ----- 방 브라우저 ----- */
 .browser-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 14px;
+  margin-bottom: 20px;
 }
-.browser-head h2 { font-size: 20px; color: #fff; }
-#createRoomBtn {
-  padding: 9px 14px;
-  font-size: 14px;
-  font-weight: 700;
-  color: #fff;
-  background: #f1c40f;
-  border: none;
-  border-radius: 9px;
-  cursor: pointer;
-}
+.browser-head h2 { font-size: 24px; font-weight: 800; color: #fff; }
+#createRoomBtn { padding: 11px 18px; font-size: 14px; }
 #roomList {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 52vh;
+  max-height: 54vh;
   overflow-y: auto;
-  margin-bottom: 14px;
-}
-.room-empty {
-  text-align: center;
-  color: rgba(255, 255, 255, 0.45);
-  padding: 30px 0;
-  font-size: 14px;
-}
-.room-card {
-  text-align: left;
-  padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 11px;
-  cursor: pointer;
-}
-.room-card:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); border-color: #f1c40f; }
-.room-card:disabled { opacity: 0.45; cursor: not-allowed; }
-.room-top { display: flex; justify-content: space-between; align-items: center; }
-.room-name { font-size: 16px; font-weight: 700; color: #fff; }
-.room-count { font-size: 14px; font-weight: 700; color: #f1c40f; }
-.room-meta { font-size: 12px; color: rgba(255, 255, 255, 0.6); margin-top: 4px; }
-.browser-leave {
-  padding: 10px 16px;
-  font-size: 14px;
-  color: #fff;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 9px;
-  cursor: pointer;
-}
-
-/* 방 만들기 다이얼로그 */
-#createRoom {
-  position: absolute;
-  inset: 0;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.55);
-  z-index: 12;
-}
-#createRoom.show { display: flex; }
-.cr-card {
-  width: min(380px, 90vw);
-  padding: 24px;
-  background: rgba(22, 28, 36, 0.98);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 16px;
-}
-.cr-card h2 { font-size: 20px; color: #fff; margin-bottom: 16px; text-align: center; }
-.cr-card label { display: block; font-size: 12px; color: rgba(255, 255, 255, 0.6); margin: 10px 0 5px; }
-.cr-card input, .cr-card select {
-  width: 100%;
-  padding: 9px 11px;
-  font-size: 14px;
-  color: #fff;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
-  outline: none;
-}
-.cr-card select option { color: #000; }
-.cr-row { display: flex; gap: 12px; }
-.cr-field { flex: 1; }
-.cr-buttons { display: flex; gap: 10px; margin-top: 20px; }
-#crCreate {
-  flex: 2;
-  padding: 12px;
-  font-size: 15px;
-  font-weight: 700;
-  color: #111;
-  background: #f1c40f;
-  border: none;
-  border-radius: 9px;
-  cursor: pointer;
-}
-#crCancel {
-  flex: 1;
-  padding: 12px;
-  font-size: 15px;
-  color: #fff;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 9px;
-  cursor: pointer;
-}
-
-#lobby {
-  position: absolute;
-  inset: 0;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  background: rgba(8, 12, 18, 0.82);
-  z-index: 9;
-}
-#lobby.show { display: flex; }
-.lobby-info {
-  text-align: center;
-  font-size: 13px;
-  color: #f1c40f;
-  margin-bottom: 14px;
-}
-.lobby-card {
-  width: min(440px, 90vw);
-  padding: 28px 28px 24px;
-  background: rgba(20, 26, 34, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 16px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
-}
-.lobby-card h2 {
-  font-size: 22px;
-  color: #fff;
-  text-align: center;
   margin-bottom: 18px;
 }
+.room-empty { text-align: center; color: rgba(255, 255, 255, 0.45); padding: 34px 0; font-size: 14px; }
+.room-card {
+  text-align: left;
+  padding: 14px 18px;
+  background: rgba(255, 255, 255, 0.06);
+  border: none;
+  border-radius: 18px;
+  cursor: pointer;
+  transition: transform 0.1s ease, background 0.15s ease;
+}
+.room-card:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); transform: translateY(-2px); }
+.room-card:disabled { opacity: 0.4; cursor: not-allowed; }
+.room-top { display: flex; justify-content: space-between; align-items: center; }
+.room-name { font-size: 16px; font-weight: 700; color: #fff; }
+.room-count {
+  font-size: 13px; font-weight: 700; color: #fff;
+  background: rgba(255, 255, 255, 0.16); border-radius: 100px; padding: 2px 10px;
+}
+.room-meta { font-size: 12px; color: rgba(255, 255, 255, 0.55); margin-top: 5px; }
+.browser-leave { padding: 12px 22px; font-size: 14px; font-weight: 600; }
+
+/* ----- 방 만들기 ----- */
+.cr-card h2 { font-size: 24px; font-weight: 800; color: #fff; margin-bottom: 18px; }
+.cr-card label {
+  display: block; text-align: left;
+  font-size: 12px; color: rgba(255, 255, 255, 0.55);
+  margin: 12px 0 6px;
+}
+.cr-row { display: flex; gap: 12px; }
+.cr-field { flex: 1; }
+.cr-buttons { display: flex; gap: 10px; margin-top: 26px; }
+#crCreate { flex: 2; padding: 14px; font-size: 15px; }
+#crCancel { flex: 1; padding: 14px; font-size: 15px; font-weight: 600; }
+
+/* ----- 로비 ----- */
+.lobby-card h2 { font-size: 26px; font-weight: 800; color: #fff; margin-bottom: 6px; }
+.lobby-info { text-align: center; font-size: 13px; color: rgba(255, 255, 255, 0.6); margin-bottom: 20px; }
 #lobbyList {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
   margin-bottom: 14px;
   max-height: 280px;
   overflow-y: auto;
@@ -462,43 +421,18 @@ html, body {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 12px;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 9px;
+  padding: 11px 16px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 100px;
 }
 .lobby-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
 .lobby-name { flex: 1; color: #fff; font-weight: 600; }
 .lobby-ready { font-size: 12px; font-weight: 700; }
-.lobby-ready.on { color: #3be066; }
+.lobby-ready.on { color: #5fe08a; }
 .lobby-ready.off { color: rgba(255, 255, 255, 0.4); }
-.lobby-hint {
-  text-align: center;
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.5);
-  margin-bottom: 16px;
-}
+.lobby-hint { text-align: center; font-size: 12px; color: rgba(255, 255, 255, 0.5); margin-bottom: 18px; }
 .lobby-buttons { display: flex; gap: 10px; }
-#readyBtn {
-  flex: 2;
-  padding: 13px;
-  font-size: 16px;
-  font-weight: 700;
-  color: #fff;
-  background: #2f6fd6;
-  border: none;
-  border-radius: 10px;
-  cursor: pointer;
-}
-#readyBtn.ready { background: #2faa54; }
-#readyBtn:disabled { background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.4); cursor: not-allowed; }
-#lobbyLeave {
-  flex: 1;
-  padding: 13px;
-  font-size: 15px;
-  font-weight: 600;
-  color: #fff;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 10px;
-  cursor: pointer;
-}
+#readyBtn { flex: 2; padding: 14px; font-size: 16px; }
+#readyBtn.ready { background: rgba(95, 224, 138, 0.32); }
+#readyBtn:disabled { background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.4); cursor: not-allowed; transform: none; }
+#lobbyLeave { flex: 1; padding: 14px; font-size: 15px; font-weight: 600; }
