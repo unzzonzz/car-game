@@ -21,8 +21,8 @@ const path = require("path");
 const { WebSocketServer } = require("ws");
 
 const PORT = process.env.PORT || 3000;
-const TICK_RATE = 30;       // 초당 스냅샷 브로드캐스트 횟수
-const COLLISION_HZ = 60;    // 초당 충돌 판정 횟수 (브로드캐스트보다 잦게 → 터널링 완화)
+const TICK_RATE = 60;       // 초당 스냅샷 브로드캐스트 횟수 (60 → 더 매끈/낮은 지연, 대역폭 2배)
+const COLLISION_HZ = 60;    // 초당 충돌 판정 횟수
 
 // 판정용 월드/차량 상수 (클라이언트 game.js 의 값과 반드시 일치)
 const MAP_SIZE = 5000;      // 서바이벌 맵 크기 (정사각형)
@@ -316,7 +316,8 @@ setInterval(() => {
 
   for (const [, p] of players) {
     if (!p.active) continue;
-    send(p, { type: "snapshot", players: byMode[p.mode] });
+    // st = 서버 송신 시각. 클라이언트가 이 일정 간격 타임스탬프로 보간 → 끊김 감소.
+    send(p, { type: "snapshot", st: now, players: byMode[p.mode] });
   }
 
   // teleport 는 1회성 → 보낸 뒤 해제

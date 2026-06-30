@@ -882,9 +882,12 @@ const net = {
   ws: null,
   id: null,             // 서버가 부여한 내 플레이어 id
   connected: false,
-  sendInterval: 1000 / 30,
+  sendInterval: 1000 / 60, // 내 상태 송신율 (서버 TICK_RATE 와 맞춤)
   lastSend: 0,
   pendingTeleport: false, // true면 다음 상태 송신에 teleport 플래그를 실어 보낸다
+  hasServerTime: false,   // 서버가 스냅샷에 st(송신시각)를 넣어주는지 (재배포 여부)
+  serverNewest: 0,        // 가장 최근에 받은 서버 타임스탬프(st)
+  playT: null,            // 원격 보간용 재생 시계(서버시간 도메인, INTERP_DELAY 만큼 과거)
 };
 
 // 다른 플레이어 : id -> { x, y, angle (렌더값), tx, ty, tangle (목표값), drifting }
@@ -949,22 +952,36 @@ function connect() {
       // 채팅 수신 → 로그에 추가 (이름은 보낸 사람 색)
       addChatLine(msg.name, msg.text, colorForId(msg.id), msg.t);
     } else if (msg.type === "snapshot") {
+      // 서버가 송신 시각(st)을 주면 그걸로 보간한다. 안 주면(재배포 전) 기존
+      // 지수 스무딩으로 폴백하므로 손해는 없다.
+      const hasSt = typeof msg.st === "number";
+      if (hasSt) {
+        net.hasServerTime = true;
+        if (msg.st > net.serverNewest) net.serverNewest = msg.st;
+      }
+      const st = hasSt ? msg.st : performance.now();
       const seen = new Set();
       for (const p of msg.players) {
         if (p.id === net.id) continue; // 내 차는 로컬 물리로 그린다
         seen.add(p.id);
         let r = remotePlayers.get(p.id);
         if (!r) {
-          // 처음 본 플레이어 : 목표 위치에서 바로 시작
-          r = { x: p.x, y: p.y, angle: p.angle };
+          // 처음 본 플레이어
+          r = { buffer: [], x: p.x, y: p.y, angle: p.angle, drifting: false };
           remotePlayers.set(p.id, r);
         }
-        r.tx = p.x; r.ty = p.y; r.tangle = p.angle;
-        r.drifting = p.drifting;
         r.invuln = p.invuln;
         r.name = p.name;
-        // 텔레포트(부활 등) 신호면 보간하지 말고 즉시 스냅 → 맵 가로지르는 슬라이드 방지
-        if (p.teleport) { r.x = p.x; r.y = p.y; r.angle = p.angle; }
+
+        // 스냅샷을 "서버 송신 시각(st)"과 함께 버퍼에 쌓는다 (엔티티 보간용)
+        if (p.teleport) {
+          // 텔레포트(부활 등) → 버퍼 리셋 + 즉시 스냅 (보간으로 맵 가로지르는 것 방지)
+          r.buffer = [{ t: st, x: p.x, y: p.y, angle: p.angle, drifting: p.drifting }];
+          r.x = p.x; r.y = p.y; r.angle = p.angle; r.drifting = p.drifting;
+        } else {
+          r.buffer.push({ t: st, x: p.x, y: p.y, angle: p.angle, drifting: p.drifting });
+          if (r.buffer.length > 40) r.buffer.shift(); // 버퍼 상한
+        }
       }
       // 스냅샷에 없는 = 떠난 플레이어 제거
       for (const id of remotePlayers.keys()) {
@@ -1081,18 +1098,73 @@ function netSend(car, now) {
   net.ws.send(JSON.stringify(msg));
 }
 
-// 원격 차량을 목표 위치로 매 프레임 보간 (부드러운 이동)
-function updateRemotes() {
+// 렌더를 서버 시각보다 이만큼 과거로 늦춰(재생 시계), 그 사이 도착한 스냅샷을
+// 확보해두고 "서버 송신 시각(일정 간격)" 기준으로 두 스냅샷을 보간한다.
+// → 도착 지터/버스트가 있어도 일정 속도로 매끈하게 움직인다.
+const INTERP_DELAY = 90; // ms (60Hz면 스냅샷 ~5개분 버퍼 → 지연 줄이면서도 안전)
+
+// 원격 차량 : 서버 타임스탬프 기반 엔티티 보간 (Source 엔진식).
+//  서버가 st 를 주지 않으면(재배포 전) 기존 지수 스무딩으로 폴백한다.
+function updateRemotes(dt) {
+  if (!net.hasServerTime) { updateRemotesFallback(); return; }
+  if (net.serverNewest === 0) return; // 아직 스냅샷 없음
+
+  // 재생 시계 : 실시간으로 전진시키되(등속 보장), (서버최신 - INTERP_DELAY)로 부드럽게 수렴
+  const target = net.serverNewest - INTERP_DELAY;
+  if (net.playT === null) net.playT = target;
+  else {
+    net.playT += dt * 1000;
+    net.playT += (target - net.playT) * clamp(dt * 2.5, 0, 1); // 드리프트 보정
+    if (net.playT > net.serverNewest) net.playT = net.serverNewest;      // 데이터보다 앞서지 않게
+    if (net.serverNewest - net.playT > INTERP_DELAY + 400) net.playT = target; // 너무 뒤처지면 리싱크
+  }
+  const renderT = net.playT;
+
   for (const [id, r] of remotePlayers) {
-    r.x = lerp(r.x, r.tx, 0.25);
-    r.y = lerp(r.y, r.ty, 0.25);
-    // 각도는 -π~π 경계를 고려해 최단 경로로 보간
-    let diff = r.tangle - r.angle;
-    while (diff > Math.PI) diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    r.angle += diff * 0.25;
+    const buf = r.buffer;
+
+    // 이미 지나간(소비된) 오래된 샘플 정리 — renderT 이전 샘플은 1개만 남긴다
+    while (buf.length >= 2 && buf[1].t <= renderT) buf.shift();
+
+    if (buf.length === 0) continue;
+
+    if (buf.length === 1 || renderT <= buf[0].t) {
+      // 보간할 두 점이 없으면(막 입장/패킷 부족) 가장 이른 샘플을 그대로 사용
+      const s = buf[0];
+      r.x = s.x; r.y = s.y; r.angle = s.angle; r.drifting = s.drifting;
+    } else {
+      // buf[0].t <= renderT < buf[1].t 사이를 선형 보간
+      const a = buf[0], b = buf[1];
+      const span = b.t - a.t;
+      const t = clamp(span > 0 ? (renderT - a.t) / span : 1, 0, 1);
+      r.x = lerp(a.x, b.x, t);
+      r.y = lerp(a.y, b.y, t);
+      // 각도는 -π~π 경계를 고려해 최단 경로로
+      let d = b.angle - a.angle;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      r.angle = a.angle + d * t;
+      r.drifting = a.drifting; // 진행 중인 구간의 드리프트 상태
+    }
 
     // 드리프트 중인 원격 차량의 타이어 자국도 그 차 색으로 남긴다
+    if (r.drifting) pushSkid(r.x, r.y, r.angle, skidColorForId(id));
+  }
+}
+
+// 폴백(서버가 st 미제공 = 재배포 전) : 기존 지수 스무딩. 최신 스냅샷으로 수렴.
+function updateRemotesFallback() {
+  for (const [id, r] of remotePlayers) {
+    const buf = r.buffer;
+    if (!buf.length) continue;
+    const tgt = buf[buf.length - 1]; // 가장 최근 스냅샷
+    r.x = lerp(r.x, tgt.x, 0.25);
+    r.y = lerp(r.y, tgt.y, 0.25);
+    let d = tgt.angle - r.angle;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    r.angle += d * 0.25;
+    r.drifting = tgt.drifting;
     if (r.drifting) pushSkid(r.x, r.y, r.angle, skidColorForId(id));
   }
 }
@@ -1134,7 +1206,7 @@ function frame(now) {
 
   // ----- 네트워크 -----
   netSend(CAR, now);          // 내 상태 송신
-  updateRemotes();            // 원격 차량 보간
+  updateRemotes(dt);          // 원격 차량 보간 (서버 타임스탬프 기반)
   updateExplosions(dt);       // 폭발 이펙트 갱신 (킬 판정은 서버가 통지)
 
   render(CAR);                // 렌더
