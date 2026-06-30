@@ -128,6 +128,9 @@ const CAR = {
   acceleration: 165,      // 트랙션 한계 가속도 (px/s²) — 출발 시 최대 가속(접지력 한계)
   brakePower: 230,        // 브레이크 감속도 (px/s²) — 강력하지만 즉시정지 X (ABS 느낌)
 
+  reverseSpeed: 50,       // 후진 최고속도 (km/h) — 전진보다 훨씬 느리게
+  reverseAccel: 90,       // 후진 가속도 (px/s²) — 전진보다 약하게
+
   grip: 13.0,             // 평상시 측면 그립 계수 (1/s) — 클수록 미끄럼 즉시 제거(드리프트 X)
   driftGrip: 1.2,         // 브레이크 드리프트 시 측면 그립 (1/s) — 작을수록 더 크게 옆으로 미끄러짐
   brakeDriftSpeed: 110,   // 이 속도(km/h) 이상에서 브레이크를 밟아야 드리프트 발생
@@ -159,6 +162,7 @@ const CAR = {
   // 입력(부드럽게 보간된 값)
   throttle: 0,             // 0~1
   braking: 0,              // 0~1
+  reversing: 0,            // 0~1 (S 키) — 후진
   steerInput: 0,           // -1(좌) ~ +1(우), 부드럽게 램프됨
 
   drifting: false,         // 현재 브레이크 드리프트 중인지 (자국/조향/네트워크 공통 기준)
@@ -169,7 +173,10 @@ const CAR = {
 /* =============================================================================
  *  입력 처리
  * ========================================================================== */
-const keys = { w: false, a: false, d: false, space: false };
+const keys = { w: false, a: false, s: false, d: false, space: false };
+
+// Enter 로 채팅창을 포커스한 그 Enter 의 keyup 이 곧바로 전송/blur 되는 것을 막는 플래그
+let chatFocusGuard = false;
 
 // 텍스트 입력(이름창)에 포커스가 있거나 메뉴 화면이면 게임 키 입력을 무시한다.
 function typingInInput() {
@@ -178,10 +185,18 @@ function typingInInput() {
 }
 
 window.addEventListener("keydown", (e) => {
-  if (typingInInput()) return; // 이름 입력 중엔 WASD/Space 가로채지 않음
+  // Enter : 입력창에 포커스가 없으면 채팅 입력창으로 바로 포커스
+  if (e.code === "Enter" && !typingInInput() && gameState === "playing") {
+    document.getElementById("chatInput").focus();
+    chatFocusGuard = true; // 이 Enter 의 keyup 은 전송이 아니라 포커스용
+    e.preventDefault();
+    return;
+  }
+  if (typingInInput()) return; // 입력창(이름/채팅) 사용 중엔 WASD/S/Space 가로채지 않음
   switch (e.code) {
     case "KeyW": keys.w = true; break;
     case "KeyA": keys.a = true; break;
+    case "KeyS": keys.s = true; break;
     case "KeyD": keys.d = true; break;
     case "Space": keys.space = true; e.preventDefault(); break;
   }
@@ -190,6 +205,7 @@ window.addEventListener("keyup", (e) => {
   switch (e.code) {
     case "KeyW": keys.w = false; break;
     case "KeyA": keys.a = false; break;
+    case "KeyS": keys.s = false; break;
     case "KeyD": keys.d = false; break;
     case "Space": keys.space = false; break;
   }
@@ -241,6 +257,7 @@ function init() {
 function updateInput(car, dt) {
   car.throttle = keys.w ? 1 : 0;
   car.braking = keys.space ? 1 : 0;
+  car.reversing = keys.s ? 1 : 0;
 
   // 목표 조향 : A=좌(-1), D=우(+1)
   const target = (keys.d ? 1 : 0) - (keys.a ? 1 : 0);
@@ -310,16 +327,35 @@ function updateBrake(car, dt) {
   car.lf = Math.max(0, car.lf - decel);
 }
 
+/* 4-b) 후진 (S) --------------------------------------------------------------
+ *  - 전진 중이면 먼저 브레이크처럼 감속시킨다(바로 후진 X).
+ *  - 정지/후진 중이면 뒤로 가속한다. 전진보다 약하고 최고속도도 낮다.
+ *  - W(전진)가 눌려 있으면 전진이 우선이라 후진은 무시한다. */
+function updateReverse(car, dt) {
+  if (car.reversing <= 0 || car.throttle > 0) return;
+
+  if (car.lf > 0) {
+    // 전진 중 → 감속
+    car.lf = Math.max(0, car.lf - car.brakePower * dt);
+  } else {
+    // 정지/후진 중 → 뒤로 가속 (음수 방향), 후진 최고속도로 제한
+    const reverseMax = car.reverseSpeed * KMH_TO_PXS;
+    car.lf = Math.max(-reverseMax, car.lf - car.reverseAccel * dt);
+  }
+}
+
 /* 5) 저항 (공기 + 구름) ------------------------------------------------------
  *  - 공기저항 : 속도² 에 비례 → 고속에서 급격히 커져 코스팅 감속이 빨라진다.
  *  - 구름저항 : 속도 에 비례 → 저속에서도 서서히 차를 멈추게 한다.
- *  엑셀을 떼도 즉시 멈추지 않고 관성으로 굴러가다 천천히 감속하는 핵심. */
+ *  엑셀을 떼도 즉시 멈추지 않고 관성으로 굴러가다 천천히 감속하는 핵심.
+ *  전진/후진(부호) 양쪽 모두 0 방향으로 감속시킨다. */
 function updateResistance(car, dt) {
-  if (car.lf <= 0) return;
+  if (car.lf === 0) return;
 
-  const drag = car.airResistance * car.lf * car.lf; // 공기저항
-  const roll = car.rollingResistance * car.lf;      // 구름저항
-  car.lf = Math.max(0, car.lf - (drag + roll) * dt);
+  const v = Math.abs(car.lf);
+  const dec = (car.airResistance * v * v + car.rollingResistance * v) * dt;
+  if (car.lf > 0) car.lf = Math.max(0, car.lf - dec);
+  else car.lf = Math.min(0, car.lf + dec);
 }
 
 /* 6) 그립 (측면 마찰) — 브레이크 드리프트 -----------------------------------
@@ -356,9 +392,10 @@ function updateGrip(car, dt) {
  *  분해·가공된 전진/측면 성분(lf, ll)을 다시 월드 속도 벡터로 합성하고,
  *  최고속도를 넘지 않도록 전진성분을 제한한 뒤 위치를 적분한다. */
 function updatePhysics(car, dt) {
-  // 전진 성분에 최고속도 캡 적용 (측면 드리프트 속도는 별도)
+  // 전진 성분 캡 : 전진은 최고속도, 후진은 후진 최고속도까지 (측면 드리프트 속도는 별도)
   const vmax = car.maxSpeed * KMH_TO_PXS;
-  car.lf = clamp(car.lf, 0, vmax);
+  const reverseMax = car.reverseSpeed * KMH_TO_PXS;
+  car.lf = clamp(car.lf, -reverseMax, vmax);
 
   // local(lf, ll) → world(vx, vy) 합성
   const cos = Math.cos(car.angle);
@@ -768,8 +805,8 @@ function roundRect(x, y, w, h, r, c = ctx) {
 }
 
 function drawSpeed(car) {
-  // 전진 속도(체감 속도)를 km/h 정수로 표시
-  const kmh = Math.round(Math.max(0, car.lf) * PXS_TO_KMH);
+  // 체감 속도를 km/h 정수로 표시 (후진도 크기로 표시)
+  const kmh = Math.round(Math.abs(car.lf) * PXS_TO_KMH);
   speedEl.textContent = kmh;
 }
 
@@ -1018,11 +1055,12 @@ function setupChat() {
     document.getElementById("chatInput").focus(); // 버튼 클릭 후 계속 입력 가능
   });
   document.getElementById("chatInput").addEventListener("keyup", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      sendChat();
-      e.target.blur(); // Enter 로 보내면 입력창에서 빠져나와 운전 복귀
-    }
+    if (e.key !== "Enter") return;
+    // 채팅창을 연(포커스한) Enter 의 keyup 이면 전송하지 않고 무시 → 포커스 유지
+    if (chatFocusGuard) { chatFocusGuard = false; return; }
+    e.preventDefault();
+    sendChat();
+    e.target.blur(); // Enter 로 보내면 입력창에서 빠져나와 운전 복귀
   });
 }
 
@@ -1085,6 +1123,7 @@ function frame(now) {
   decompose(CAR);             // 속도 → 전진/측면 분해 (슬립 앵글 발생)
   updateEngine(CAR, dt);      // 엔진 가속
   updateBrake(CAR, dt);       // 브레이크
+  updateReverse(CAR, dt);     // 후진 (S)
   updateResistance(CAR, dt);  // 공기/구름 저항
   updateSurface(CAR, dt);     // 노면(레이싱 트랙 이탈 시 감속)
   updateGrip(CAR, dt);        // 그립 (측면 마찰) → 드리프트
@@ -1113,7 +1152,12 @@ function startGame(mode) {
   // 이름 확정 + 저장
   const input = document.getElementById("nameInput");
   playerName = (input.value || "").trim().slice(0, 12) || "Player";
-  CAR.maxSpeed = playerName === "울트라응가맨" ? 600 : "울트라슈퍼응가맨" ? 1200 : 320;
+  CAR.maxSpeed =
+    playerName === "울트라응가맨"
+        ? 600
+        : playerName === "울트라슈퍼응가맨"
+            ? 1200
+            : 320;
 
   const vmax = CAR.maxSpeed * KMH_TO_PXS;
   CAR.enginePower =
@@ -1127,9 +1171,9 @@ function startGame(mode) {
   skidMarks.length = 0;
   explosions.length = 0;
   camera.shake = 0;
-  document.getElementById("chatLog").innerHTML = ""; // 새 방 → 채팅 비움
+  // 채팅 로그는 비우지 않는다 → 나갔다 다시 들어와도 이전 대화가 보인다
   CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
-  keys.w = keys.a = keys.d = keys.space = false; // 메뉴 조작으로 눌린 키 초기화
+  keys.w = keys.a = keys.s = keys.d = keys.space = false; // 메뉴 조작으로 눌린 키 초기화
 
   // 레이싱은 클라이언트가 트랙 출발점에서 시작(서버 spawn 없음).
   // 서바이벌은 서버가 'spawn' 으로 위치를 정해 보내준다.
