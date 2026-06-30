@@ -104,17 +104,39 @@ function makeTrack(opts) {
   return { halfWidth: opts.halfWidth, kerb: opts.kerb, centerline, path, start };
 }
 
+/* 트랙 레시피 풀 (5종, 더 구불구불). 서버가 인덱스를 정해 같은 모드 플레이어가
+ *  같은 맵을 보게 한다. R 의 진폭 합이 1 미만이라 항상 R>0 (자기교차 없음).
+ *  server.js 의 RECIPE_COUNT 와 개수를 맞춰야 한다. */
+const RECIPES = [
+  { w: 10000, h: 6000, halfWidth: 225, kerb: 26, stretch: 1.7,
+    R: a => 1 + 0.18 * Math.sin(2 * a + 0.6) + 0.30 * Math.sin(3 * a + 0.4)
+          + 0.20 * Math.sin(5 * a + 1.3) + 0.12 * Math.sin(7 * a + 0.2) },
+  { w: 10000, h: 6000, halfWidth: 215, kerb: 25, stretch: 1.6,
+    R: a => 1 + 0.22 * Math.sin(2 * a + 1.5) + 0.18 * Math.sin(3 * a + 2.2)
+          + 0.24 * Math.sin(4 * a + 0.5) + 0.14 * Math.sin(6 * a + 1.0) },
+  { w: 10000, h: 6000, halfWidth: 210, kerb: 24, stretch: 1.75,
+    R: a => 1 + 0.16 * Math.sin(2 * a + 0.2) + 0.26 * Math.sin(3 * a + 1.8)
+          + 0.18 * Math.sin(5 * a + 0.7) + 0.14 * Math.sin(7 * a + 2.0) + 0.08 * Math.sin(9 * a + 0.4) },
+  { w: 10000, h: 6000, halfWidth: 220, kerb: 26, stretch: 1.55,
+    R: a => 1 + 0.24 * Math.sin(2 * a + 2.5) + 0.16 * Math.sin(4 * a + 0.9)
+          + 0.22 * Math.sin(5 * a + 1.6) + 0.10 * Math.sin(7 * a + 0.3) + 0.08 * Math.sin(8 * a + 2.2) },
+  { w: 10000, h: 6000, halfWidth: 205, kerb: 24, stretch: 1.7,
+    R: a => 1 + 0.18 * Math.sin(2 * a + 1.0) + 0.24 * Math.sin(3 * a + 0.5)
+          + 0.16 * Math.sin(5 * a + 2.3) + 0.16 * Math.sin(6 * a + 1.2) + 0.10 * Math.sin(8 * a + 0.6) },
+];
+
+// 인덱스로 트랙을 만들고 캐시한다 (한 번 만든 맵은 재사용)
+const trackCache = new Map();
+function buildTrack(index) {
+  const i = ((index % RECIPES.length) + RECIPES.length) % RECIPES.length;
+  if (!trackCache.has(i)) trackCache.set(i, makeTrack(RECIPES[i]));
+  return trackCache.get(i);
+}
+
 function generateTracks() {
-  WORLD.racing.track = makeTrack({
-    w: WORLD.racing.w, h: WORLD.racing.h, halfWidth: 230, kerb: 26, stretch: 1.7,
-    R: a => 1 + 0.16 * Math.sin(2 * a + 0.6) + 0.30 * Math.sin(3 * a + 0.4)
-          + 0.18 * Math.sin(5 * a + 1.3) + 0.10 * Math.sin(7 * a + 0.2),
-  });
-  WORLD.pro.track = makeTrack({
-    w: WORLD.pro.w, h: WORLD.pro.h, halfWidth: 200, kerb: 24, stretch: 1.5,
-    R: a => 1 + 0.22 * Math.sin(2 * a + 1.5) + 0.16 * Math.sin(3 * a + 2.2)
-          + 0.24 * Math.sin(4 * a + 0.5) + 0.12 * Math.sin(6 * a + 1.0),
-  });
+  // 기본값 (서버가 trackIndex 를 주기 전 표시용)
+  WORLD.racing.track = buildTrack(0);
+  WORLD.pro.track = buildTrack(0);
 }
 
 // km/h -> px/s 변환 계수.  (km/h ÷ 3.6 = m/s) × (m -> px)
@@ -462,7 +484,7 @@ function updateCollision(car) {
 /* 9) 노면 — 레이싱 트랙 이탈 시 감속 ------------------------------------------
  *  트랙(캡슐 링) 밖(풀밭/안쪽 구멍)에서는 전진 속도를 추가로 깎아 느려지게 한다. */
 function updateSurface(car, dt) {
-  if (gameMode !== "racing") return;
+  if (world.type !== "track") return;          // 자유/프로 레이싱 모두 적용
   if (isOnTrack(car.x, car.y)) return;
   // 풀밭 저항 : 전진/측면 속도를 지수적으로 감쇠
   const f = Math.exp(-OFFTRACK_DRAG * dt);
@@ -1100,10 +1122,21 @@ function connect() {
     } else if (msg.type === "chat") {
       // 채팅 수신 → 로그에 추가 (이름은 보낸 사람 색)
       addChatLine(msg.name, msg.text, colorForId(msg.id), msg.t);
+    } else if (msg.type === "trackIndex") {
+      // 서버가 정한 자유 레이싱 맵으로 교체 + 출발점 재배치
+      WORLD.racing.track = buildTrack(msg.index);
+      if (gameMode === "racing") {
+        const s = world.track.start;
+        CAR.x = s.x; CAR.y = s.y; CAR.angle = s.angle;
+        CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
+        net.pendingTeleport = true;
+        updateCamera(CAR, 0);
+      }
     } else if (msg.type === "proStart") {
-      // 프로 입장 승인 → 내 그리드 슬롯에 배치
+      // 프로 입장 승인 → 트랙 적용 후 내 그리드 슬롯에 배치
       race.slot = msg.slot;
       race.laps = msg.laps || 3;
+      if (typeof msg.trackIndex === "number") WORLD.pro.track = buildTrack(msg.trackIndex);
       const g = proGridPosition(msg.slot);
       CAR.x = g.x; CAR.y = g.y; CAR.angle = g.angle;
       CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
@@ -1188,6 +1221,8 @@ function sendReady(value) {
  *  프로 레이싱 — 서버 'race' 메시지 처리 + 로비/순위 UI
  * ========================================================================== */
 function handleRaceMessage(msg) {
+  // 프로 트랙 동기화 (로비 진입자/재동기화 대비)
+  if (typeof msg.trackIndex === "number") WORLD.pro.track = buildTrack(msg.trackIndex);
   const prevState = race.state;
   race.state = msg.state;
   race.laps = msg.laps || race.laps;

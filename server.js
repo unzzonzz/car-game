@@ -33,6 +33,12 @@ const GRACE_MS = 500;       // 입장 직후 클라이언트의 옛 위치 전�
 const TELEPORT_DIST = 200;  // 한 틱에 이 이상 움직이면 텔레포트로 간주(스윕 생략)
 //  레이싱은 충돌/킬이 없어 서버가 트랙 좌표를 알 필요 없다(클라가 출발점 결정).
 
+// 맵 풀 : 서버는 인덱스만 정하고, 클라가 같은 인덱스로 동일 트랙을 생성한다.
+//  (game.js 의 RECIPES.length 와 일치해야 함)
+const RECIPE_COUNT = 5;
+function randomTrackIndex() { return Math.floor(Math.random() * RECIPE_COUNT); }
+let freeTrackIndex = randomTrackIndex(); // 자유 레이싱 현재 맵
+
 // --- 정적 파일 서버 ---------------------------------------------------------
 const MIME = {
   ".html": "text/html",
@@ -103,16 +109,19 @@ wss.on("connection", (ws) => {
           send(p, { type: "joinReject", reason: `정원(${PRO_MAX}명)이 가득 찼습니다.` });
           return;
         }
+        const firstPro = proCount() === 0;
         p.mode = "pro"; p.active = true;
         p.ready = false; p.lap = 0; p.prog = 0; p.finished = false; p.finishTime = 0;
         p.slot = proAssignSlot();
         p.state = null; p.invulnUntil = 0; p.graceUntil = 0;
-        send(p, { type: "proStart", slot: p.slot, laps: PRO_LAPS });
+        if (firstPro) proRoom.trackIndex = randomTrackIndex(); // 새 레이스 → 새 맵
+        send(p, { type: "proStart", slot: p.slot, laps: PRO_LAPS, trackIndex: proRoom.trackIndex });
         broadcastRace();
-        console.log(`[>] player ${id} joined pro (slot ${p.slot})`);
+        console.log(`[>] player ${id} joined pro (slot ${p.slot}, map ${proRoom.trackIndex})`);
         return;
       }
 
+      const firstRacing = mode === "racing" && modeCount("racing") === 0;
       p.mode = mode; p.active = true;
       if (mode === "survival") {
         const spawn = pickSpawn(id);
@@ -122,7 +131,9 @@ wss.on("connection", (ws) => {
         p.graceUntil = Date.now() + GRACE_MS;
         send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
       } else { // racing(자유)
+        if (firstRacing) freeTrackIndex = randomTrackIndex(); // 빈 방에 첫 입장 → 새 맵
         p.state = null; p.invulnUntil = 0; p.graceUntil = 0;
+        send(p, { type: "trackIndex", index: freeTrackIndex });
       }
       console.log(`[>] player ${id} joined ${p.mode} as "${p.name}"`);
 
@@ -292,7 +303,14 @@ const PRO_MAX = 7;
 const PRO_LAPS = 3;
 const COUNTDOWN_MS = 5000;
 const END_TIMER_MS = 10000;
-const proRoom = { state: "lobby", countdownAt: 0, endAt: 0 };
+const proRoom = { state: "lobby", countdownAt: 0, endAt: 0, trackIndex: randomTrackIndex() };
+
+// 특정 모드의 활성 플레이어 수
+function modeCount(mode) {
+  let n = 0;
+  for (const [, p] of players) if (p.active && p.mode === mode) n++;
+  return n;
+}
 
 function proList() {
   const a = [];
@@ -332,6 +350,7 @@ function broadcastRace() {
     type: "race",
     state: proRoom.state,
     laps: PRO_LAPS,
+    trackIndex: proRoom.trackIndex,
     canReady: proCount() >= 2, // 혼자면 ready 비활성
     countdownMs: proRoom.state === "countdown" ? Math.max(0, proRoom.countdownAt - now) : 0,
     endMs: (proRoom.state === "racing" && proRoom.endAt > 0) ? Math.max(0, proRoom.endAt - now) : 0,
