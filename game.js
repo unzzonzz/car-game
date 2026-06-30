@@ -732,8 +732,7 @@ function render(car) {
   drawGround();
   drawSkid();
 
-  // 속도 불꽃 (차 뒤) — 차체 아래에 깔리도록 차량보다 먼저 그린다
-  for (const [id, r] of remotePlayers) drawSpeedFlame(r.x, r.y, r.angle, r.speedKmh || 0);
+  // 속도 불꽃 (내 차 뒤만) — 차체 아래에 깔리도록 차량보다 먼저 그린다
   drawSpeedFlame(car.x, car.y, car.angle, Math.abs(car.lf) * PXS_TO_KMH);
 
   // 다른 플레이어 차량 (보간된 위치)
@@ -1559,25 +1558,6 @@ function updateRemotesFallback() {
   }
 }
 
-// 원격 차량의 체감 속도(km/h)를 위치 변화로 추정한다 (속도 불꽃 표시용)
-function updateRemoteSpeeds(dt) {
-  const inv = 1 / Math.max(dt, 1e-3);
-  const maxKmh = CAR.maxSpeed;
-  for (const r of remotePlayers.values()) {
-    if (r._px !== undefined) {
-      let inst = Math.hypot(r.x - r._px, r.y - r._py) * inv * PXS_TO_KMH;
-      if (inst > maxKmh * 2) {
-        // 텔레포트(부활/리스폰/스냅) → 속도 추정 무효, 불꽃 끔
-        r.speedKmh = 0;
-      } else {
-        if (inst > maxKmh) inst = maxKmh;            // 물리 상한으로 클램프
-        r.speedKmh = (r.speedKmh || 0) * 0.8 + inst * 0.2; // 스무딩(깜빡임 방지)
-      }
-    }
-    r._px = r.x; r._py = r.y;
-  }
-}
-
 connect();
 
 // 탭을 닫거나 떠날 때 연결을 즉시 끊어 서버 인원수에 유령으로 남지 않게 한다.
@@ -1622,7 +1602,6 @@ function frame(now) {
   // ----- 네트워크 -----
   netSend(CAR, now);          // 내 상태 송신
   updateRemotes(dt);          // 원격 차량 보간 (서버 타임스탬프 기반)
-  updateRemoteSpeeds(dt);     // 원격 차량 속도 추정 (불꽃 이펙트용)
   updateExplosions(dt);       // 폭발 이펙트 갱신 (킬 판정은 서버가 통지)
 
   render(CAR);                // 렌더
