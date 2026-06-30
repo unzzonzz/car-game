@@ -847,8 +847,8 @@ function strokeTrack(c, opt) {
   c.lineJoin = "round";
   c.lineCap = "round";
 
-  // 1) 커브(빨강) — 트랙보다 넓게
-  c.strokeStyle = "#c0392b";
+  // 1) 커브(하양) — 트랙보다 넓게
+  c.strokeStyle = "#fff";
   c.lineWidth = tw + 2 * track.kerb;
   c.stroke(p);
   // 2) 흰 점선을 같은 폭으로 덮어 빨강/흰 커브 무늬 (가운데는 곧 아스팔트가 덮음)
