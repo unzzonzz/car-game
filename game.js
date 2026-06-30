@@ -1019,6 +1019,7 @@ function setupChat() {
   });
   document.getElementById("chatInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
+      e.preventDefault();
       sendChat();
       e.target.blur(); // Enter 로 보내면 입력창에서 빠져나와 운전 복귀
     }
