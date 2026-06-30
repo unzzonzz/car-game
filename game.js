@@ -1438,7 +1438,7 @@ function updateRaceUI() {
     info.textContent = `${courseLabel(race.course)} · ${race.laps}바퀴 · 시간제한 ${timeLabel(race.timeLimit)} · 최대 ${race.maxPlayers}명`;
   }
   const title = document.getElementById("lobbyTitle");
-  if (title) title.textContent = race.roomName ? `🏁 ${race.roomName}` : "🏁 프로 레이싱 로비";
+  if (title) title.textContent = race.roomName ? `${race.roomName}` : "프로 레이싱 로비";
 
   // 로비 플레이어 목록
   const lobbyList = document.getElementById("lobbyList");
