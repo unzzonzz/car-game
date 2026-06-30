@@ -124,7 +124,7 @@ const PXS_TO_KMH = 1 / KMH_TO_PXS;
  * ========================================================================== */
 const CAR = {
   // ---- 스펙 (튜닝 값) -------------------------------------------------------
-  maxSpeed: 320,          // 최고속도 (km/h) — 이 값을 절대 넘지 않음
+  maxSpeed: 600,          // 최고속도 (km/h) — 이 값을 절대 넘지 않음
   acceleration: 165,      // 트랙션 한계 가속도 (px/s²) — 출발 시 최대 가속(접지력 한계)
   brakePower: 230,        // 브레이크 감속도 (px/s²) — 강력하지만 즉시정지 X (ABS 느낌)
 
@@ -1152,17 +1152,6 @@ function startGame(mode) {
   // 이름 확정 + 저장
   const input = document.getElementById("nameInput");
   playerName = (input.value || "").trim().slice(0, 12) || "Player";
-  CAR.maxSpeed =
-    playerName === "울트라응가맨"
-        ? 600
-        : playerName === "울트라슈퍼응가맨"
-            ? 1200
-            : 320;
-
-  const vmax = CAR.maxSpeed * KMH_TO_PXS;
-  CAR.enginePower =
-  CAR.airResistance * vmax * vmax * vmax +
-  CAR.rollingResistance * vmax * vmax;
 
   try { localStorage.setItem("carGameName", playerName); } catch {}
 
