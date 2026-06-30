@@ -121,7 +121,7 @@ wss.on("connection", (ws) => {
     } else if (msg.type === "createRoom") {
       if (!p.active || p.mode !== "pro" || p.roomId != null) return;
       const laps = clampInt(msg.laps, 1, 20, 3);
-      const maxPlayers = clampInt(msg.maxPlayers, 2, PRO_MAX, 7);
+      const maxPlayers = clampInt(msg.maxPlayers, 1, PRO_MAX, 7); // 1 = 솔로 방
       const timeLimitMs = TIME_LIMITS.includes(msg.timeLimit) ? msg.timeLimit : 0;
       let course, trackIndex;
       if (msg.course === "random") { course = "random"; trackIndex = Math.floor(Math.random() * NAMED_COURSES); }
@@ -414,7 +414,7 @@ function broadcastRoom(roomId) {
     roomId, roomName: room.name, hostId: room.hostId,
     state: room.state, laps: room.laps, course: room.course,
     timeLimit: room.timeLimitMs, maxPlayers: room.maxPlayers, trackIndex: room.trackIndex,
-    canReady: roomMembers(roomId).length >= 2,
+    canReady: roomMembers(roomId).length >= 1, // 솔로(1명)도 시작 가능
     countdownMs: room.state === "countdown" ? Math.max(0, room.countdownAt - now) : 0,
     endMs: (room.state === "racing" && room.raceEndAt > 0) ? Math.max(0, room.raceEndAt - now) : 0,
     players: rankedRoom(roomId),
@@ -446,7 +446,7 @@ function leaveRoom(pid, p) {
   const remain = roomMembers(rid);
   if (remain.length === 0) { rooms.delete(rid); broadcastRoomList(); return; }
   if (room.hostId === pid) room.hostId = remain[0].id; // 호스트 위임
-  if (room.state === "countdown" && remain.length < 2) { room.state = "lobby"; room.countdownAt = 0; }
+  if (room.state === "countdown" && remain.length < 1) { room.state = "lobby"; room.countdownAt = 0; }
   broadcastRoom(rid);
   broadcastRoomList();
   maybeStartCountdown(rid);
@@ -456,7 +456,7 @@ function maybeStartCountdown(roomId) {
   const room = rooms.get(roomId);
   if (!room || room.state !== "lobby") return;
   const m = roomMembers(roomId);
-  if (m.length < 2 || !m.every((e) => e.p.ready)) return;
+  if (m.length < 1 || !m.every((e) => e.p.ready)) return; // 솔로(1명)도 시작 가능
   room.state = "countdown";
   room.countdownAt = Date.now() + COUNTDOWN_MS;
   room.raceEndAt = 0;

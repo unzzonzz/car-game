@@ -1465,7 +1465,7 @@ function updateRaceUI() {
   btn.textContent = race.myReady ? "준비 취소" : "준비";
   btn.classList.toggle("ready", race.myReady);
   document.getElementById("lobbyHint").textContent =
-    race.canReady ? "모두 준비하면 자동으로 시작됩니다" : "2명 이상 모이면 시작할 수 있어요";
+    "모두 준비하면 자동으로 시작됩니다 (혼자여도 가능)";
 
   // 순위판
   const sList = document.getElementById("standingsList");
