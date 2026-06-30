@@ -732,6 +732,10 @@ function render(car) {
   drawGround();
   drawSkid();
 
+  // 속도 불꽃 (차 뒤) — 차체 아래에 깔리도록 차량보다 먼저 그린다
+  for (const [id, r] of remotePlayers) drawSpeedFlame(r.x, r.y, r.angle, r.speedKmh || 0);
+  drawSpeedFlame(car.x, car.y, car.angle, Math.abs(car.lf) * PXS_TO_KMH);
+
   // 다른 플레이어 차량 (보간된 위치)
   for (const [id, r] of remotePlayers) {
     drawCar(r, colorForId(id));
@@ -915,6 +919,64 @@ function drawSkid() {
     ctx.fillStyle = m.color;
     ctx.fillRect(m.x - 2, m.y - 2, 4, 4);
   }
+}
+
+/* 속도 불꽃 : 450km/h↑ 붉은 불꽃, 500km/h↑ 하늘색 불꽃을 차 뒤에 분사한다.
+ *  "lighter" 합성 + 여러 겹 + 깜빡임으로 빠르고 눈에 띄게 보이게 한다. */
+function drawSpeedFlame(x, y, angle, kmh) {
+  if (kmh < 450) return;
+  const blue = kmh >= 500;
+  const t = clamp((kmh - (blue ? 500 : 450)) / 90, 0, 1); // 강도 0~1
+  const now = performance.now();
+  const flick = 0.78 + 0.22 * Math.sin(now / 28) * Math.cos(now / 47); // 깜빡임
+  const len = (46 + 70 * t) * flick;  // 불꽃 길이
+  const halfW = CAR.width * 0.55;
+  const tail = "rgba(0,0,0,0)"; // 끝은 투명
+
+  // 색 : 바깥(어두움) → 안쪽(밝음)
+  const cols = blue
+    ? ["#1f7bff", "#46c8ff", "#bff0ff"]
+    : ["#ff3010", "#ff7a1e", "#ffd25a"];
+  const glow = blue ? "rgba(80,200,255,0.30)" : "rgba(255,90,30,0.30)";
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.globalCompositeOperation = "lighter"; // 빛 합성 → 글로우
+
+  const rearX = -CAR.length / 2 + 2; // 차 뒤쪽 끝
+  // 0) 둥근 글로우 (바닥에 깔리는 빛무리)
+  const gr = ctx.createRadialGradient(rearX - len * 0.35, 0, 2, rearX - len * 0.35, 0, len * 0.8);
+  gr.addColorStop(0, glow);
+  gr.addColorStop(1, tail);
+  ctx.fillStyle = gr;
+  ctx.beginPath();
+  ctx.arc(rearX - len * 0.35, 0, len * 0.8, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 1~3) 겹겹의 불꽃 혀 (바깥 넓고 → 안쪽 좁고 밝게)
+  const layers = [
+    { w: halfW * 1.5, l: len,        c: cols[0], a: 0.6 },
+    { w: halfW * 1.0, l: len * 0.78, c: cols[1], a: 0.75 },
+    { w: halfW * 0.5, l: len * 0.5,  c: cols[2], a: 1.0 },
+  ];
+  for (const L of layers) {
+    const g = ctx.createLinearGradient(rearX, 0, rearX - L.l, 0);
+    g.addColorStop(0, L.c);
+    g.addColorStop(1, tail);
+    ctx.fillStyle = g;
+    ctx.globalAlpha = L.a;
+    ctx.beginPath();
+    ctx.moveTo(rearX, -L.w);
+    ctx.quadraticCurveTo(rearX - L.l * 0.55, -L.w * 0.35, rearX - L.l, 0); // 위 곡선 → 뾰족 끝
+    ctx.quadraticCurveTo(rearX - L.l * 0.55, L.w * 0.35, rearX, L.w);      // 아래 곡선
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.restore();
 }
 
 function drawCar(car, color = "#e23b2e") {
@@ -1497,6 +1559,18 @@ function updateRemotesFallback() {
   }
 }
 
+// 원격 차량의 체감 속도(km/h)를 위치 변화로 추정한다 (속도 불꽃 표시용)
+function updateRemoteSpeeds(dt) {
+  const inv = 1 / Math.max(dt, 1e-3);
+  for (const r of remotePlayers.values()) {
+    if (r._px !== undefined) {
+      const inst = Math.hypot(r.x - r._px, r.y - r._py) * inv * PXS_TO_KMH;
+      r.speedKmh = (r.speedKmh || 0) * 0.7 + inst * 0.3; // 약간 스무딩(깜빡임 방지)
+    }
+    r._px = r.x; r._py = r.y;
+  }
+}
+
 connect();
 
 // 탭을 닫거나 떠날 때 연결을 즉시 끊어 서버 인원수에 유령으로 남지 않게 한다.
@@ -1541,6 +1615,7 @@ function frame(now) {
   // ----- 네트워크 -----
   netSend(CAR, now);          // 내 상태 송신
   updateRemotes(dt);          // 원격 차량 보간 (서버 타임스탬프 기반)
+  updateRemoteSpeeds(dt);     // 원격 차량 속도 추정 (불꽃 이펙트용)
   updateExplosions(dt);       // 폭발 이펙트 갱신 (킬 판정은 서버가 통지)
 
   render(CAR);                // 렌더
