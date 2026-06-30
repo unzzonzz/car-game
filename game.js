@@ -1331,12 +1331,20 @@ function updateRaceUI() {
 const MAX_CHAT_LINES = 80;
 
 // 입력창 내용을 서버로 전송
+// 현재 표시 이름 : 플레이 중이면 확정 이름, 메뉴/로비에선 입력창 값
+function currentName() {
+  if (gameState === "playing") return playerName;
+  const v = (document.getElementById("nameInput").value || "").trim().slice(0, 12);
+  return v || "Player";
+}
+
 function sendChat() {
   const input = document.getElementById("chatInput");
   const text = (input.value || "").trim();
   if (!text) return;
-  if (net.connected && net.ws.readyState === WebSocket.OPEN && gameState === "playing") {
-    net.ws.send(JSON.stringify({ type: "chat", text }));
+  // 메뉴/로비/플레이 어디서든 전송 (미입장 상태면 이름을 함께 보냄)
+  if (net.connected && net.ws.readyState === WebSocket.OPEN) {
+    net.ws.send(JSON.stringify({ type: "chat", text, name: currentName() }));
   }
   input.value = "";
 }
@@ -1490,6 +1498,11 @@ function updateRemotesFallback() {
 }
 
 connect();
+
+// 탭을 닫거나 떠날 때 연결을 즉시 끊어 서버 인원수에 유령으로 남지 않게 한다.
+window.addEventListener("pagehide", () => {
+  try { if (net.ws && net.ws.readyState === WebSocket.OPEN) net.ws.close(); } catch {}
+});
 
 
 /* =============================================================================

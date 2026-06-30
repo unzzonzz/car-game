@@ -145,11 +145,11 @@ wss.on("connection", (ws) => {
       maybeStartCountdown();
 
     } else if (msg.type === "chat") {
-      // 모든 모드가 공유하는 전역 채팅
-      if (!p.active) return;
+      // 전역 채팅 — 메뉴/로비 등 미입장자도 보내고 받을 수 있다.
       const text = sanitizeChat(msg.text);
       if (!text) return;
-      broadcastAll({ type: "chat", id, name: p.name, text, t: Date.now() });
+      const name = p.active ? p.name : sanitizeName(msg.name); // 미입장자는 보낸 이름 사용
+      broadcastConnected({ type: "chat", id, name, text, t: Date.now() });
 
     } else if (msg.type === "state") {
       if (!p.active) return;
@@ -183,16 +183,16 @@ wss.on("connection", (ws) => {
   ws.on("error", () => {}); // 비정상 종료 무시
 });
 
-// 주기적으로 ping 을 보내 죽은 연결을 정리하고 살아있는 연결은 유지한다.
-//  - 25초마다 ping → 응답(pong) 없으면 다음 주기에 강제 종료.
-//  - 활성 트래픽이 없어도 연결을 깨워 프록시 타임아웃으로 끊기는 것을 줄인다.
+// 주기적으로 ping 을 보내 죽은(유령) 연결을 빨리 정리하고 살아있는 연결은 유지한다.
+//  - 8초마다 ping → 응답(pong) 없으면 다음 주기에 강제 종료(최대 ~16초 내 정리).
+//  - 비정상 종료/네트워크 끊김으로 남은 연결이 인원수에 오래 잡히는 것을 막는다.
 const heartbeat = setInterval(() => {
   for (const [, p] of players) {
     if (p.ws.isAlive === false) { p.ws.terminate(); continue; }
     p.ws.isAlive = false;
     try { p.ws.ping(); } catch {}
   }
-}, 25000);
+}, 8000);
 wss.on("close", () => clearInterval(heartbeat));
 
 // =============================================================================
@@ -278,11 +278,18 @@ function broadcastMode(mode, obj) {
     if (p.active && p.mode === mode && p.ws.readyState === p.ws.OPEN) p.ws.send(payload);
   }
 }
-// 모든 활성 플레이어에게 전송 (전역 채팅 등)
+// 모든 활성 플레이어에게 전송
 function broadcastAll(obj) {
   const payload = JSON.stringify(obj);
   for (const [, p] of players) {
     if (p.active && p.ws.readyState === p.ws.OPEN) p.ws.send(payload);
+  }
+}
+// 모든 "접속자"(메뉴/로비 포함)에게 전송 — 전역 채팅용
+function broadcastConnected(obj) {
+  const payload = JSON.stringify(obj);
+  for (const [, p] of players) {
+    if (p.ws.readyState === p.ws.OPEN) p.ws.send(payload);
   }
 }
 
