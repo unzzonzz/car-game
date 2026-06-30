@@ -1017,7 +1017,7 @@ function setupChat() {
     sendChat();
     document.getElementById("chatInput").focus(); // 버튼 클릭 후 계속 입력 가능
   });
-  document.getElementById("chatInput").addEventListener("keydown", (e) => {
+  document.getElementById("chatInput").addEventListener("keyup", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
       sendChat();
