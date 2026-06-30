@@ -924,19 +924,30 @@ function drawSkid() {
  *  "lighter" 합성 + 여러 겹 + 깜빡임으로 빠르고 눈에 띄게 보이게 한다. */
 function drawSpeedFlame(x, y, angle, kmh) {
   if (kmh < 450) return;
-  const blue = kmh >= 500;
-  const t = clamp((kmh - (blue ? 500 : 450)) / 90, 0, 1); // 강도 0~1
+
+  // 속도 구간별 색 : 450↑ 붉은색, 500↑ 하늘색, 525↑ 에메랄드
+  //  cols = [바깥(어두움), 중간, 안쪽(밝음)]
+  let cols, glow, base;
+  if (kmh >= 525) {
+    cols = ["#06c46a", "#2bef9d", "#caffe8"];
+    glow = "rgba(40,235,150,0.32)";
+    base = 525;
+  } else if (kmh >= 500) {
+    cols = ["#1f7bff", "#46c8ff", "#bff0ff"];
+    glow = "rgba(80,200,255,0.30)";
+    base = 500;
+  } else {
+    cols = ["#ff3010", "#ff7a1e", "#ffd25a"];
+    glow = "rgba(255,90,30,0.30)";
+    base = 450;
+  }
+
+  const t = clamp((kmh - base) / 90, 0, 1); // 강도 0~1
   const now = performance.now();
   const flick = 0.78 + 0.22 * Math.sin(now / 28) * Math.cos(now / 47); // 깜빡임
   const len = (46 + 70 * t) * flick;  // 불꽃 길이
   const halfW = CAR.width * 0.55;
   const tail = "rgba(0,0,0,0)"; // 끝은 투명
-
-  // 색 : 바깥(어두움) → 안쪽(밝음)
-  const cols = blue
-    ? ["#1f7bff", "#46c8ff", "#bff0ff"]
-    : ["#ff3010", "#ff7a1e", "#ffd25a"];
-  const glow = blue ? "rgba(80,200,255,0.30)" : "rgba(255,90,30,0.30)";
 
   ctx.save();
   ctx.translate(x, y);
