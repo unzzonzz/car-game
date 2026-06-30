@@ -104,13 +104,17 @@ function makeTrack(opts) {
   return { halfWidth: opts.halfWidth, kerb: opts.kerb, centerline, path, start };
 }
 
-/* 트랙 레시피 풀 (5종, 더 구불구불). 서버가 인덱스를 정해 같은 모드 플레이어가
- *  같은 맵을 보게 한다. R 의 진폭 합이 1 미만이라 항상 R>0 (자기교차 없음).
- *  server.js 의 RECIPE_COUNT 와 개수를 맞춰야 한다. */
-const RECIPES = [
-  { w: 10000, h: 6000, halfWidth: 225, kerb: 26, stretch: 1.7,
-    R: a => 1 + 0.18 * Math.sin(2 * a + 0.6) + 0.30 * Math.sin(3 * a + 0.4)
-          + 0.20 * Math.sin(5 * a + 1.3) + 0.12 * Math.sin(7 * a + 0.2) },
+/* 자유 레이싱 = 항상 "원래 맵"으로 고정 (랜덤 X) */
+const FREE_RECIPE = {
+  w: 10000, h: 6000, halfWidth: 230, kerb: 26, stretch: 1.7,
+  R: a => 1 + 0.16 * Math.sin(2 * a + 0.6) + 0.30 * Math.sin(3 * a + 0.4)
+        + 0.18 * Math.sin(5 * a + 1.3) + 0.10 * Math.sin(7 * a + 0.2),
+};
+
+/* 프로 레이싱 전용 맵 풀 (더 구불구불, 5종). 서버가 인덱스를 정해 같은 레이스의
+ *  모든 플레이어가 같은 맵을 보게 한다. R 진폭 합 < 1 → 항상 R>0(자기교차 없음).
+ *  server.js 의 PRO_RECIPE_COUNT 와 개수를 맞춰야 한다. */
+const PRO_RECIPES = [
   { w: 10000, h: 6000, halfWidth: 215, kerb: 25, stretch: 1.6,
     R: a => 1 + 0.22 * Math.sin(2 * a + 1.5) + 0.18 * Math.sin(3 * a + 2.2)
           + 0.24 * Math.sin(4 * a + 0.5) + 0.14 * Math.sin(6 * a + 1.0) },
@@ -123,20 +127,22 @@ const RECIPES = [
   { w: 10000, h: 6000, halfWidth: 205, kerb: 24, stretch: 1.7,
     R: a => 1 + 0.18 * Math.sin(2 * a + 1.0) + 0.24 * Math.sin(3 * a + 0.5)
           + 0.16 * Math.sin(5 * a + 2.3) + 0.16 * Math.sin(6 * a + 1.2) + 0.10 * Math.sin(8 * a + 0.6) },
+  { w: 10000, h: 6000, halfWidth: 218, kerb: 25, stretch: 1.65,
+    R: a => 1 + 0.20 * Math.sin(2 * a + 0.9) + 0.20 * Math.sin(3 * a + 2.6)
+          + 0.20 * Math.sin(4 * a + 1.4) + 0.12 * Math.sin(6 * a + 0.2) + 0.10 * Math.sin(9 * a + 1.9) },
 ];
 
-// 인덱스로 트랙을 만들고 캐시한다 (한 번 만든 맵은 재사용)
-const trackCache = new Map();
-function buildTrack(index) {
-  const i = ((index % RECIPES.length) + RECIPES.length) % RECIPES.length;
-  if (!trackCache.has(i)) trackCache.set(i, makeTrack(RECIPES[i]));
-  return trackCache.get(i);
+// 프로 트랙을 인덱스로 만들고 캐시한다 (한 번 만든 맵은 재사용)
+const proTrackCache = new Map();
+function buildProTrack(index) {
+  const i = ((index % PRO_RECIPES.length) + PRO_RECIPES.length) % PRO_RECIPES.length;
+  if (!proTrackCache.has(i)) proTrackCache.set(i, makeTrack(PRO_RECIPES[i]));
+  return proTrackCache.get(i);
 }
 
 function generateTracks() {
-  // 기본값 (서버가 trackIndex 를 주기 전 표시용)
-  WORLD.racing.track = buildTrack(0);
-  WORLD.pro.track = buildTrack(0);
+  WORLD.racing.track = makeTrack(FREE_RECIPE); // 자유 = 고정
+  WORLD.pro.track = buildProTrack(0);          // 프로 기본값 (서버 인덱스로 교체됨)
 }
 
 // km/h -> px/s 변환 계수.  (km/h ÷ 3.6 = m/s) × (m -> px)
@@ -1104,6 +1110,12 @@ function connect() {
 
     if (msg.type === "welcome") {
       net.id = msg.id;
+    } else if (msg.type === "counts") {
+      // 모드별 참가 인원 → 메뉴 버튼 배지 갱신
+      const set = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = `${n}명`; };
+      set("countSurvival", msg.survival || 0);
+      set("countRacing", msg.racing || 0);
+      set("countPro", msg.pro || 0);
     } else if (msg.type === "spawn") {
       // 서버가 정한 입장/부활 위치 → 거기서 시작
       CAR.x = msg.x; CAR.y = msg.y; CAR.angle = msg.angle;
@@ -1122,21 +1134,11 @@ function connect() {
     } else if (msg.type === "chat") {
       // 채팅 수신 → 로그에 추가 (이름은 보낸 사람 색)
       addChatLine(msg.name, msg.text, colorForId(msg.id), msg.t);
-    } else if (msg.type === "trackIndex") {
-      // 서버가 정한 자유 레이싱 맵으로 교체 + 출발점 재배치
-      WORLD.racing.track = buildTrack(msg.index);
-      if (gameMode === "racing") {
-        const s = world.track.start;
-        CAR.x = s.x; CAR.y = s.y; CAR.angle = s.angle;
-        CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
-        net.pendingTeleport = true;
-        updateCamera(CAR, 0);
-      }
     } else if (msg.type === "proStart") {
       // 프로 입장 승인 → 트랙 적용 후 내 그리드 슬롯에 배치
       race.slot = msg.slot;
       race.laps = msg.laps || 3;
-      if (typeof msg.trackIndex === "number") WORLD.pro.track = buildTrack(msg.trackIndex);
+      if (typeof msg.trackIndex === "number") WORLD.pro.track = buildProTrack(msg.trackIndex);
       const g = proGridPosition(msg.slot);
       CAR.x = g.x; CAR.y = g.y; CAR.angle = g.angle;
       CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
@@ -1222,7 +1224,7 @@ function sendReady(value) {
  * ========================================================================== */
 function handleRaceMessage(msg) {
   // 프로 트랙 동기화 (로비 진입자/재동기화 대비)
-  if (typeof msg.trackIndex === "number") WORLD.pro.track = buildTrack(msg.trackIndex);
+  if (typeof msg.trackIndex === "number") WORLD.pro.track = buildProTrack(msg.trackIndex);
   const prevState = race.state;
   race.state = msg.state;
   race.laps = msg.laps || race.laps;
