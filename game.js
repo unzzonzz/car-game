@@ -1113,7 +1113,7 @@ function startGame(mode) {
   // 이름 확정 + 저장
   const input = document.getElementById("nameInput");
   playerName = (input.value || "").trim().slice(0, 12) || "Player";
-  CAR.maxSpeed = playerName === "울트라응가맨" ? 600 : 320;
+  CAR.maxSpeed = playerName === "울트라응가맨" ? 600 : "울트라슈퍼응가맨" ? 1200 : 320;
 
   const vmax = CAR.maxSpeed * KMH_TO_PXS;
   CAR.enginePower =
