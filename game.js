@@ -1562,10 +1562,17 @@ function updateRemotesFallback() {
 // 원격 차량의 체감 속도(km/h)를 위치 변화로 추정한다 (속도 불꽃 표시용)
 function updateRemoteSpeeds(dt) {
   const inv = 1 / Math.max(dt, 1e-3);
+  const maxKmh = CAR.maxSpeed;
   for (const r of remotePlayers.values()) {
     if (r._px !== undefined) {
-      const inst = Math.hypot(r.x - r._px, r.y - r._py) * inv * PXS_TO_KMH;
-      r.speedKmh = (r.speedKmh || 0) * 0.7 + inst * 0.3; // 약간 스무딩(깜빡임 방지)
+      let inst = Math.hypot(r.x - r._px, r.y - r._py) * inv * PXS_TO_KMH;
+      if (inst > maxKmh * 2) {
+        // 텔레포트(부활/리스폰/스냅) → 속도 추정 무효, 불꽃 끔
+        r.speedKmh = 0;
+      } else {
+        if (inst > maxKmh) inst = maxKmh;            // 물리 상한으로 클램프
+        r.speedKmh = (r.speedKmh || 0) * 0.8 + inst * 0.2; // 스무딩(깜빡임 방지)
+      }
     }
     r._px = r.x; r._py = r.y;
   }
