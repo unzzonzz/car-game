@@ -291,6 +291,135 @@ html, body {
 .stand-lap { color: rgba(255,255,255,0.8); font-variant-numeric: tabular-nums; }
 
 /* 프로 레이싱 로비 */
+/* 프로 방 브라우저 */
+#roomBrowser {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 12, 18, 0.85);
+  z-index: 11;
+}
+#roomBrowser.show { display: flex; }
+.browser-card {
+  width: min(520px, 92vw);
+  padding: 24px 24px 18px;
+  background: rgba(20, 26, 34, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+}
+.browser-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.browser-head h2 { font-size: 20px; color: #fff; }
+#createRoomBtn {
+  padding: 9px 14px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  background: #f1c40f;
+  border: none;
+  border-radius: 9px;
+  cursor: pointer;
+}
+#roomList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 52vh;
+  overflow-y: auto;
+  margin-bottom: 14px;
+}
+.room-empty {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.45);
+  padding: 30px 0;
+  font-size: 14px;
+}
+.room-card {
+  text-align: left;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 11px;
+  cursor: pointer;
+}
+.room-card:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); border-color: #f1c40f; }
+.room-card:disabled { opacity: 0.45; cursor: not-allowed; }
+.room-top { display: flex; justify-content: space-between; align-items: center; }
+.room-name { font-size: 16px; font-weight: 700; color: #fff; }
+.room-count { font-size: 14px; font-weight: 700; color: #f1c40f; }
+.room-meta { font-size: 12px; color: rgba(255, 255, 255, 0.6); margin-top: 4px; }
+.browser-leave {
+  padding: 10px 16px;
+  font-size: 14px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+/* 방 만들기 다이얼로그 */
+#createRoom {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 12;
+}
+#createRoom.show { display: flex; }
+.cr-card {
+  width: min(380px, 90vw);
+  padding: 24px;
+  background: rgba(22, 28, 36, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+}
+.cr-card h2 { font-size: 20px; color: #fff; margin-bottom: 16px; text-align: center; }
+.cr-card label { display: block; font-size: 12px; color: rgba(255, 255, 255, 0.6); margin: 10px 0 5px; }
+.cr-card input, .cr-card select {
+  width: 100%;
+  padding: 9px 11px;
+  font-size: 14px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  outline: none;
+}
+.cr-card select option { color: #000; }
+.cr-row { display: flex; gap: 12px; }
+.cr-field { flex: 1; }
+.cr-buttons { display: flex; gap: 10px; margin-top: 20px; }
+#crCreate {
+  flex: 2;
+  padding: 12px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #111;
+  background: #f1c40f;
+  border: none;
+  border-radius: 9px;
+  cursor: pointer;
+}
+#crCancel {
+  flex: 1;
+  padding: 12px;
+  font-size: 15px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 9px;
+  cursor: pointer;
+}
+
 #lobby {
   position: absolute;
   inset: 0;
@@ -301,6 +430,12 @@ html, body {
   z-index: 9;
 }
 #lobby.show { display: flex; }
+.lobby-info {
+  text-align: center;
+  font-size: 13px;
+  color: #f1c40f;
+  margin-bottom: 14px;
+}
 .lobby-card {
   width: min(440px, 90vw);
   padding: 28px 28px 24px;

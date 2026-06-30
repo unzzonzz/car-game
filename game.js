@@ -54,14 +54,17 @@ let world = WORLD.survival;  // 현재 월드 치수/타입
 let gameState = "menu";      // "menu" | "playing"
 let playerName = "Player";
 
-// 프로 레이싱 상태 (서버 'race' 메시지로 갱신)
+// 프로 레이싱 상태 (서버 'roomList'/'race' 메시지로 갱신)
 const race = {
-  state: "none",     // "none" | "lobby" | "countdown" | "racing"
+  state: "none",     // "none" | "browsing" | "lobby" | "countdown" | "racing"
   laps: 3,
   slot: 0,           // 내 그리드 슬롯
-  list: [],          // 순위 [{id,name,ready,lap,finished,rank}]
+  list: [],          // 방 순위 [{id,name,ready,lap,finished,rank}]
   canReady: false,   // 2명 이상이면 true
   myReady: false,
+  isHost: false,
+  rooms: [],         // 방 목록(브라우저용)
+  roomName: "", course: 0, timeLimit: 0, maxPlayers: 7, // 현재 방 설정
   countdownEnd: 0,   // 로컬 시각(performance.now): 카운트다운 끝
   endEnd: 0,         // 로컬 시각: 종료 타이머 끝 (0=없음)
   goFlashUntil: 0,   // "GO!" 표시 끝 시각
@@ -316,7 +319,7 @@ function init() {
  *  무거운 차의 핸들 반응 지연을 표현한다 (무게가 클수록 느리게 반응). */
 function updateInput(car, dt) {
   // 프로 레이싱 로비/카운트다운 동안엔 움직일 수 없다 (그리드에서 정지)
-  if (gameMode === "pro" && (race.state === "lobby" || race.state === "countdown")) {
+  if (gameMode === "pro" && race.state !== "racing") {
     car.throttle = 0; car.braking = 0; car.reversing = 0; car.steerInput = 0;
     car.vx = 0; car.vy = 0; car.lf = 0; car.ll = 0;
     return;
@@ -1206,8 +1209,22 @@ function connect() {
     } else if (msg.type === "chat") {
       // 채팅 수신 → 로그에 추가 (이름은 보낸 사람 색)
       addChatLine(msg.name, msg.text, colorForId(msg.id), msg.t);
+    } else if (msg.type === "roomList") {
+      // 방 목록 갱신 (브라우저 화면)
+      race.rooms = msg.rooms || [];
+      if (gameMode === "pro" && race.state !== "lobby" && race.state !== "countdown" && race.state !== "racing") {
+        race.state = "browsing";
+      }
+      updateRaceUI();
+    } else if (msg.type === "roomJoined") {
+      // 방 입장 승인 → 로비로 (구체 상태는 곧 race 메시지로)
+      race.isHost = !!msg.isHost;
+      race.state = "lobby";
+      race.myReady = false;
+      hideCreateRoom();
+      updateRaceUI();
     } else if (msg.type === "proStart") {
-      // 프로 입장 승인 → 트랙 적용 후 내 그리드 슬롯에 배치
+      // 트랙 적용 후 내 그리드 슬롯에 배치
       race.slot = msg.slot;
       race.laps = msg.laps || 3;
       if (typeof msg.trackIndex === "number") WORLD.pro.track = buildProTrack(msg.trackIndex);
@@ -1217,9 +1234,7 @@ function connect() {
       net.pendingTeleport = true;
       updateCamera(CAR, 0);
     } else if (msg.type === "joinReject") {
-      // 정원 초과/진행 중 → 메뉴로 복귀하며 사유 표시
-      gameMode = "survival"; race.state = "none";
-      toMenu();
+      // 방 입장 실패 → 브라우저에 남고 사유 표시
       alert(msg.reason || "입장할 수 없습니다.");
     } else if (msg.type === "race") {
       handleRaceMessage(msg);
@@ -1290,6 +1305,28 @@ function sendReady(value) {
   if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
   net.ws.send(JSON.stringify({ type: "ready", value }));
 }
+function netSendPro(obj) {
+  if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
+  net.ws.send(JSON.stringify(obj));
+}
+function sendJoinRoom(roomId) { netSendPro({ type: "joinRoom", roomId }); }
+function sendLeaveRoom() {
+  netSendPro({ type: "leaveRoom" });
+  race.state = "browsing"; race.isHost = false; race.myReady = false;
+  updateRaceUI();
+}
+function showCreateRoom() { document.getElementById("createRoom").classList.add("show"); }
+function hideCreateRoom() { document.getElementById("createRoom").classList.remove("show"); }
+function sendCreateRoom() {
+  const name = document.getElementById("crName").value;
+  const laps = parseInt(document.getElementById("crLaps").value, 10) || 3;
+  const courseVal = document.getElementById("crCourse").value;
+  const course = courseVal === "random" ? "random" : parseInt(courseVal, 10);
+  const timeLimit = parseInt(document.getElementById("crTime").value, 10) || 0;
+  const maxPlayers = parseInt(document.getElementById("crMax").value, 10) || 7;
+  netSendPro({ type: "createRoom", name, laps, course, timeLimit, maxPlayers });
+  hideCreateRoom();
+}
 
 /* =============================================================================
  *  프로 레이싱 — 서버 'race' 메시지 처리 + 로비/순위 UI
@@ -1302,6 +1339,11 @@ function handleRaceMessage(msg) {
   race.laps = msg.laps || race.laps;
   race.list = msg.players || [];
   race.canReady = !!msg.canReady;
+  race.isHost = msg.hostId === net.id;
+  if (msg.roomName !== undefined) race.roomName = msg.roomName;
+  if (msg.course !== undefined) race.course = msg.course;
+  if (msg.timeLimit !== undefined) race.timeLimit = msg.timeLimit;
+  if (msg.maxPlayers !== undefined) race.maxPlayers = msg.maxPlayers;
 
   // 내 ready 상태를 서버 목록에서 동기화
   const me = race.list.find((p) => p.id === net.id);
@@ -1336,15 +1378,67 @@ function enterFreeRacingFromPro() {
   sendJoin();        // racing 으로 재입장
 }
 
-// 로비 패널 + 순위판 DOM 갱신
-function updateRaceUI() {
-  const lobby = document.getElementById("lobby");
-  const standings = document.getElementById("standings");
-  const inPro = gameMode === "pro" && race.state !== "none";
+// 코스/시간제한 라벨
+function courseLabel(c) { return c === "random" ? "랜덤" : `코스 ${(+c) + 1}`; }
+function timeLabel(ms) { return ms ? `${ms / 60000}분` : "무제한"; }
 
-  // 로비는 lobby 상태에서만
-  lobby.classList.toggle("show", gameMode === "pro" && race.state === "lobby");
-  standings.style.display = inPro ? "block" : "none";
+// 방 목록(브라우저) 렌더
+function renderRoomList() {
+  const el = document.getElementById("roomList");
+  el.innerHTML = "";
+  if (!race.rooms.length) {
+    const empty = document.createElement("div");
+    empty.className = "room-empty";
+    empty.textContent = "아직 방이 없어요. 방을 만들어보세요!";
+    el.appendChild(empty);
+    return;
+  }
+  for (const r of race.rooms) {
+    const joinable = r.state === "lobby" && r.players < r.maxPlayers;
+    const card = document.createElement("button");
+    card.className = "room-card";
+    card.disabled = !joinable;
+
+    const top = document.createElement("div");
+    top.className = "room-top";
+    const nm = document.createElement("span");
+    nm.className = "room-name";
+    nm.textContent = r.name;
+    const cnt = document.createElement("span");
+    cnt.className = "room-count";
+    cnt.textContent = `${r.players}/${r.maxPlayers}`;
+    top.append(nm, cnt);
+
+    const meta = document.createElement("div");
+    meta.className = "room-meta";
+    meta.textContent = `방장 ${r.host} · ${courseLabel(r.course)} · ${r.laps}바퀴 · ${timeLabel(r.timeLimit)} · ${r.state === "lobby" ? "대기중" : "진행중"}`;
+
+    card.append(top, meta);
+    card.addEventListener("click", () => { if (joinable) sendJoinRoom(r.id); });
+    el.appendChild(card);
+  }
+}
+
+// 로비 패널 + 순위판 + 방 브라우저 DOM 갱신
+function updateRaceUI() {
+  const inPro = gameMode === "pro";
+  const browsing = inPro && race.state === "browsing";
+  const inLobby = inPro && race.state === "lobby";
+  const showStand = inPro && (race.state === "lobby" || race.state === "countdown" || race.state === "racing");
+
+  document.getElementById("roomBrowser").classList.toggle("show", browsing);
+  document.getElementById("lobby").classList.toggle("show", inLobby);
+  document.getElementById("standings").style.display = showStand ? "block" : "none";
+
+  if (browsing) renderRoomList();
+
+  // 로비 헤더(방 이름 + 설정)
+  const info = document.getElementById("lobbyInfo");
+  if (info) {
+    info.textContent = `${courseLabel(race.course)} · ${race.laps}바퀴 · 시간제한 ${timeLabel(race.timeLimit)} · 최대 ${race.maxPlayers}명`;
+  }
+  const title = document.getElementById("lobbyTitle");
+  if (title) title.textContent = race.roomName ? `🏁 ${race.roomName}` : "🏁 프로 레이싱 로비";
 
   // 로비 플레이어 목록
   const lobbyList = document.getElementById("lobbyList");
@@ -1654,7 +1748,8 @@ function startGame(mode) {
     net.pendingTeleport = true;
     updateCamera(CAR, 0);
   } else if (mode === "pro") {
-    race.state = "lobby"; // proStart/race 메시지로 곧 갱신됨
+    race.state = "browsing"; // 방 목록 화면. roomList/roomJoined 로 갱신됨
+    race.isHost = false; race.myReady = false; race.rooms = [];
   }
 
   gameState = "playing";
@@ -1696,8 +1791,13 @@ function setupMenu() {
     sendReady(race.myReady);
     updateRaceUI();
   });
-  // 로비 나가기
-  document.getElementById("lobbyLeave").addEventListener("click", toMenu);
+  document.getElementById("lobbyLeave").addEventListener("click", sendLeaveRoom); // 방 → 브라우저
+
+  // 방 브라우저 / 방 만들기 다이얼로그
+  document.getElementById("createRoomBtn").addEventListener("click", showCreateRoom);
+  document.getElementById("browserLeave").addEventListener("click", toMenu); // 프로 나가기
+  document.getElementById("crCreate").addEventListener("click", sendCreateRoom);
+  document.getElementById("crCancel").addEventListener("click", hideCreateRoom);
 
   document.getElementById("menu").classList.add("show"); // 시작은 메뉴
 }

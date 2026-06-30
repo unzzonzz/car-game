@@ -64,10 +64,62 @@
     </div>
   </div>
 
-  <!-- 프로 레이싱 로비 -->
+  <!-- 프로 레이싱 방 목록(브라우저) -->
+  <div id="roomBrowser">
+    <div class="browser-card">
+      <div class="browser-head">
+        <h2>🏁 프로 레이싱 방 목록</h2>
+        <button id="createRoomBtn">+ 방 만들기</button>
+      </div>
+      <div id="roomList"></div>
+      <button id="browserLeave" class="browser-leave">← 나가기</button>
+    </div>
+  </div>
+
+  <!-- 방 만들기 다이얼로그 -->
+  <div id="createRoom">
+    <div class="cr-card">
+      <h2>방 만들기</h2>
+      <label>방 이름</label>
+      <input id="crName" type="text" maxlength="16" placeholder="방 이름 (비우면 자동)" autocomplete="off" />
+      <div class="cr-row">
+        <div class="cr-field">
+          <label>바퀴 수</label>
+          <input id="crLaps" type="number" min="1" max="20" value="3" />
+        </div>
+        <div class="cr-field">
+          <label>최대 인원</label>
+          <input id="crMax" type="number" min="2" max="7" value="7" />
+        </div>
+      </div>
+      <label>코스</label>
+      <select id="crCourse">
+        <option value="0">코스 1</option>
+        <option value="1">코스 2</option>
+        <option value="2">코스 3</option>
+        <option value="3">코스 4</option>
+        <option value="random">랜덤</option>
+      </select>
+      <label>시간 제한</label>
+      <select id="crTime">
+        <option value="60000">1분</option>
+        <option value="120000">2분</option>
+        <option value="180000">3분</option>
+        <option value="300000">5분</option>
+        <option value="0" selected>제한 없음</option>
+      </select>
+      <div class="cr-buttons">
+        <button id="crCreate">만들기</button>
+        <button id="crCancel">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 프로 레이싱 로비(방) -->
   <div id="lobby">
     <div class="lobby-card">
-      <h2>🏁 프로 레이싱 로비</h2>
+      <h2 id="lobbyTitle">🏁 프로 레이싱 로비</h2>
+      <p id="lobbyInfo" class="lobby-info"></p>
       <div id="lobbyList"></div>
       <p id="lobbyHint" class="lobby-hint"></p>
       <div class="lobby-buttons">

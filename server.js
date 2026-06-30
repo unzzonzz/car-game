@@ -75,7 +75,7 @@ const players = new Map();
 
 wss.on("connection", (ws) => {
   const id = nextId++;
-  players.set(id, { ws, state: null, active: false, mode: "survival", name: "" });
+  players.set(id, { ws, state: null, active: false, mode: "survival", name: "", roomId: null });
 
   // heartbeat : 클라이언트가 살아있는지 추적 (프록시가 유휴 연결을 끊는 것 방지)
   ws.isAlive = true;
@@ -98,28 +98,14 @@ wss.on("connection", (ws) => {
         : (msg.mode === "pro") ? "pro" : "survival";
 
       if (mode === "pro") {
-        // 프로 레이싱 : 정원/상태 체크 후 로비 입장
-        if (proRoom.state !== "lobby") {
-          send(p, { type: "joinReject", reason: "레이스가 진행 중입니다. 잠시 후 다시 시도하세요." });
-          return;
-        }
-        if (proCount() >= PRO_MAX) {
-          send(p, { type: "joinReject", reason: `정원(${PRO_MAX}명)이 가득 찼습니다.` });
-          return;
-        }
-        const firstPro = proCount() === 0;
-        if (firstPro) proRoom.trackIndex = rerollProTrack(); // 새 레이스 → 직전과 다른 맵
-        p.mode = "pro"; p.active = true;
-        p.ready = false; p.lap = 0; p.prog = 0; p.finished = false; p.finishTime = 0;
-        p.slot = proAssignSlot();
-        p.state = null; p.invulnUntil = 0; p.graceUntil = 0;
-        send(p, { type: "proStart", slot: p.slot, laps: PRO_LAPS, trackIndex: proRoom.trackIndex });
-        broadcastRace();
-        console.log(`[>] player ${id} joined pro (slot ${p.slot}, map ${proRoom.trackIndex})`);
+        // 프로 진입 = 방 목록 화면(브라우저). 방은 따로 만들거나 골라 들어간다.
+        p.mode = "pro"; p.active = true; p.roomId = null;
+        send(p, { type: "roomList", rooms: roomSummaries() });
+        console.log(`[>] player ${id} entered pro lobby browser`);
         return;
       }
 
-      p.mode = mode; p.active = true;
+      p.mode = mode; p.active = true; p.roomId = null;
       if (mode === "survival") {
         const spawn = pickSpawn(id);
         p.state = { x: spawn.x, y: spawn.y, angle: spawn.angle, drifting: false, teleport: true };
@@ -127,28 +113,59 @@ wss.on("connection", (ws) => {
         p.invulnUntil = Date.now() + INVULN_MS;
         p.graceUntil = Date.now() + GRACE_MS;
         send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
-      } else { // racing(자유) : 고정 맵이라 별도 통지 없음(클라가 자체 고정 트랙 사용)
+      } else { // racing(자유) : 고정 맵
         p.state = null; p.invulnUntil = 0; p.graceUntil = 0;
       }
       console.log(`[>] player ${id} joined ${p.mode} as "${p.name}"`);
 
+    } else if (msg.type === "createRoom") {
+      if (!p.active || p.mode !== "pro" || p.roomId != null) return;
+      const laps = clampInt(msg.laps, 1, 20, 3);
+      const maxPlayers = clampInt(msg.maxPlayers, 2, PRO_MAX, 7);
+      const timeLimitMs = TIME_LIMITS.includes(msg.timeLimit) ? msg.timeLimit : 0;
+      let course, trackIndex;
+      if (msg.course === "random") { course = "random"; trackIndex = Math.floor(Math.random() * NAMED_COURSES); }
+      else { trackIndex = clampInt(msg.course, 0, NAMED_COURSES - 1, 0); course = trackIndex; }
+      const name = sanitizeRoomName(msg.name) || `${p.name}의 방`;
+      const room = {
+        id: nextRoomId++, name, hostId: id, state: "lobby",
+        laps, course, trackIndex, timeLimitMs, maxPlayers,
+        countdownAt: 0, raceEndAt: 0, raceStartAt: 0,
+      };
+      rooms.set(room.id, room);
+      enterRoom(id, p, room.id);
+      console.log(`[>] player ${id} created room ${room.id} "${name}"`);
+
+    } else if (msg.type === "joinRoom") {
+      if (!p.active || p.mode !== "pro" || p.roomId != null) return;
+      const room = rooms.get(msg.roomId);
+      if (!room) { send(p, { type: "joinReject", reason: "방이 사라졌습니다." }); return; }
+      if (room.state !== "lobby") { send(p, { type: "joinReject", reason: "레이스가 진행 중인 방입니다." }); return; }
+      if (roomMembers(room.id).length >= room.maxPlayers) { send(p, { type: "joinReject", reason: "방이 가득 찼습니다." }); return; }
+      enterRoom(id, p, room.id);
+
+    } else if (msg.type === "leaveRoom") {
+      if (p.roomId == null) return;
+      leaveRoom(id, p);
+      send(p, { type: "roomList", rooms: roomSummaries() }); // 방 목록으로 복귀
+
     } else if (msg.type === "leave") {
-      const wasPro = p.mode === "pro" && p.active;
-      p.active = false; p.state = null;
-      if (wasPro) proOnLeave();
+      if (p.mode === "pro" && p.roomId != null) leaveRoom(id, p);
+      p.active = false; p.state = null; p.roomId = null;
 
     } else if (msg.type === "ready") {
-      // 프로 로비에서 준비 토글 → 모두 준비되면 카운트다운 시작
-      if (!p.active || p.mode !== "pro" || proRoom.state !== "lobby") return;
+      if (p.roomId == null) return;
+      const room = rooms.get(p.roomId);
+      if (!room || room.state !== "lobby") return;
       p.ready = !!msg.value;
-      broadcastRace();
-      maybeStartCountdown();
+      broadcastRoom(p.roomId);
+      maybeStartCountdown(p.roomId);
 
     } else if (msg.type === "chat") {
       // 전역 채팅 — 메뉴/로비 등 미입장자도 보내고 받을 수 있다.
       const text = sanitizeChat(msg.text);
       if (!text) return;
-      const name = p.active ? p.name : sanitizeName(msg.name); // 미입장자는 보낸 이름 사용
+      const name = p.active ? p.name : sanitizeName(msg.name);
       broadcastConnected({ type: "chat", id, name, text, t: Date.now() });
 
     } else if (msg.type === "state") {
@@ -160,13 +177,17 @@ wss.on("connection", (ws) => {
         teleport: !!msg.teleport,
       };
       // 프로 레이싱 중이면 바퀴수/진행도 갱신 + 완주 감지
-      if (p.mode === "pro" && proRoom.state === "racing" && typeof msg.lap === "number") {
-        p.lap = msg.lap;
-        if (typeof msg.prog === "number") p.prog = msg.prog;
-        if (!p.finished && p.lap >= PRO_LAPS) {
-          p.finished = true; p.finishTime = Date.now();
-          if (proRoom.endAt === 0) proRoom.endAt = Date.now() + END_TIMER_MS; // 첫 완주 → 10초
-          broadcastRace();
+      if (p.mode === "pro" && p.roomId != null && typeof msg.lap === "number") {
+        const room = rooms.get(p.roomId);
+        if (room && room.state === "racing") {
+          p.lap = msg.lap;
+          if (typeof msg.prog === "number") p.prog = msg.prog;
+          if (!p.finished && p.lap >= room.laps) {
+            p.finished = true; p.finishTime = Date.now();
+            const cand = Date.now() + END_TIMER_MS;
+            room.raceEndAt = room.raceEndAt > 0 ? Math.min(room.raceEndAt, cand) : cand;
+            broadcastRoom(p.roomId);
+          }
         }
       }
     }
@@ -174,9 +195,8 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     const pc = players.get(id);
-    const wasPro = pc && pc.mode === "pro" && pc.active;
+    if (pc && pc.mode === "pro" && pc.active && pc.roomId != null) leaveRoom(id, pc);
     players.delete(id);
-    if (wasPro) proOnLeave();
     console.log(`[-] player ${id} disconnected (total ${players.size})`);
   });
 
@@ -307,47 +327,72 @@ function broadcastCounts() {
 setInterval(broadcastCounts, 1000);
 
 // =============================================================================
-//  프로 레이싱 룸 (단일 공유 룸, 상태기계: lobby → countdown → racing → 종료)
+//  프로 레이싱 — 다중 방 시스템
 // -----------------------------------------------------------------------------
-//  - 최대 7명. 2명 이상 모두 ready 면 자동으로 5초 카운트다운 후 시작.
-//  - 카운트다운 동안 이동 불가(클라가 막음). 3바퀴 완주 순으로 순위.
-//  - 첫 완주자 발생 시각부터 10초 뒤 종료 → 전원 자유 레이싱으로 이동.
-//  바퀴/진행도는 클라가 트랙으로 계산해 보고(이동 권위와 동일), 서버는 순위/타이머 관리.
+//  - 프로 진입 = 방 목록(브라우저). 방을 만들거나 골라 들어간다.
+//  - 방장이 바퀴/코스/시간제한/최대인원을 설정. 방마다 lobby→countdown→racing→종료.
+//  - 2명 이상 모두 ready 면 5초 카운트다운 후 시작. 카운트다운 동안 이동 불가.
+//  - 종료 = (첫 완주자+10초) 와 (시간제한) 중 먼저 오는 시각 → 전원 자유 레이싱으로.
+//  바퀴/진행도는 클라가 보고, 서버는 순위/타이머/방 상태를 관리한다.
 // =============================================================================
 const PRO_MAX = 7;
-const PRO_LAPS = 3;
 const COUNTDOWN_MS = 5000;
 const END_TIMER_MS = 10000;
-const proRoom = { state: "lobby", countdownAt: 0, endAt: 0, trackIndex: 0 };
+const NAMED_COURSES = 4;        // 선택 가능한 코스 수 (game.js PRO_RECIPES[0..3])
+const TIME_LIMITS = [0, 60000, 120000, 180000, 300000]; // 무제한/1/2/3/5분(ms)
 
-// 직전과 다른 프로 맵 인덱스를 뽑는다 (매 레이스 맵이 바뀌도록 반복 방지)
-function rerollProTrack() {
-  let i;
-  do { i = Math.floor(Math.random() * PRO_RECIPE_COUNT); }
-  while (PRO_RECIPE_COUNT > 1 && i === proRoom.trackIndex);
-  return i;
+let nextRoomId = 1;
+const rooms = new Map(); // roomId -> room
+
+function clampInt(v, lo, hi, def) {
+  v = Math.floor(Number(v));
+  if (!Number.isFinite(v)) return def;
+  return Math.max(lo, Math.min(hi, v));
+}
+function sanitizeRoomName(name) {
+  let s = (typeof name === "string" ? name : "").replace(/[\x00-\x1f]/g, "").trim();
+  if (s.length > 16) s = s.slice(0, 16);
+  return s;
 }
 
-function proList() {
+function roomMembers(roomId) {
   const a = [];
-  for (const [id, p] of players) if (p.active && p.mode === "pro") a.push({ id, p });
+  for (const [id, p] of players) if (p.active && p.mode === "pro" && p.roomId === roomId) a.push({ id, p });
   return a;
 }
-function proCount() {
-  let n = 0;
-  for (const [, p] of players) if (p.active && p.mode === "pro") n++;
-  return n;
-}
-function proAssignSlot() {
+function assignSlot(roomId) {
   const used = new Set();
-  for (const [, p] of players) if (p.active && p.mode === "pro") used.add(p.slot);
+  for (const { p } of roomMembers(roomId)) used.add(p.slot);
   for (let s = 0; s < PRO_MAX; s++) if (!used.has(s)) return s;
   return 0;
 }
+function hostName(room) {
+  const h = players.get(room.hostId);
+  return h ? h.name : "?";
+}
 
-// 순위 산정 : 완주자 먼저(빨리 완주한 순) → 미완주는 진행도 높은 순
-function rankedPro() {
-  const list = proList();
+// 방 목록 요약 (브라우저용)
+function roomSummaries() {
+  const out = [];
+  for (const [, r] of rooms) {
+    out.push({
+      id: r.id, name: r.name, host: hostName(r),
+      players: roomMembers(r.id).length, maxPlayers: r.maxPlayers,
+      laps: r.laps, course: r.course, timeLimit: r.timeLimitMs, state: r.state,
+    });
+  }
+  return out;
+}
+function broadcastRoomList() {
+  const payload = JSON.stringify({ type: "roomList", rooms: roomSummaries() });
+  for (const [, p] of players) {
+    if (p.active && p.mode === "pro" && p.roomId == null && p.ws.readyState === p.ws.OPEN) p.ws.send(payload);
+  }
+}
+
+// 방 순위 : 완주자 먼저(빨리 완주한 순) → 미완주는 진행도 높은 순
+function rankedRoom(roomId) {
+  const list = roomMembers(roomId);
   list.sort((a, b) => {
     const A = a.p, B = b.p;
     if (A.finished !== B.finished) return A.finished ? -1 : 1;
@@ -360,58 +405,95 @@ function rankedPro() {
   }));
 }
 
-function broadcastRace() {
+function broadcastRoom(roomId) {
+  const room = rooms.get(roomId);
+  if (!room) return;
   const now = Date.now();
   const msg = {
     type: "race",
-    state: proRoom.state,
-    laps: PRO_LAPS,
-    trackIndex: proRoom.trackIndex,
-    canReady: proCount() >= 2, // 혼자면 ready 비활성
-    countdownMs: proRoom.state === "countdown" ? Math.max(0, proRoom.countdownAt - now) : 0,
-    endMs: (proRoom.state === "racing" && proRoom.endAt > 0) ? Math.max(0, proRoom.endAt - now) : 0,
-    players: rankedPro(),
+    roomId, roomName: room.name, hostId: room.hostId,
+    state: room.state, laps: room.laps, course: room.course,
+    timeLimit: room.timeLimitMs, maxPlayers: room.maxPlayers, trackIndex: room.trackIndex,
+    canReady: roomMembers(roomId).length >= 2,
+    countdownMs: room.state === "countdown" ? Math.max(0, room.countdownAt - now) : 0,
+    endMs: (room.state === "racing" && room.raceEndAt > 0) ? Math.max(0, room.raceEndAt - now) : 0,
+    players: rankedRoom(roomId),
   };
-  for (const { p } of proList()) send(p, msg);
+  for (const { p } of roomMembers(roomId)) send(p, msg);
 }
 
-function maybeStartCountdown() {
-  if (proRoom.state !== "lobby") return;
-  const list = proList();
-  if (list.length < 2 || !list.every((e) => e.p.ready)) return;
-  proRoom.state = "countdown";
-  proRoom.countdownAt = Date.now() + COUNTDOWN_MS;
-  proRoom.endAt = 0;
-  broadcastRace();
+// 방 입장 (생성/참가 공통)
+function enterRoom(pid, p, roomId) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+  p.roomId = roomId;
+  p.ready = false; p.lap = 0; p.prog = 0; p.finished = false; p.finishTime = 0;
+  p.slot = assignSlot(roomId);
+  p.state = null; p.invulnUntil = 0; p.graceUntil = 0;
+  send(p, { type: "roomJoined", roomId, isHost: room.hostId === pid });
+  send(p, { type: "proStart", slot: p.slot, laps: room.laps, trackIndex: room.trackIndex });
+  broadcastRoom(roomId);
+  broadcastRoomList();
 }
 
-function proOnLeave() {
-  if (proCount() === 0) { proRoom.state = "lobby"; proRoom.countdownAt = 0; proRoom.endAt = 0; return; }
-  if (proRoom.state === "countdown" && proCount() < 2) { proRoom.state = "lobby"; proRoom.countdownAt = 0; }
-  broadcastRace();
-  maybeStartCountdown();
+// 방 퇴장 (방 → 브라우저). 비면 방 삭제, 방장이 나가면 위임.
+function leaveRoom(pid, p) {
+  const rid = p.roomId;
+  if (rid == null) return;
+  p.roomId = null; p.ready = false; p.state = null;
+  const room = rooms.get(rid);
+  if (!room) return;
+  const remain = roomMembers(rid);
+  if (remain.length === 0) { rooms.delete(rid); broadcastRoomList(); return; }
+  if (room.hostId === pid) room.hostId = remain[0].id; // 호스트 위임
+  if (room.state === "countdown" && remain.length < 2) { room.state = "lobby"; room.countdownAt = 0; }
+  broadcastRoom(rid);
+  broadcastRoomList();
+  maybeStartCountdown(rid);
 }
 
-function endRace() {
-  for (const { p } of proList()) {
-    send(p, { type: "toFreeRacing" }); // 클라는 자유 레이싱으로 재입장
-    p.active = false; p.state = null;
+function maybeStartCountdown(roomId) {
+  const room = rooms.get(roomId);
+  if (!room || room.state !== "lobby") return;
+  const m = roomMembers(roomId);
+  if (m.length < 2 || !m.every((e) => e.p.ready)) return;
+  room.state = "countdown";
+  room.countdownAt = Date.now() + COUNTDOWN_MS;
+  room.raceEndAt = 0;
+  broadcastRoom(roomId);
+  broadcastRoomList();
+}
+
+function endRoomRace(roomId) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+  for (const { p } of roomMembers(roomId)) {
+    send(p, { type: "toFreeRacing" }); // 클라는 자유 레이싱으로 이동
+    p.active = false; p.state = null; p.roomId = null;
   }
-  proRoom.state = "lobby"; proRoom.countdownAt = 0; proRoom.endAt = 0;
+  rooms.delete(roomId);
+  broadcastRoomList();
 }
 
 function proTick() {
   const now = Date.now();
-  if (proRoom.state === "countdown") {
-    if (now >= proRoom.countdownAt) {
-      proRoom.state = "racing"; proRoom.endAt = 0;
-      for (const { p } of proList()) { p.lap = 0; p.prog = 0; p.finished = false; p.finishTime = 0; }
+  for (const rid of [...rooms.keys()]) {
+    const room = rooms.get(rid);
+    if (!room) continue;
+    if (room.state === "countdown") {
+      if (now >= room.countdownAt) {
+        room.state = "racing"; room.raceStartAt = now;
+        room.raceEndAt = room.timeLimitMs > 0 ? now + room.timeLimitMs : 0;
+        for (const { p } of roomMembers(rid)) { p.lap = 0; p.prog = 0; p.finished = false; p.finishTime = 0; }
+        broadcastRoomList();
+      }
+      broadcastRoom(rid);
+    } else if (room.state === "racing") {
+      if (room.raceEndAt > 0 && now >= room.raceEndAt) endRoomRace(rid);
+      else broadcastRoom(rid);
     }
-    broadcastRace();
-  } else if (proRoom.state === "racing") {
-    if (proRoom.endAt > 0 && now >= proRoom.endAt) endRace();
-    else broadcastRace(); // 순위/종료 카운트다운 갱신
   }
+  broadcastRoomList(); // 브라우저 방 목록 라이브 갱신
 }
 setInterval(proTick, 200); // 5Hz
 
@@ -477,26 +559,36 @@ setInterval(runCollisions, 1000 / COLLISION_HZ);
 //  (서바이벌/레이싱 플레이어는 서로 보이지 않도록 분리)
 setInterval(() => {
   const now = Date.now();
-  const byMode = { survival: [], racing: [], pro: [] };
+  const byMode = { survival: [], racing: [] };
+  const byRoom = new Map(); // roomId -> entries (프로는 같은 방끼리만 본다)
 
   for (const [id, p] of players) {
     if (!p.active || !p.state) continue;
-    byMode[p.mode].push({
+    const entry = {
       id, name: p.name,
       x: p.state.x, y: p.state.y, angle: p.state.angle,
       drifting: p.state.drifting,
-      teleport: !!p.state.teleport,       // 1회성 스냅 신호
-      invuln: now < (p.invulnUntil || 0), // 원격 무적 표시(깜빡임)용
-    });
+      teleport: !!p.state.teleport,
+      invuln: now < (p.invulnUntil || 0),
+    };
+    if (p.mode === "pro") {
+      if (p.roomId != null) {
+        if (!byRoom.has(p.roomId)) byRoom.set(p.roomId, []);
+        byRoom.get(p.roomId).push(entry);
+      }
+    } else {
+      byMode[p.mode].push(entry);
+    }
   }
 
   for (const [, p] of players) {
     if (!p.active) continue;
-    // st = 서버 송신 시각. 클라이언트가 이 일정 간격 타임스탬프로 보간 → 끊김 감소.
-    send(p, { type: "snapshot", st: now, players: byMode[p.mode] });
+    let arr;
+    if (p.mode === "pro") arr = (p.roomId != null) ? (byRoom.get(p.roomId) || []) : [];
+    else arr = byMode[p.mode];
+    send(p, { type: "snapshot", st: now, players: arr });
   }
 
-  // teleport 는 1회성 → 보낸 뒤 해제
   for (const [, p] of players) {
     if (p.state) p.state.teleport = false;
   }
