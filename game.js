@@ -2061,9 +2061,7 @@ function updateRaceUI() {
     time.textContent = (race.state === "racing" && (p.lapMs || 0) > 0) ? fmtRaceTime(p.lapMs) : "";
     const lap = document.createElement("span");
     lap.className = "stand-lap";
-    lap.textContent = p.finished
-  ? "완주"
-  : `${Math.min(p.lap || 0, race.laps)}/${race.laps}`;
+    lap.textContent = p.finished ? "완주" : `${Math.min((p.lap || 0) + 1, race.laps)}/${race.laps}`;
     row.append(rank, star, nm, time, lap);
     sList.appendChild(row);
   }
