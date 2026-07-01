@@ -18,7 +18,9 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { WebSocketServer } = require("ws");
+const { Redis } = require("@upstash/redis");
 
 const PORT = process.env.PORT || 3000;
 const TICK_RATE = 60;       // 초당 스냅샷 브로드캐스트 횟수 (60 → 더 매끈/낮은 지연, 대역폭 2배)
@@ -36,6 +38,108 @@ const TELEPORT_DIST = 200;  // 한 틱에 이 이상 움직이면 텔레포트�
 // 프로 맵 풀 : 서버가 인덱스만 정하고, 클라가 같은 인덱스로 동일 트랙을 생성한다.
 //  자유 레이싱은 고정 맵이라 랜덤이 없다. (game.js 의 PRO_RECIPES.length 와 일치)
 const PRO_RECIPE_COUNT = 5;
+
+// =============================================================================
+//  계정 / 로그인 (users.json 영속 저장, Node 내장 crypto 로 비밀번호 해시)
+// -----------------------------------------------------------------------------
+//  - 회원가입: 아이디 / 닉네임 / 비밀번호(숫자 4자리)
+//  - 로그인: 아이디 + 비밀번호 → 토큰 발급(메모리). 토큰으로 새로고침 시 자동 로그인.
+//  - 아이디 seungchan0911 = 관리자(금색 차).
+//  - 통계: 프로 우승 수(2명 이상일 때), 프로 플레이 수.
+// =============================================================================
+const ADMIN_ID = "seungchan0911";
+const GOLD = "#ffd94d";
+const USERS_FILE = path.join(__dirname, "users.json");
+
+// 영속 저장 : 환경변수가 있으면 Upstash Redis, 없으면 로컬 users.json 파일로 폴백.
+//  메모리 캐시(users)를 두고 동기 읽기 + 변경 시 write-through 한다.
+const useRedis = !!(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN);
+const redis = useRedis
+  ? new Redis({ url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN })
+  : null;
+const USER_SET = "cargame:userids";
+const userKey = (id) => "cargame:user:" + id;
+
+let users = {}; // 메모리 캐시 (id -> {id,nickname,salt,hash,proWins,proPlays})
+
+// 시작 시 저장소에서 계정을 캐시로 적재
+async function hydrateUsers() {
+  if (!useRedis) {
+    try { users = JSON.parse(fs.readFileSync(USERS_FILE, "utf8")); } catch { users = {}; }
+    return;
+  }
+  try {
+    const ids = (await redis.smembers(USER_SET)) || [];
+    for (const id of ids) {
+      const u = await redis.get(userKey(id)); // @upstash/redis 가 JSON 자동 파싱
+      if (u) users[id] = u;
+    }
+    console.log(`[redis] loaded ${Object.keys(users).length} users`);
+  } catch (e) {
+    console.error("[redis] hydrate failed:", e.message);
+  }
+}
+
+let saveTimer = null;
+// 한 명의 계정 변경을 영속화 (Redis 또는 파일)
+function persistUser(id) {
+  if (!users[id]) return;
+  if (useRedis) {
+    redis.set(userKey(id), users[id]).catch((e) => console.error("[redis] set:", e.message));
+    redis.sadd(USER_SET, id).catch(() => {});
+  } else {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => fs.writeFile(USERS_FILE, JSON.stringify(users), () => {}), 200);
+  }
+}
+function hashPw(pw, salt) { return crypto.scryptSync(String(pw), salt, 32).toString("hex"); }
+
+// 자유 모드 타임어택 TOP10 기록 (고정 트랙 1개) — Redis 또는 records.json 영속
+const RECORDS_KEY = "cargame:timeattack";
+const RECORDS_FILE = path.join(__dirname, "records.json");
+let timeRecords = []; // [{name, ms}] 오름차순, 상위 10개
+let recTimer = null;
+async function hydrateRecords() {
+  if (useRedis) {
+    try { timeRecords = (await redis.get(RECORDS_KEY)) || []; } catch (e) { console.error("[redis] records:", e.message); }
+  } else {
+    try { timeRecords = JSON.parse(fs.readFileSync(RECORDS_FILE, "utf8")); } catch { timeRecords = []; }
+  }
+}
+function saveRecords() {
+  if (useRedis) {
+    redis.set(RECORDS_KEY, timeRecords).catch((e) => console.error("[redis] saveRecords:", e.message));
+  } else {
+    clearTimeout(recTimer);
+    recTimer = setTimeout(() => fs.writeFile(RECORDS_FILE, JSON.stringify(timeRecords), () => {}), 200);
+  }
+}
+function broadcastRecords() {
+  const payload = JSON.stringify({ type: "topRecords", records: timeRecords });
+  for (const [, p] of players) {
+    if (p.active && p.mode === "racing" && p.ws.readyState === p.ws.OPEN) p.ws.send(payload);
+  }
+}
+
+const tokens = new Map(); // token -> userId (메모리; 서버 재시작 시 재로그인 필요)
+function issueToken(userId) {
+  const t = crypto.randomBytes(16).toString("hex");
+  tokens.set(t, userId);
+  return t;
+}
+
+// 로그인 확정 : p 에 계정 정보 부착 + authOk 통지
+function loginPlayer(p, userId) {
+  const u = users[userId];
+  if (!u) return;
+  p.account = { userId, nickname: u.nickname, isAdmin: userId === ADMIN_ID };
+  p.isAdmin = p.account.isAdmin;
+  p.name = u.nickname;
+  send(p, {
+    type: "authOk", id: userId, nickname: u.nickname, isAdmin: p.isAdmin,
+    token: issueToken(userId), proWins: u.proWins || 0, proPlays: u.proPlays || 0,
+  });
+}
 
 // --- 정적 파일 서버 ---------------------------------------------------------
 const MIME = {
@@ -73,16 +177,21 @@ let nextId = 1;
 //  active=false : 메뉴 화면(미입장). 스냅샷/판정에서 제외된다.
 const players = new Map();
 
+// 최근 채팅 보관 (새 접속자에게 즉시 전송)
+const CHAT_HISTORY_MAX = 20;
+const chatHistory = [];
+
 wss.on("connection", (ws) => {
   const id = nextId++;
-  players.set(id, { ws, state: null, active: false, mode: "survival", name: "", roomId: null });
+  players.set(id, { ws, state: null, active: false, mode: "survival", name: "", roomId: null, account: null, isAdmin: false });
 
   // heartbeat : 클라이언트가 살아있는지 추적 (프록시가 유휴 연결을 끊는 것 방지)
   ws.isAlive = true;
   ws.on("pong", () => { ws.isAlive = true; });
 
-  // 접속한 클라이언트에게 자신의 id 를 알려준다
+  // 접속한 클라이언트에게 자신의 id + 최근 채팅을 알려준다
   ws.send(JSON.stringify({ type: "welcome", id }));
+  if (chatHistory.length) ws.send(JSON.stringify({ type: "chatHistory", messages: chatHistory }));
   console.log(`[+] player ${id} connected (total ${players.size})`);
 
   ws.on("message", (raw) => {
@@ -92,8 +201,38 @@ wss.on("connection", (ws) => {
     const p = players.get(id);
     if (!p) return;
 
+    if (msg.type === "signup") {
+      const idv = (msg.id || "").trim();
+      if (!/^[A-Za-z0-9_]{3,20}$/.test(idv)) { send(p, { type: "authError", reason: "아이디는 영문/숫자 3~20자여야 합니다." }); return; }
+      if (users[idv]) { send(p, { type: "authError", reason: "이미 존재하는 아이디입니다." }); return; }
+      if (!/^\d{4}$/.test(String(msg.password || ""))) { send(p, { type: "authError", reason: "비밀번호는 숫자 4자리여야 합니다." }); return; }
+      const salt = crypto.randomBytes(8).toString("hex");
+      users[idv] = { id: idv, nickname: sanitizeName(msg.nickname), salt, hash: hashPw(msg.password, salt), proWins: 0, proPlays: 0 };
+      persistUser(idv);
+      loginPlayer(p, idv);
+      return;
+
+    } else if (msg.type === "login") {
+      const idv = (msg.id || "").trim();
+      const u = users[idv];
+      if (!u || u.hash !== hashPw(msg.password || "", u.salt)) { send(p, { type: "authError", reason: "아이디 또는 비밀번호가 틀렸습니다." }); return; }
+      loginPlayer(p, idv);
+      return;
+
+    } else if (msg.type === "auth") {
+      const uid = tokens.get(msg.token);
+      if (uid && users[uid]) loginPlayer(p, uid);
+      else send(p, { type: "authError", reason: "", silent: true }); // 토큰 만료 → 조용히
+      return;
+
+    } else if (msg.type === "logout") {
+      if (msg.token) tokens.delete(msg.token);
+      p.account = null; p.isAdmin = false;
+      return;
+    }
+
     if (msg.type === "join") {
-      p.name = sanitizeName(msg.name);
+      p.name = p.account ? p.account.nickname : sanitizeName(msg.name);
       const mode = (msg.mode === "racing") ? "racing"
         : (msg.mode === "pro") ? "pro" : "survival";
 
@@ -113,8 +252,9 @@ wss.on("connection", (ws) => {
         p.invulnUntil = Date.now() + INVULN_MS;
         p.graceUntil = Date.now() + GRACE_MS;
         send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
-      } else { // racing(자유) : 고정 맵
+      } else { // racing(자유) : 고정 맵 + TOP10 기록 전송
         p.state = null; p.invulnUntil = 0; p.graceUntil = 0;
+        send(p, { type: "topRecords", records: timeRecords });
       }
       console.log(`[>] player ${id} joined ${p.mode} as "${p.name}"`);
 
@@ -165,8 +305,23 @@ wss.on("connection", (ws) => {
       // 전역 채팅 — 메뉴/로비 등 미입장자도 보내고 받을 수 있다.
       const text = sanitizeChat(msg.text);
       if (!text) return;
-      const name = p.active ? p.name : sanitizeName(msg.name);
-      broadcastConnected({ type: "chat", id, name, text, t: Date.now() });
+      const name = p.account ? p.account.nickname : (p.active ? p.name : sanitizeName(msg.name));
+      const chatMsg = { type: "chat", id, name, text, t: Date.now(), admin: !!p.isAdmin };
+      chatHistory.push(chatMsg);
+      if (chatHistory.length > CHAT_HISTORY_MAX) chatHistory.shift(); // 최근 20개만 보관
+      broadcastConnected(chatMsg);
+
+    } else if (msg.type === "timeAttack") {
+      // 자유 모드 타임어택 기록 제출 → TOP10 갱신
+      if (!p.active || p.mode !== "racing") return;
+      const ms = Number(msg.ms);
+      if (!Number.isFinite(ms) || ms < 3000 || ms > 600000) return; // 3초~10분 범위만 인정
+      const name = p.account ? p.account.nickname : (p.name || "Player");
+      timeRecords.push({ name, ms: Math.round(ms) });
+      timeRecords.sort((a, b) => a.ms - b.ms);
+      if (timeRecords.length > 10) timeRecords.length = 10;
+      saveRecords();
+      broadcastRecords();
 
     } else if (msg.type === "state") {
       if (!p.active) return;
@@ -182,6 +337,7 @@ wss.on("connection", (ws) => {
         if (room && room.state === "racing") {
           p.lap = msg.lap;
           if (typeof msg.prog === "number") p.prog = msg.prog;
+          if (typeof msg.lapMs === "number") p.lapMs = msg.lapMs;
           if (!p.finished && p.lap >= room.laps) {
             p.finished = true; p.finishTime = Date.now();
             const cand = Date.now() + END_TIMER_MS;
@@ -401,7 +557,7 @@ function rankedRoom(roomId) {
   });
   return list.map((e, i) => ({
     id: e.id, name: e.p.name, ready: !!e.p.ready,
-    lap: e.p.lap || 0, finished: !!e.p.finished, rank: i + 1,
+    lap: e.p.lap || 0, lapMs: e.p.lapMs || 0, finished: !!e.p.finished, rank: i + 1, admin: !!e.p.isAdmin,
   }));
 }
 
@@ -467,8 +623,21 @@ function maybeStartCountdown(roomId) {
 function endRoomRace(roomId) {
   const room = rooms.get(roomId);
   if (!room) return;
-  for (const { p } of roomMembers(roomId)) {
-    send(p, { type: "toFreeRacing" }); // 클라는 자유 레이싱으로 이동
+  const members = roomMembers(roomId);
+  const ranked = rankedRoom(roomId);
+  const counted = members.length >= 2;           // 우승 기록은 2명 이상일 때만
+  const winnerId = counted && ranked.length ? ranked[0].id : null;
+
+  for (const { id, p } of members) {
+    // 로그인한 플레이어 통계 갱신(프로 플레이 +1, 우승 시 +1)
+    if (p.account && users[p.account.userId]) {
+      const u = users[p.account.userId];
+      u.proPlays = (u.proPlays || 0) + 1;
+      if (counted && id === winnerId) u.proWins = (u.proWins || 0) + 1;
+      persistUser(p.account.userId);
+      send(p, { type: "stats", proWins: u.proWins, proPlays: u.proPlays });
+    }
+    send(p, { type: "toFreeRacing" }); // 자유 레이싱으로 이동
     p.active = false; p.state = null; p.roomId = null;
   }
   rooms.delete(roomId);
@@ -570,6 +739,7 @@ setInterval(() => {
       drifting: p.state.drifting,
       teleport: !!p.state.teleport,
       invuln: now < (p.invulnUntil || 0),
+      admin: !!p.isAdmin, // 관리자 금색 차 표시용
     };
     if (p.mode === "pro") {
       if (p.roomId != null) {
@@ -594,6 +764,9 @@ setInterval(() => {
   }
 }, 1000 / TICK_RATE);
 
-server.listen(PORT, () => {
-  console.log(`Car game server running at http://localhost:${PORT}`);
+// 계정/기록 캐시를 적재한 뒤 서버를 연다
+Promise.all([hydrateUsers(), hydrateRecords()]).then(() => {
+  server.listen(PORT, () => {
+    console.log(`Car game server running at http://localhost:${PORT} (storage: ${useRedis ? "Upstash Redis" : "files"})`);
+  });
 });

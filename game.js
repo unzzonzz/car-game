@@ -68,11 +68,29 @@ const race = {
   countdownEnd: 0,   // 로컬 시각(performance.now): 카운트다운 끝
   endEnd: 0,         // 로컬 시각: 종료 타이머 끝 (0=없음)
   goFlashUntil: 0,   // "GO!" 표시 끝 시각
-  // 내 바퀴 추적
+  // 내 바퀴 추적 + 랩 타이밍
   lap: 0, prog: 0, lastPhase: 0, checkpoint: false,
+  lapStartTime: 0,   // 현재 랩 시작 시각(performance.now)
+  lapMs: 0,          // 현재 랩 진행 시간(ms)
 };
 
 const OFFTRACK_DRAG = 2.4;   // 트랙 이탈 시 추가 감속 계수 (클수록 풀밭처럼 느려짐)
+
+// 자유 모드 타임어택 상태
+const attack = {
+  state: "idle",     // "idle" | "armed"(움직이면 시작) | "running"
+  startTime: 0, ms: 0,
+  lastPhase: 0, checkpoint: false, hasRun: false,
+  top: [],           // 서버 TOP10 [{name, ms}]
+};
+
+const GOLD = "#ffd94d";       // 관리자 차 색
+let chatHistoryLoaded = false; // 최근 채팅을 한 번만 적용 (재접속 중복 방지)
+// 로그인 계정 상태
+const account = {
+  loggedIn: false, userId: null, nickname: "", isAdmin: false,
+  proWins: 0, proPlays: 0, loginTime: 0,
+};
 
 /* 레이싱 트랙(카트 서킷) ------------------------------------------------------
  *  중심선을 "별모양 보장(자기교차 없음)" 극좌표식 폐곡선으로 생성한다.
@@ -246,6 +264,10 @@ function typingInInput() {
   const el = document.activeElement;
   return el && el.tagName === "INPUT";
 }
+
+window.addEventListener("keydown", e => {
+  if (e.key === 'Escape') toMenu()
+})
 
 window.addEventListener("keydown", (e) => {
   // Enter : 입력창에 포커스가 없으면 채팅 입력창으로 바로 포커스
@@ -535,14 +557,78 @@ function trackPhase(x, y, track) {
 // 프로 레이싱 : 바퀴수 추적 (중간 체크포인트를 지나야 시작선 통과를 1바퀴로 인정 → 역주행 악용 방지)
 function updateLap(car) {
   if (gameMode !== "pro" || race.state !== "racing") return;
+  const now = performance.now();
   const ph = trackPhase(car.x, car.y, world.track);
   if (ph > 0.4 && ph < 0.6) race.checkpoint = true;           // 중간 통과
-  if (race.checkpoint && race.lastPhase > 0.75 && ph < 0.25) { // 시작선 정방향 통과
+  if (race.checkpoint && race.lastPhase > 0.75 && ph < 0.25) { // 시작선 정방향 통과 → 랩 완료
     race.lap++;
     race.checkpoint = false;
+    race.lapStartTime = now; // 다음 랩 타이머 시작
   }
   race.lastPhase = ph;
   race.prog = race.lap + ph;
+  race.lapMs = now - race.lapStartTime; // 현재 랩 진행 시간
+}
+
+// 타임어택 상태 초기화 (모드 진입/이탈 시)
+function resetAttack() {
+  attack.state = "idle";
+  attack.hasRun = false;
+  attack.ms = 0;
+  attack.checkpoint = false;
+  const btn = document.getElementById("attackBtn");
+  if (btn) btn.textContent = "기록 시작";
+}
+
+// 자유 모드 타임어택 : "기록 시작" → 출발선 이동 → 움직이면 계측 → 한 바퀴 후 종료
+function startAttack() {
+  const s = world.track.start;
+  CAR.x = s.x; CAR.y = s.y; CAR.angle = s.angle;
+  CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
+  net.pendingTeleport = true;
+  updateCamera(CAR, 0);
+  attack.state = "armed";
+  attack.ms = 0;
+  attack.checkpoint = false;
+  attack.lastPhase = trackPhase(CAR.x, CAR.y, world.track);
+  const btn = document.getElementById("attackBtn");
+  if (btn) btn.textContent = "기록 시작됨";
+}
+
+function updateAttack(car) {
+  if (gameMode !== "racing" || attack.state === "idle") return;
+  const now = performance.now();
+  const ph = trackPhase(car.x, car.y, world.track);
+  if (attack.state === "armed") {
+    if (Math.abs(car.lf) > 5 * KMH_TO_PXS) { // 움직이기 시작 → 계측 시작
+      attack.state = "running";
+      attack.startTime = now;
+      attack.checkpoint = false;
+      const btn = document.getElementById("attackBtn");
+      if (btn) btn.textContent = "다시 시작";
+    }
+    attack.lastPhase = ph;
+    return;
+  }
+  // running
+  attack.ms = now - attack.startTime;
+  if (ph > 0.4 && ph < 0.6) attack.checkpoint = true;
+  if (attack.checkpoint && attack.lastPhase > 0.75 && ph < 0.25) { // 출발선 재통과 → 종료
+    const finalMs = attack.ms;
+    attack.state = "idle";
+    attack.hasRun = true;
+    attack.ms = finalMs;          // 결과 유지(초기화 안 함)
+    sendTimeAttack(finalMs);
+    blinkTime();                  // 우측 하단 숫자 3번 깜빡
+    const btn = document.getElementById("attackBtn");
+    if (btn) btn.textContent = "기록 시작";
+  }
+  attack.lastPhase = ph;
+}
+
+function sendTimeAttack(ms) {
+  if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
+  net.ws.send(JSON.stringify({ type: "timeAttack", ms: Math.round(ms) }));
 }
 
 // 프로 그리드 슬롯 위치 (시작선 뒤쪽, 2열 스태거)
@@ -680,7 +766,7 @@ function pushSkid(x, y, angle, color) {
 // 내 차 : 드리프트 중일 때만 내 색으로 타이어 자국을 남긴다.
 function updateSkid(car) {
   if (car.drifting) {
-    pushSkid(car.x, car.y, car.angle, skidColorForId(net.id ?? 0));
+    pushSkid(car.x, car.y, car.angle, account.isAdmin ? "rgba(255,217,77,0.55)" : skidColorForId(net.id ?? 0));
   }
 }
 
@@ -738,16 +824,16 @@ function render(car) {
   // 속도 불꽃 (내 차 뒤만) — 차체 아래에 깔리도록 차량보다 먼저 그린다
   drawSpeedFlame(car.x, car.y, car.angle, Math.abs(car.lf) * PXS_TO_KMH);
 
-  // 다른 플레이어 차량 (보간된 위치)
+  // 다른 플레이어 차량 (보간된 위치) — 관리자는 금색
   for (const [id, r] of remotePlayers) {
-    drawCar(r, colorForId(id));
+    drawCar(r, r.admin ? GOLD : colorForId(id), r.admin);
   }
-  // 내 차량 (내 고유 색)
-  drawCar(car, myColor());
+  // 내 차량 (관리자면 금색)
+  drawCar(car, account.isAdmin ? GOLD : myColor(), account.isAdmin);
 
   // 이름표 (차 아래) — 회전 영향 안 받게 차량 그린 뒤 별도로
-  for (const r of remotePlayers.values()) drawName(r.name, r.x, r.y);
-  drawName(playerName, car.x, car.y);
+  for (const r of remotePlayers.values()) drawName(r.name, r.x, r.y, r.admin);
+  drawName(playerName, car.x, car.y, account.isAdmin);
 
   // 폭발 이펙트 (차량 위에)
   drawExplosions();
@@ -756,7 +842,8 @@ function render(car) {
 
   drawMinimap(car);
   drawSpeed(car);
-  drawRaceHud(); // 프로 레이싱 카운트다운/종료 타이머
+  drawRaceHud(); // 프로 레이싱 신호등/GO
+  updateTimeHud(); // 우측 하단 #time (프로 남은시간)
 }
 
 /* 프로 레이싱 HUD : 화면 가운데 F1 신호등(5초) + 상단 종료 카운트다운(10초) */
@@ -800,15 +887,23 @@ function drawRaceHud() {
     ctx.shadowBlur = 0;
   }
 
-  // 종료 카운트다운 (상단 가운데, 텍스트)
+  // 종료까지 남은 시간 : 가운데 상단에 작은 흰 텍스트(#time 과 동일 스타일)로
   if (race.state === "racing" && race.endEnd > now) {
-    const sec = Math.ceil((race.endEnd - now) / 1000);
-    ctx.fillStyle = "rgba(0,0,0,0.5)";
-    roundRect(cx - 130, 16, 260, 46, 12); ctx.fill();
-    ctx.fillStyle = "#ffd83a";
-    ctx.font = "700 24px 'Segoe UI', Arial, sans-serif";
-    ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText(`종료까지 ${sec}초`, cx, 39);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "14px 'Segoe UI', Arial, sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    ctx.fillText(fmtRaceTime(race.endEnd - now), cx, 16);
+  }
+}
+
+// #time HUD 갱신 (우측 하단) : 프로=현재 랩 시간, 자유=타임어택 진행/결과.
+function updateTimeHud() {
+  if (gameMode === "pro" && race.state === "racing") {
+    setTimeHud(fmtRaceTime(race.lapMs));
+  } else if (gameMode === "racing" && (attack.state !== "idle" || attack.hasRun)) {
+    setTimeHud(fmtRaceTime(attack.ms));
+  } else {
+    setTimeHud("");
   }
 }
 
@@ -903,16 +998,16 @@ function drawRacingGround() {
 }
 
 // 차 아래에 이름표를 그린다 (회전 없이, 가독성 위해 어두운 외곽선 + 흰 글자)
-function drawName(text, x, y) {
+function drawName(text, x, y, isAdmin = false) {
   if (!text) return;
-  ctx.font = "600 14px 'Segoe UI', Arial, sans-serif";
+  ctx.font = (isAdmin ? "800 14px" : "600 14px") + " 'Segoe UI', Arial, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   const ny = y + CAR.length / 2 + 6;
   ctx.lineWidth = 3;
   ctx.strokeStyle = "rgba(0,0,0,0.85)";
   ctx.strokeText(text, x, ny);
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = isAdmin ? GOLD : "#ffffff";
   ctx.fillText(text, x, ny);
 }
 
@@ -992,7 +1087,7 @@ function drawSpeedFlame(x, y, angle, kmh) {
   ctx.restore();
 }
 
-function drawCar(car, color = "#e23b2e") {
+function drawCar(car, color = "#e23b2e", isAdmin = false) {
   ctx.save();
   ctx.translate(car.x, car.y);
   ctx.rotate(car.angle);
@@ -1010,9 +1105,24 @@ function drawCar(car, color = "#e23b2e") {
   ctx.fillRect(-L / 2 + 2, -W / 2 + 3, L, W);
 
   // 차체
-  ctx.fillStyle = color;
-  roundRect(-L / 2, -W / 2, L, W, 5);
-  ctx.fill();
+  if (isAdmin) {
+    // 관리자 : 금색 + 빛나는 글로우 + 빛이 비치는 그라데이션
+    const pulse = 14 + 8 * Math.abs(Math.sin(performance.now() / 260));
+    ctx.shadowColor = GOLD;
+    ctx.shadowBlur = pulse;
+    const g = ctx.createLinearGradient(0, -W / 2, 0, W / 2);
+    g.addColorStop(0, "#fff6cf");   // 위쪽 하이라이트(빛 반사)
+    g.addColorStop(0.5, GOLD);
+    g.addColorStop(1, "#b8860b");   // 아래쪽 음영
+    ctx.fillStyle = g;
+    roundRect(-L / 2, -W / 2, L, W, 5);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  } else {
+    ctx.fillStyle = color;
+    roundRect(-L / 2, -W / 2, L, W, 5);
+    ctx.fill();
+  }
 
   // 앞부분(코) 표시 — 진행방향 식별
   ctx.fillStyle = "#1b1b1b";
@@ -1049,7 +1159,26 @@ function roundRect(x, y, w, h, r, c = ctx) {
 function drawSpeed(car) {
   // 체감 속도를 km/h 정수로 표시 (후진도 크기로 표시)
   const kmh = Math.round(Math.abs(car.lf) * PXS_TO_KMH);
-  speedEl.textContent = kmh;
+  speedEl.textContent = `${kmh} km/h`;
+}
+
+// mm:ss.cs 형식 (예: 01:30.02)
+function fmtRaceTime(ms) {
+  if (ms < 0) ms = 0;
+  const m = Math.floor(ms / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  const cs = Math.floor((ms % 1000) / 10);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
+}
+// #time HUD (프로 남은시간 / 타임어택). 표시할 게 없으면 비운다.
+const timeEl = document.getElementById("time");
+function setTimeHud(text) { timeEl.textContent = text || ""; }
+// #time 을 3번 깜빡이게 (타임어택 종료 시). 애니메이션 끝나면 클래스 제거해 원복.
+timeEl.addEventListener("animationend", () => timeEl.classList.remove("blink"));
+function blinkTime() {
+  timeEl.classList.remove("blink");
+  void timeEl.offsetWidth; // reflow → 애니메이션 재시작 보장
+  timeEl.classList.add("blink");
 }
 
 // 미니맵 : 맵 전체 + 차량 위치 + 차량 방향 (월드가 비정사각형이어도 비율 유지)
@@ -1098,19 +1227,22 @@ function drawMinimap(car) {
   mctx.lineWidth = 1;
   mctx.strokeRect(wx(camera.x), wy(camera.y), canvas.width * scale, canvas.height * scale);
 
-  // 다른 플레이어 (작은 점)
+  // 다른 플레이어 (작은 점) — 관리자는 금색 + 블러 글로우
   for (const [id, r] of remotePlayers) {
-    mctx.fillStyle = colorForId(id);
+    if (r.admin) { mctx.shadowColor = GOLD; mctx.shadowBlur = 8; mctx.fillStyle = GOLD; }
+    else { mctx.shadowBlur = 0; mctx.fillStyle = colorForId(id); }
     mctx.beginPath();
-    mctx.arc(wx(r.x), wy(r.y), 3, 0, Math.PI * 2);
+    mctx.arc(wx(r.x), wy(r.y), r.admin ? 4 : 3, 0, Math.PI * 2);
     mctx.fill();
   }
+  mctx.shadowBlur = 0;
 
-  // 내 차량 위치 + 방향(삼각형)
+  // 내 차량 위치 + 방향(삼각형) — 관리자는 금색 + 블러
   mctx.save();
   mctx.translate(wx(car.x), wy(car.y));
   mctx.rotate(car.angle);
-  mctx.fillStyle = myColor();
+  if (account.isAdmin) { mctx.shadowColor = GOLD; mctx.shadowBlur = 8; mctx.fillStyle = GOLD; }
+  else mctx.fillStyle = myColor();
   mctx.beginPath();
   mctx.moveTo(7, 0);    // 앞쪽 꼭지점
   mctx.lineTo(-5, -4);
@@ -1175,6 +1307,11 @@ function connect() {
 
   net.ws.onopen = () => {
     net.connected = true;
+    // 저장된 토큰이 있으면 자동 로그인
+    try {
+      const tk = localStorage.getItem("carGameToken");
+      if (tk) net.ws.send(JSON.stringify({ type: "auth", token: tk }));
+    } catch {}
     // 재접속 시, 플레이 중이었다면 같은 모드로 자동 재입장
     if (gameState === "playing") sendJoin();
   };
@@ -1185,6 +1322,26 @@ function connect() {
 
     if (msg.type === "welcome") {
       net.id = msg.id;
+    } else if (msg.type === "authOk") {
+      // 로그인/회원가입 성공
+      account.loggedIn = true;
+      account.userId = msg.id;
+      account.nickname = msg.nickname;
+      account.isAdmin = !!msg.isAdmin;
+      account.proWins = msg.proWins || 0;
+      account.proPlays = msg.proPlays || 0;
+      account.loginTime = Date.now();
+      playerName = msg.nickname;
+      try { localStorage.setItem("carGameToken", msg.token); } catch {}
+      hideAuthModal();
+      updateAuthUI();
+    } else if (msg.type === "authError") {
+      if (!msg.silent) alert(msg.reason || "인증 실패");
+      else { try { localStorage.removeItem("carGameToken"); } catch {} } // 만료 토큰 정리
+    } else if (msg.type === "stats") {
+      account.proWins = msg.proWins || 0;
+      account.proPlays = msg.proPlays || 0;
+      updateDashboard();
     } else if (msg.type === "counts") {
       // 모드별 참가 인원 → 메뉴 버튼 배지 갱신
       const set = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = `${n}명`; };
@@ -1207,8 +1364,19 @@ function connect() {
       // 내가 죽인 경우 내 화면을 흔든다 (타격감)
       if (msg.killerId === net.id) addShake(34);
     } else if (msg.type === "chat") {
-      // 채팅 수신 → 로그에 추가 (이름은 보낸 사람 색)
-      addChatLine(msg.name, msg.text, colorForId(msg.id), msg.t);
+      // 채팅 수신 → 로그에 추가 (관리자는 금색 이름)
+      addChatLine(msg.name, msg.text, msg.admin ? GOLD : colorForId(msg.id), msg.t);
+    } else if (msg.type === "chatHistory") {
+      // 접속 직후 받은 최근 채팅 (페이지당 1회만 적용 → 재접속 중복 방지)
+      if (!chatHistoryLoaded) {
+        chatHistoryLoaded = true;
+        for (const m of (msg.messages || [])) {
+          addChatLine(m.name, m.text, m.admin ? GOLD : colorForId(m.id), m.t);
+        }
+      }
+    } else if (msg.type === "topRecords") {
+      attack.top = msg.records || [];
+      updateTopRecords();
     } else if (msg.type === "roomList") {
       // 방 목록 갱신 (브라우저 화면)
       race.rooms = msg.rooms || [];
@@ -1263,6 +1431,7 @@ function connect() {
         }
         r.invuln = p.invuln;
         r.name = p.name;
+        r.admin = p.admin;
 
         // 스냅샷을 "서버 송신 시각(st)"과 함께 버퍼에 쌓는다 (엔티티 보간용)
         if (p.teleport) {
@@ -1353,10 +1522,12 @@ function handleRaceMessage(msg) {
   race.countdownEnd = msg.countdownMs > 0 ? performance.now() + msg.countdownMs : 0;
   race.endEnd = msg.endMs > 0 ? performance.now() + msg.endMs : 0;
 
-  // 카운트다운 → 레이싱 전환 시 : 바퀴 추적 초기화 + GO 표시
+  // 카운트다운 → 레이싱 전환 시 : 바퀴 추적/랩 타이머 초기화 + GO 표시
   if (prevState !== "racing" && race.state === "racing") {
     race.lap = 0; race.prog = 0; race.checkpoint = false;
     race.lastPhase = trackPhase(CAR.x, CAR.y, world.track);
+    race.lapStartTime = performance.now();
+    race.lapMs = 0;
     race.goFlashUntil = performance.now() + 1200;
   }
   updateRaceUI();
@@ -1374,7 +1545,9 @@ function enterFreeRacingFromPro() {
   CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
   net.pendingTeleport = true;
   updateCamera(CAR, 0);
+  resetAttack();
   updateRaceUI();    // 로비/순위판 숨김
+  updateFreeUI();
   sendJoin();        // racing 으로 재입장
 }
 
@@ -1467,7 +1640,7 @@ function updateRaceUI() {
   document.getElementById("lobbyHint").textContent =
     "모두 준비하면 자동으로 시작됩니다 (혼자여도 가능)";
 
-  // 순위판
+  // 순위판 : 순위 · 이름 · 현재 랩 기록 · 현재랩/전체랩
   const sList = document.getElementById("standingsList");
   sList.innerHTML = "";
   for (const p of race.list) {
@@ -1478,15 +1651,18 @@ function updateRaceUI() {
     rank.textContent = p.rank + ".";
     const star = document.createElement("span");
     star.className = "stand-star";
-    if (p.finished) { star.textContent = "★"; star.style.color = colorForId(p.id); }
+    if (p.finished) { star.textContent = "★"; star.style.color = p.admin ? GOLD : colorForId(p.id); }
     const nm = document.createElement("span");
     nm.className = "stand-name";
-    nm.style.color = colorForId(p.id);
+    nm.style.color = p.admin ? GOLD : colorForId(p.id);
     nm.textContent = p.name;
+    const time = document.createElement("span");
+    time.className = "stand-time";
+    time.textContent = (race.state === "racing" && (p.lapMs || 0) > 0) ? fmtRaceTime(p.lapMs) : "";
     const lap = document.createElement("span");
     lap.className = "stand-lap";
-    lap.textContent = p.finished ? "완주" : `${p.lap}/${race.laps}`;
-    row.append(rank, star, nm, lap);
+    lap.textContent = p.finished ? "완주" : `${Math.min((p.lap || 0) + 1, race.laps)}/${race.laps}`;
+    row.append(rank, star, nm, time, lap);
     sList.appendChild(row);
   }
 }
@@ -1584,10 +1760,11 @@ function netSend(car, now) {
   };
   // 막 텔레포트(벽/플레이어 리스폰)했으면 서버·남들에게 스냅하라고 알린다
   if (net.pendingTeleport) { msg.teleport = true; net.pendingTeleport = false; }
-  // 프로 레이싱 중이면 바퀴수/진행도 보고 (서버가 순위·완주 판정)
+  // 프로 레이싱 중이면 바퀴수/진행도/현재랩시간 보고 (서버가 순위·완주 판정)
   if (gameMode === "pro" && race.state === "racing") {
     msg.lap = race.lap;
     msg.prog = +race.prog.toFixed(3);
+    msg.lapMs = Math.round(race.lapMs);
   }
   net.ws.send(JSON.stringify(msg));
 }
@@ -1641,8 +1818,8 @@ function updateRemotes(dt) {
       r.drifting = a.drifting; // 진행 중인 구간의 드리프트 상태
     }
 
-    // 드리프트 중인 원격 차량의 타이어 자국도 그 차 색으로 남긴다
-    if (r.drifting) pushSkid(r.x, r.y, r.angle, skidColorForId(id));
+    // 드리프트 중인 원격 차량의 타이어 자국 (관리자는 금색)
+    if (r.drifting) pushSkid(r.x, r.y, r.angle, r.admin ? "rgba(255,217,77,0.55)" : skidColorForId(id));
   }
 }
 
@@ -1659,7 +1836,7 @@ function updateRemotesFallback() {
     while (d < -Math.PI) d += Math.PI * 2;
     r.angle += d * 0.25;
     r.drifting = tgt.drifting;
-    if (r.drifting) pushSkid(r.x, r.y, r.angle, skidColorForId(id));
+    if (r.drifting) pushSkid(r.x, r.y, r.angle, r.admin ? "rgba(255,217,77,0.55)" : skidColorForId(id));
   }
 }
 
@@ -1701,6 +1878,7 @@ function frame(now) {
   updatePhysics(CAR, dt);     // 속도/위치 합성·적분
   updateCollision(CAR);       // 맵 경계 충돌
   updateLap(CAR);             // 프로 레이싱 바퀴 추적
+  updateAttack(CAR);          // 자유 모드 타임어택 계측
   updateSkid(CAR);            // 스키드 마크
   updateCamera(CAR, dt);      // 카메라 추적 (+ 흔들림 감쇠)
 
@@ -1752,10 +1930,14 @@ function startGame(mode) {
     race.isHost = false; race.myReady = false; race.rooms = [];
   }
 
+  if (mode === "racing") resetAttack();
+
   gameState = "playing";
   document.getElementById("menu").classList.remove("show");
   document.getElementById("exitBtn").style.display = "block";
   updateRaceUI();
+  updateTouchVisibility();
+  updateFreeUI();
 
   sendJoin(); // 서버에 입장
 }
@@ -1771,7 +1953,11 @@ function toMenu() {
   document.getElementById("exitBtn").style.display = "none";
   document.getElementById("death").classList.remove("show");
   document.getElementById("menu").classList.add("show");
+  resetAttack();  // 측정 중이었어도 초기화
   updateRaceUI(); // 로비/순위판 숨김
+  updateTouchVisibility();
+  updateFreeUI();
+  setTimeHud("");
 }
 
 // 메뉴 UI 배선
@@ -1793,16 +1979,184 @@ function setupMenu() {
   });
   document.getElementById("lobbyLeave").addEventListener("click", sendLeaveRoom); // 방 → 브라우저
 
-  // 방 브라우저 / 방 만들기 다이얼로그
+  // 방 브라우저 / 방 만들기 다이얼로그 (나가기는 좌측 상단 exitBtn 으로 통일)
   document.getElementById("createRoomBtn").addEventListener("click", showCreateRoom);
-  document.getElementById("browserLeave").addEventListener("click", toMenu); // 프로 나가기
   document.getElementById("crCreate").addEventListener("click", sendCreateRoom);
   document.getElementById("crCancel").addEventListener("click", hideCreateRoom);
 
+  // 자유 모드 타임어택 기록 시작
+  document.getElementById("attackBtn").addEventListener("click", startAttack);
+
   document.getElementById("menu").classList.add("show"); // 시작은 메뉴
+}
+
+/* =============================================================================
+ *  로그인 / 회원가입 / 대시보드
+ * ========================================================================== */
+function sendAuth(obj) {
+  if (!net.connected || net.ws.readyState !== WebSocket.OPEN) { alert("서버 연결 중입니다. 잠시 후 다시 시도하세요."); return; }
+  net.ws.send(JSON.stringify(obj));
+}
+function sendLogin() {
+  const id = document.getElementById("loginId").value.trim();
+  const pw = document.getElementById("loginPw").value;
+  if (!id || !/^\d{4}$/.test(pw)) { alert("아이디와 숫자 4자리 비밀번호를 입력하세요."); return; }
+  sendAuth({ type: "login", id, password: pw });
+}
+function sendSignup() {
+  const id = document.getElementById("signupId").value.trim();
+  const nickname = document.getElementById("signupNick").value.trim();
+  const pw = document.getElementById("signupPw").value;
+  if (!/^[A-Za-z0-9_]{3,20}$/.test(id)) { alert("아이디는 영문/숫자 3~20자입니다."); return; }
+  if (!nickname) { alert("닉네임을 입력하세요."); return; }
+  if (!/^\d{4}$/.test(pw)) { alert("비밀번호는 숫자 4자리입니다."); return; }
+  sendAuth({ type: "signup", id, nickname, password: pw });
+}
+function sendLogout() {
+  let tk = null;
+  try { tk = localStorage.getItem("carGameToken"); localStorage.removeItem("carGameToken"); } catch {}
+  if (net.connected && net.ws.readyState === WebSocket.OPEN) net.ws.send(JSON.stringify({ type: "logout", token: tk }));
+  account.loggedIn = false; account.isAdmin = false; account.userId = null;
+  updateAuthUI();
+}
+
+// 로그인/회원가입 팝업 열기/닫기
+function showAuthModal() {
+  document.getElementById("loginForm").style.display = "block";
+  document.getElementById("signupForm").style.display = "none";
+  document.getElementById("authModal").classList.add("show");
+}
+function hideAuthModal() {
+  document.getElementById("authModal").classList.remove("show");
+}
+
+// 로그인 상태에 따라 메뉴 인증 영역(버튼) + 대시보드 버튼 토글
+function updateAuthUI() {
+  const inn = account.loggedIn;
+  document.getElementById("authOpenBtn").style.display = inn ? "none" : "block";
+  document.getElementById("loggedIn").style.display = inn ? "block" : "none";
+  document.getElementById("dashBtn").style.display = inn ? "block" : "none";
+  if (inn) {
+    document.getElementById("welcomeMsg").textContent =
+      `${account.nickname}님 환영합니다${account.isAdmin ? " (관리자)" : ""}`;
+    const ni = document.getElementById("nameInput");
+    ni.value = account.nickname; ni.disabled = true;
+  } else {
+    document.getElementById("nameInput").disabled = false;
+  }
+}
+
+let dashTimer = null;
+function updateDashboard() {
+  document.getElementById("dashWins").textContent = account.proWins;
+  document.getElementById("dashPlays").textContent = account.proPlays;
+  if (account.loginTime) {
+    const s = Math.floor((Date.now() - account.loginTime) / 1000);
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    document.getElementById("dashTime").textContent =
+      (h ? h + "시간 " : "") + m + "분 " + sec + "초";
+  }
+}
+function showDashboard() {
+  document.getElementById("dashboard").classList.add("show");
+  updateDashboard();
+  clearInterval(dashTimer);
+  dashTimer = setInterval(updateDashboard, 1000); // 접속 시간 라이브 갱신
+}
+function hideDashboard() {
+  document.getElementById("dashboard").classList.remove("show");
+  clearInterval(dashTimer);
+}
+
+function setupAuth() {
+  document.getElementById("authOpenBtn").addEventListener("click", showAuthModal);
+  document.getElementById("authClose").addEventListener("click", hideAuthModal);
+  document.getElementById("loginBtn").addEventListener("click", sendLogin);
+  document.getElementById("signupBtn").addEventListener("click", sendSignup);
+  document.getElementById("logoutBtn").addEventListener("click", sendLogout);
+  document.getElementById("toSignup").addEventListener("click", () => {
+    document.getElementById("loginForm").style.display = "none";
+    document.getElementById("signupForm").style.display = "block";
+  });
+  document.getElementById("toLogin").addEventListener("click", () => {
+    document.getElementById("signupForm").style.display = "none";
+    document.getElementById("loginForm").style.display = "block";
+  });
+  document.getElementById("dashBtn").addEventListener("click", showDashboard);
+  document.getElementById("dashClose").addEventListener("click", hideDashboard);
+  // 비밀번호 입력은 숫자만
+  ["loginPw", "signupPw"].forEach((id) => {
+    document.getElementById(id).addEventListener("input", (e) => {
+      e.target.value = e.target.value.replace(/\D/g, "").slice(0, 4);
+    });
+  });
+  updateAuthUI();
+}
+
+/* =============================================================================
+ *  모바일 터치 조작 — 터치 버튼을 키보드 keys 와 동일하게 매핑
+ * ========================================================================== */
+const isTouch = ("ontouchstart" in window) || (navigator.maxTouchPoints > 0);
+
+function setupTouch() {
+  if (isTouch) document.body.classList.add("touch");
+  document.querySelectorAll(".touch-btn").forEach((btn) => {
+    const k = btn.dataset.key;
+    if (!k) return;
+    const on = (e) => { e.preventDefault(); keys[k] = true; };
+    const off = (e) => { e.preventDefault(); keys[k] = false; };
+    btn.addEventListener("touchstart", on, { passive: false });
+    btn.addEventListener("touchend", off, { passive: false });
+    btn.addEventListener("touchcancel", off, { passive: false });
+    btn.addEventListener("mousedown", on);   // 마우스로도 테스트 가능
+    btn.addEventListener("mouseup", off);
+    btn.addEventListener("mouseleave", off);
+  });
+}
+function updateTouchVisibility() {
+  document.getElementById("touchControls").classList.toggle("show", isTouch && gameState === "playing");
+}
+
+// 자유 모드 UI (기록 시작 버튼 + TOP10) 표시/숨김
+function updateFreeUI() {
+  const free = gameMode === "racing" && gameState === "playing";
+  document.getElementById("attackBtn").style.display = free ? "block" : "none";
+  document.getElementById("topRecords").style.display = free ? "block" : "none";
+  if (free) updateTopRecords();
+}
+
+// TOP10 기록 렌더 (채팅 아래)
+function updateTopRecords() {
+  const el = document.getElementById("topRecordsList");
+  if (!el) return;
+  el.innerHTML = "";
+  if (!attack.top.length) {
+    const empty = document.createElement("div");
+    empty.className = "rec-empty";
+    empty.textContent = "아직 기록이 없어요";
+    el.appendChild(empty);
+    return;
+  }
+  attack.top.forEach((r, i) => {
+    const row = document.createElement("div");
+    row.className = "rec-row";
+    const rank = document.createElement("span");
+    rank.className = "rec-rank";
+    rank.textContent = i + 1;
+    const nm = document.createElement("span");
+    nm.className = "rec-name";
+    nm.textContent = r.name;
+    const t = document.createElement("span");
+    t.className = "rec-time";
+    t.textContent = fmtRaceTime(r.ms);
+    row.append(rank, nm, t);
+    el.appendChild(row);
+  });
 }
 
 init();
 setupMenu();
 setupChat();
+setupAuth();
+setupTouch();
 requestAnimationFrame(frame);
