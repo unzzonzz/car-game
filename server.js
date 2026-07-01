@@ -234,6 +234,7 @@ wss.on("connection", (ws) => {
     if (msg.type === "join") {
       p.name = p.account ? p.account.nickname : sanitizeName(msg.name);
       const mode = (msg.mode === "racing") ? "racing"
+        : (msg.mode === "hard") ? "hard"
         : (msg.mode === "pro") ? "pro" : "survival";
 
       if (mode === "pro") {
@@ -252,9 +253,9 @@ wss.on("connection", (ws) => {
         p.invulnUntil = Date.now() + INVULN_MS;
         p.graceUntil = Date.now() + GRACE_MS;
         send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
-      } else { // racing(자유) : 고정 맵 + TOP10 기록 전송
+      } else { // racing/hard : 고정 맵. 자유 레이싱은 TOP10 기록도 전송
         p.state = null; p.invulnUntil = 0; p.graceUntil = 0;
-        send(p, { type: "topRecords", records: timeRecords });
+        if (mode === "racing") send(p, { type: "topRecords", records: timeRecords });
       }
       console.log(`[>] player ${id} joined ${p.mode} as "${p.name}"`);
 
@@ -471,7 +472,7 @@ function broadcastConnected(obj) {
 
 // 모드별 참가 인원을 "모든 접속자"(메뉴 화면 포함)에게 알린다 → 모드 버튼에 표시
 function broadcastCounts() {
-  const counts = { survival: 0, racing: 0, pro: 0 };
+  const counts = { survival: 0, racing: 0, hard: 0, pro: 0 };
   for (const [, p] of players) {
     if (p.active && counts[p.mode] !== undefined) counts[p.mode]++;
   }
@@ -728,7 +729,7 @@ setInterval(runCollisions, 1000 / COLLISION_HZ);
 //  (서바이벌/레이싱 플레이어는 서로 보이지 않도록 분리)
 setInterval(() => {
   const now = Date.now();
-  const byMode = { survival: [], racing: [] };
+  const byMode = { survival: [], racing: [], hard: [] };
   const byRoom = new Map(); // roomId -> entries (프로는 같은 방끼리만 본다)
 
   for (const [id, p] of players) {

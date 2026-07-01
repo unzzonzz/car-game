@@ -41,15 +41,17 @@ const CONFIG = {
  * -----------------------------------------------------------------------------
  *  - survival : 5000² 오픈 맵. 머리로 받혀 죽으면 모드 선택으로 복귀.
  *  - racing   : 사진 같은 꼬불꼬불한 카트 서킷. 죽음 없음. 트랙 이탈 시 감속.
+ *  - hard     : 좁은 폭 + 웨이포인트 스플라인 기반의 고난도 서킷.
  * ========================================================================== */
 const WORLD = {
   survival: { w: 5000, h: 5000, type: "open" },
   racing: { w: 10000, h: 6000, type: "track", track: null },  // 자유 레이싱
+  hard: { w: 18000, h: 11500, type: "hardTrack", track: null }, // 하드 레이싱
   pro: { w: 10000, h: 6000, type: "track", track: null },     // 프로 레이싱(다른 서킷)
 };
 
 // 현재 모드/월드/게임 상태
-let gameMode = "survival";   // "survival" | "racing" | "pro"
+let gameMode = "survival";   // "survival" | "racing" | "hard" | "pro"
 let world = WORLD.survival;  // 현재 월드 치수/타입
 let gameState = "menu";      // "menu" | "playing"
 let playerName = "Player";
@@ -125,6 +127,46 @@ function makeTrack(opts) {
   return { halfWidth: opts.halfWidth, kerb: opts.kerb, centerline, path, start };
 }
 
+function catmullRom(p0, p1, p2, p3, t, tension = 0.38) {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  const m1x = (p2.x - p0.x) * tension;
+  const m1y = (p2.y - p0.y) * tension;
+  const m2x = (p3.x - p1.x) * tension;
+  const m2y = (p3.y - p1.y) * tension;
+  return {
+    x: (2 * t3 - 3 * t2 + 1) * p1.x + (t3 - 2 * t2 + t) * m1x + (-2 * t3 + 3 * t2) * p2.x + (t3 - t2) * m2x,
+    y: (2 * t3 - 3 * t2 + 1) * p1.y + (t3 - 2 * t2 + t) * m1y + (-2 * t3 + 3 * t2) * p2.y + (t3 - t2) * m2y,
+  };
+}
+
+function makeHardTrack(points, opts) {
+  let centerline = [];
+  const n = points.length;
+  const samplesPerSegment = opts.samplesPerSegment || 24;
+
+  for (let i = 0; i < n; i++) {
+    const p0 = points[(i - 1 + n) % n];
+    const p1 = points[i];
+    const p2 = points[(i + 1) % n];
+    const p3 = points[(i + 2) % n];
+    for (let s = 0; s < samplesPerSegment; s++) {
+      centerline.push(catmullRom(p0, p1, p2, p3, s / samplesPerSegment, opts.tension));
+    }
+  }
+
+  const startOffset = ((opts.startPointIndex || 0) * samplesPerSegment) % centerline.length;
+  if (startOffset) centerline = centerline.slice(startOffset).concat(centerline.slice(0, startOffset));
+
+  const path = new Path2D();
+  centerline.forEach((p, i) => i ? path.lineTo(p.x, p.y) : path.moveTo(p.x, p.y));
+  path.closePath();
+
+  const a0 = centerline[0], a1 = centerline[1];
+  const start = { x: a0.x, y: a0.y, angle: Math.atan2(a1.y - a0.y, a1.x - a0.x) };
+  return { halfWidth: opts.halfWidth, kerb: opts.kerb, centerline, path, start };
+}
+
 /* 자유 레이싱 = 항상 "원래 맵"으로 고정 (랜덤 X) */
 const FREE_RECIPE = {
   w: 10000, h: 6000, halfWidth: 230, kerb: 26, stretch: 1.7,
@@ -153,6 +195,52 @@ const PRO_RECIPES = [
           + 0.20 * Math.sin(4 * a + 1.4) + 0.12 * Math.sin(6 * a + 0.2) + 0.10 * Math.sin(9 * a + 1.9) },
 ];
 
+const HARD_POINTS = [
+  // 1) 긴 직선 스타트
+  { x: 1300, y: 1400 },
+  { x: 3300, y: 1400 },
+  { x: 5700, y: 1400 },
+  { x: 7200, y: 1500 },
+
+  // 2) 큰 감속이 필요한 180도 헤어핀
+  { x: 8350, y: 2050 },
+  { x: 8900, y: 3150 },
+  { x: 8200, y: 4300 },
+  { x: 6450, y: 4450 },
+
+  // 3) 더 가파른 S 코너: 짧은 거리에서 큰 좌우 전환
+  { x: 5000, y: 3650 },
+  { x: 6200, y: 2500 },
+  { x: 9050, y: 2850 },
+  { x: 9500, y: 5000 },
+  { x: 10800, y: 3700 },
+  { x: 10300, y: 5400 },
+
+  // 4) 브레이킹 타이밍을 늦게 가져가는 복합 코너
+  { x: 11100, y: 5150 },
+  { x: 12400, y: 6350 },
+  { x: 13800, y: 6200 },
+  { x: 15050, y: 7400 },
+
+  // 5) 라인을 타면 풀악셀 가능한 초고속 코너
+  { x: 16200, y: 9000 },
+  { x: 14500, y: 10350 },
+  { x: 12000, y: 10650 },
+  { x: 9200, y: 10150 },
+  { x: 6900, y: 9250 },
+
+  // 6) 마지막 연속 헤어핀 U U U
+  { x: 5000, y: 9850 },
+  { x: 3550, y: 10600 },
+  { x: 2250, y: 9700 },
+  { x: 3850, y: 8750 },
+  { x: 2250, y: 7800 },
+  { x: 1150, y: 6650 },
+  { x: 2400, y: 5350 },
+  { x: 1400, y: 4050 },
+  { x: 2450, y: 2750 },
+];
+
 // 프로 트랙을 인덱스로 만들고 캐시한다 (한 번 만든 맵은 재사용)
 const proTrackCache = new Map();
 function buildProTrack(index) {
@@ -161,9 +249,24 @@ function buildProTrack(index) {
   return proTrackCache.get(i);
 }
 
-function generateTracks() {
+function generateTrack() {
   WORLD.racing.track = makeTrack(FREE_RECIPE); // 자유 = 고정
   WORLD.pro.track = buildProTrack(0);          // 프로 기본값 (서버 인덱스로 교체됨)
+}
+
+function generateHardTrack() {
+  WORLD.hard.track = makeHardTrack(HARD_POINTS, {
+    halfWidth: 150, // 총 트랙 폭 300px
+    kerb: 22,
+    samplesPerSegment: 28,
+    startPointIndex: 1,
+    tension: 0.34,
+  });
+}
+
+function generateTracks() {
+  generateTrack();
+  generateHardTrack();
 }
 
 // km/h -> px/s 변환 계수.  (km/h ÷ 3.6 = m/s) × (m -> px)
@@ -306,6 +409,10 @@ const lerp = (a, b, t) => a + (b - a) * t;
 // 차량의 현재 진행 속력(스칼라, px/s)
 function speedOf(car) {
   return Math.hypot(car.vx, car.vy);
+}
+
+function isTrackWorld() {
+  return world.type === "track" || world.type === "hardTrack";
 }
 
 
@@ -544,7 +651,7 @@ function updateCollision(car) {
 /* 9) 노면 — 레이싱 트랙 이탈 시 감속 ------------------------------------------
  *  트랙(캡슐 링) 밖(풀밭/안쪽 구멍)에서는 전진 속도를 추가로 깎아 느려지게 한다. */
 function updateSurface(car, dt) {
-  if (world.type !== "track") return;          // 자유/프로 레이싱 모두 적용
+  if (!isTrackWorld()) return;                 // 자유/프로/하드 레이싱 모두 적용
   if (isOnTrack(car.x, car.y)) return;
   // 풀밭 저항 : 전진/측면 속도를 지수적으로 감쇠
   const f = Math.exp(-OFFTRACK_DRAG * dt);
@@ -938,7 +1045,7 @@ function updateTimeHud() {
 
 // 바닥 : 모드에 따라 오픈 맵(그리드) 또는 레이싱 트랙
 function drawGround() {
-  if (world.type === "track") drawRacingGround();
+  if (isTrackWorld()) drawRacingGround();
   else drawSurvivalGround();
 }
 
@@ -1226,7 +1333,7 @@ function drawMinimap(car) {
   mctx.fillRect(ox, oy, world.w * scale, world.h * scale);
 
   // 레이싱 트랙 (중심선을 굵게 stroke → 미니맵 트랙 모양) + 시작선
-  if (world.type === "track" && world.track) {
+  if (isTrackWorld() && world.track) {
     const track = world.track;
     mctx.save();
     mctx.translate(ox, oy);
@@ -1376,6 +1483,7 @@ function connect() {
       const set = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = `${n}명`; };
       set("countSurvival", msg.survival || 0);
       set("countRacing", msg.racing || 0);
+      set("countHard", msg.hard || 0);
       set("countPro", msg.pro || 0);
     } else if (msg.type === "spawn") {
       // 서버가 정한 입장/부활 위치 → 거기서 시작
@@ -1944,11 +2052,11 @@ function startGame(mode) {
   keys.w = keys.a = keys.s = keys.d = keys.space = false; // 메뉴 조작으로 눌린 키 초기화
 
   // 레이싱 위치 결정
-  //  - racing(자유) : 트랙 출발점에서 시작 (서버 spawn 없음)
+  //  - racing/hard  : 트랙 출발점에서 시작 (서버 spawn 없음)
   //  - pro         : 로비 진입. 서버 proStart 가 그리드 슬롯을 정해줌.
   //  - survival    : 서버가 spawn 으로 위치 통지.
   race.state = "none"; race.myReady = false;
-  if (mode === "racing") {
+  if (mode === "racing" || mode === "hard") {
     const s = world.track.start;
     CAR.x = s.x; CAR.y = s.y; CAR.angle = s.angle;
     CAR.invulnUntil = performance.now() + 1500;
@@ -1959,7 +2067,7 @@ function startGame(mode) {
     race.isHost = false; race.myReady = false; race.rooms = [];
   }
 
-  if (mode === "racing") resetAttack();
+  if (mode === "racing" || mode === "hard") resetAttack();
 
   gameState = "playing";
   document.getElementById("menu").classList.remove("show");
@@ -1997,6 +2105,7 @@ function setupMenu() {
 
   document.getElementById("btnSurvival").addEventListener("click", () => startGame("survival"));
   document.getElementById("btnRacing").addEventListener("click", () => startGame("racing"));
+  document.getElementById("btnHard").addEventListener("click", () => startGame("hard"));
   document.getElementById("btnPro").addEventListener("click", () => startGame("pro"));
   document.getElementById("exitBtn").addEventListener("click", toMenu);
 

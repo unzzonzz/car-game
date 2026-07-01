@@ -241,10 +241,11 @@ html, body {
 
 .mode-buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 14px;
 }
 .mode-btn {
-  flex: 1;
+  flex: 1 1 115px;
   display: flex;
   flex-direction: column;
   padding: 10px;
@@ -259,6 +260,7 @@ html, body {
 }
 .mode-btn.survival:hover { border-color: #ff5a4d; }
 .mode-btn.racing:hover { border-color: #3b82f6; }
+.mode-btn.hard:hover { border-color: #ff8a2a; }
 .mode-btn.pro:hover { border-color: #f1c40f; }
 .mode-name {
   font-weight: 700;
