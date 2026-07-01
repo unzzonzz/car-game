@@ -928,6 +928,9 @@ function updateLap(car) {
       race.prog = race.lap;
       return;
     }
+    
+    race.lastPhase = ph;
+    return;
   }
   race.lastPhase = ph;
   race.prog = race.lap + ph;
