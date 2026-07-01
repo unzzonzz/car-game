@@ -92,6 +92,9 @@ let chatHistoryLoaded = false; // 최근 채팅을 한 번만 적용 (재접속 
 const account = {
   loggedIn: false, userId: null, nickname: "", isAdmin: false,
   proWins: 0, proPlays: 0, loginTime: 0,
+  totalTime: 0,   // 평생 누적 접속 시간(ms) — 서버가 보낸 "실시간" 값
+  totalTimeAt: 0, // 위 값을 수신한 클라 시각(performance 아님) — 라이브 증가 기준
+  bestMs: 0,      // 자유 레이싱 개인 최고 기록(ms)
 };
 
 /* 레이싱 트랙(카트 서킷) ------------------------------------------------------
@@ -979,7 +982,8 @@ function render(car) {
   drawMinimap(car);
   drawSpeed(car);
   drawRaceHud(); // 프로 레이싱 신호등/GO
-  updateTimeHud(); // 우측 하단 #time (프로 남은시간)
+  updateTimeHud(); // 우측 하단 #time (프로 현재 랩 / 타임어택)
+  updateProTimer(); // 상단 종료 카운트다운 (#proTimer DOM)
 }
 
 /* 프로 레이싱 HUD : 화면 가운데 F1 신호등(5초) + 상단 종료 카운트다운(10초) */
@@ -1022,13 +1026,19 @@ function drawRaceHud() {
     ctx.fillText("GO!", cx, canvas.height * 0.32);
     ctx.shadowBlur = 0;
   }
+}
 
-  // 종료까지 남은 시간 : 가운데 상단에 작은 흰 텍스트(#time 과 동일 스타일)로
-  if (race.state === "racing" && race.endEnd > now) {
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "14px 'Segoe UI', Arial, sans-serif";
-    ctx.textAlign = "center"; ctx.textBaseline = "top";
-    ctx.fillText(fmtRaceTime(race.endEnd - now), cx, 16);
+// 상단 종료 카운트다운 : #attackBtn 과 동일 스타일의 DOM(#proTimer).
+//  프로 레이싱 + 시간제한이 있을 때만 남은 시간을 표시한다.
+const proTimerEl = document.getElementById("proTimer");
+function updateProTimer() {
+  if (!proTimerEl) return;
+  const now = performance.now();
+  if (gameMode === "pro" && race.state === "racing" && race.endEnd > now) {
+    proTimerEl.textContent = fmtRaceTime(race.endEnd - now);
+    proTimerEl.style.display = "block";
+  } else {
+    proTimerEl.style.display = "none";
   }
 }
 
@@ -1476,6 +1486,9 @@ function connect() {
       account.isAdmin = !!msg.isAdmin;
       account.proWins = msg.proWins || 0;
       account.proPlays = msg.proPlays || 0;
+      account.totalTime = msg.totalTime || 0;
+      account.totalTimeAt = Date.now();
+      account.bestMs = msg.bestMs || 0;
       account.loginTime = Date.now();
       playerName = msg.nickname;
       try { localStorage.setItem("carGameToken", msg.token); } catch {}
@@ -1487,6 +1500,8 @@ function connect() {
     } else if (msg.type === "stats") {
       account.proWins = msg.proWins || 0;
       account.proPlays = msg.proPlays || 0;
+      if (typeof msg.totalTime === "number") { account.totalTime = msg.totalTime; account.totalTimeAt = Date.now(); }
+      if (typeof msg.bestMs === "number") account.bestMs = msg.bestMs;
       updateDashboard();
     } else if (msg.type === "counts") {
       // 모드별 참가 인원 → 메뉴 버튼 배지 갱신
@@ -2105,6 +2120,7 @@ function toMenu() {
   updateTouchVisibility();
   updateFreeUI();
   setTimeHud("");
+  updateProTimer(); // 상단 종료 카운트다운 즉시 숨김
 }
 
 // 메뉴 UI 배선
@@ -2165,6 +2181,8 @@ function sendLogout() {
   try { tk = localStorage.getItem("carGameToken"); localStorage.removeItem("carGameToken"); } catch {}
   if (net.connected && net.ws.readyState === WebSocket.OPEN) net.ws.send(JSON.stringify({ type: "logout", token: tk }));
   account.loggedIn = false; account.isAdmin = false; account.userId = null;
+  account.proWins = 0; account.proPlays = 0;
+  account.totalTime = 0; account.totalTimeAt = 0; account.bestMs = 0; account.loginTime = 0;
   updateAuthUI();
 }
 
@@ -2198,12 +2216,15 @@ let dashTimer = null;
 function updateDashboard() {
   document.getElementById("dashWins").textContent = account.proWins;
   document.getElementById("dashPlays").textContent = account.proPlays;
-  if (account.loginTime) {
-    const s = Math.floor((Date.now() - account.loginTime) / 1000);
-    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-    document.getElementById("dashTime").textContent =
-      (h ? h + "시간 " : "") + m + "분 " + sec + "초";
-  }
+  // 접속 시간 = 서버가 보낸 실시간 평생값 + 수신 후 경과분 (라이브, 이중계산 없음)
+  const sinceSync = account.totalTimeAt ? (Date.now() - account.totalTimeAt) : 0;
+  const s = Math.floor((account.totalTime + sinceSync) / 1000);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  document.getElementById("dashTime").textContent =
+    (h ? h + "시간 " : "") + m + "분 " + sec + "초";
+  // 자유 레이싱 개인 최고 기록
+  const best = document.getElementById("dashBest");
+  if (best) best.textContent = account.bestMs ? fmtRaceTime(account.bestMs) : "-";
 }
 function showDashboard() {
   document.getElementById("dashboard").classList.add("show");

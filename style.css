@@ -613,7 +613,8 @@ html, body {
 .rec-empty { color: rgba(255,255,255,0.45); padding: 6px 0; text-align: center; }
 
 /* 기록 시작 버튼 (자유 모드, 가운데 상단) — #time 과 동일한 스타일, 위치만 다름 */
-#attackBtn {
+#attackBtn,
+#proTimer {
   position: absolute;
   top: 28px;
   left: 50%;

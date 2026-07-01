@@ -46,6 +46,9 @@
   <!-- 자유 모드 타임어택 기록 시작 버튼 -->
   <button id="attackBtn">기록 시작</button>
 
+  <!-- 프로 레이싱 상단 종료 카운트다운 (#attackBtn 과 동일 스타일) -->
+  <div id="proTimer"></div>
+
   <!-- 사망 화면 (받혀서 죽은 플레이어에게 표시) -->
   <div id="death">
     <div class="death-title">사망...</div>
@@ -119,6 +122,7 @@
     <div class="dash-card">
       <h2>대시보드</h2>
       <div class="dash-row"><span>접속 시간</span><span id="dashTime">-</span></div>
+      <div class="dash-row"><span>자유 최고 기록</span><span id="dashBest">-</span></div>
       <div class="dash-row"><span>프로 우승</span><span id="dashWins">0</span></div>
       <div class="dash-row"><span>프로 플레이</span><span id="dashPlays">0</span></div>
       <button id="dashClose" class="auth-btn">닫기</button>

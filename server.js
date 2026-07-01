@@ -94,51 +94,73 @@ function persistUser(id) {
 }
 function hashPw(pw, salt) { return crypto.scryptSync(String(pw), salt, 32).toString("hex"); }
 
-// 자유 모드 타임어택 TOP10 기록 (고정 트랙 1개) — Redis 또는 records.json 영속
-const RECORDS_KEY = "cargame:timeattack";
-const RECORDS_FILE = path.join(__dirname, "records.json");
-let timeRecords = []; // [{name, ms}] 오름차순, 상위 10개
-let recTimer = null;
-async function hydrateRecords() {
-  if (useRedis) {
-    try { timeRecords = (await redis.get(RECORDS_KEY)) || []; } catch (e) { console.error("[redis] records:", e.message); }
-  } else {
-    try { timeRecords = JSON.parse(fs.readFileSync(RECORDS_FILE, "utf8")); } catch { timeRecords = []; }
+// 자유 모드 타임어택 TOP10 : 각 유저의 개인 최고기록(user.bestTime)에서 파생.
+//  → 로그인 유저만 기록되고, 유저당 최고 1개만 랭크된다.
+function topRecordsList() {
+  const arr = [];
+  for (const id in users) {
+    const u = users[id];
+    if (u.bestTime) arr.push({ name: u.nickname, ms: u.bestTime });
   }
-}
-function saveRecords() {
-  if (useRedis) {
-    redis.set(RECORDS_KEY, timeRecords).catch((e) => console.error("[redis] saveRecords:", e.message));
-  } else {
-    clearTimeout(recTimer);
-    recTimer = setTimeout(() => fs.writeFile(RECORDS_FILE, JSON.stringify(timeRecords), () => {}), 200);
-  }
+  arr.sort((a, b) => a.ms - b.ms);
+  return arr.slice(0, 10);
 }
 function broadcastRecords() {
-  const payload = JSON.stringify({ type: "topRecords", records: timeRecords });
+  const payload = JSON.stringify({ type: "topRecords", records: topRecordsList() });
   for (const [, p] of players) {
     if (p.active && p.mode === "racing" && p.ws.readyState === p.ws.OPEN) p.ws.send(payload);
   }
 }
 
-const tokens = new Map(); // token -> userId (메모리; 서버 재시작 시 재로그인 필요)
-function issueToken(userId) {
-  const t = crypto.randomBytes(16).toString("hex");
-  tokens.set(t, userId);
-  return t;
+// 토큰 : users.token 에 영속 저장 → 서버 재시작해도 자동 로그인 유지(세션 만료 없음).
+const tokens = new Map(); // token -> userId (users 에서 복원)
+function rebuildTokens() {
+  tokens.clear();
+  for (const id in users) if (users[id].token) tokens.set(users[id].token, id);
 }
 
 // 로그인 확정 : p 에 계정 정보 부착 + authOk 통지
 function loginPlayer(p, userId) {
   const u = users[userId];
   if (!u) return;
+  if (!u.token) { u.token = crypto.randomBytes(16).toString("hex"); persistUser(userId); } // 영구 토큰
+  tokens.set(u.token, userId);
   p.account = { userId, nickname: u.nickname, isAdmin: userId === ADMIN_ID };
   p.isAdmin = p.account.isAdmin;
   p.name = u.nickname;
+  p.loginAt = Date.now();
   send(p, {
     type: "authOk", id: userId, nickname: u.nickname, isAdmin: p.isAdmin,
-    token: issueToken(userId), proWins: u.proWins || 0, proPlays: u.proPlays || 0,
+    token: u.token, proWins: u.proWins || 0, proPlays: u.proPlays || 0,
+    bestMs: u.bestTime || 0, totalTime: liveTotalTime(p),
   });
+}
+
+// 접속 시간을 평생 누적(user.totalTime)에 반영하고 기준시각 리셋
+function flushConnectedTime(p) {
+  if (!p.account || !p.loginAt) return;
+  const u = users[p.account.userId];
+  if (!u) return;
+  u.totalTime = (u.totalTime || 0) + (Date.now() - p.loginAt);
+  p.loginAt = Date.now();
+  persistUser(p.account.userId);
+}
+
+// 현재 진행 중인 세션까지 포함한 "실시간 평생 접속 시간".
+//  클라는 이 값을 수신 시각 기준으로 라이브 증가시키므로 이중 계산이 없다.
+function liveTotalTime(p) {
+  if (!p.account) return 0;
+  const u = users[p.account.userId];
+  if (!u) return 0;
+  return (u.totalTime || 0) + (p.loginAt ? (Date.now() - p.loginAt) : 0);
+}
+
+// 통계(우승/플레이/최고기록/누적접속) 전송
+function sendStats(p) {
+  if (!p.account) return;
+  const u = users[p.account.userId];
+  if (!u) return;
+  send(p, { type: "stats", proWins: u.proWins || 0, proPlays: u.proPlays || 0, bestMs: u.bestTime || 0, totalTime: liveTotalTime(p) });
 }
 
 // --- 정적 파일 서버 ---------------------------------------------------------
@@ -226,8 +248,12 @@ wss.on("connection", (ws) => {
       return;
 
     } else if (msg.type === "logout") {
-      if (msg.token) tokens.delete(msg.token);
-      p.account = null; p.isAdmin = false;
+      flushConnectedTime(p); // 지금까지의 접속 시간 누적 반영
+      if (p.account) {
+        const u = users[p.account.userId];
+        if (u && u.token) { tokens.delete(u.token); u.token = undefined; persistUser(p.account.userId); } // 토큰 무효화
+      }
+      p.account = null; p.isAdmin = false; p.loginAt = 0;
       return;
     }
 
@@ -255,7 +281,7 @@ wss.on("connection", (ws) => {
         send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
       } else { // racing/hard : 고정 맵. 자유 레이싱은 TOP10 기록도 전송
         p.state = null; p.invulnUntil = 0; p.graceUntil = 0;
-        if (mode === "racing") send(p, { type: "topRecords", records: timeRecords });
+        if (mode === "racing") send(p, { type: "topRecords", records: topRecordsList() });
       }
       console.log(`[>] player ${id} joined ${p.mode} as "${p.name}"`);
 
@@ -313,16 +339,18 @@ wss.on("connection", (ws) => {
       broadcastConnected(chatMsg);
 
     } else if (msg.type === "timeAttack") {
-      // 자유 모드 타임어택 기록 제출 → TOP10 갱신
-      if (!p.active || p.mode !== "racing") return;
+      // 자유 모드 타임어택 기록 제출 → 로그인 유저만, 개인 최고기록 갱신 시 TOP10 반영
+      if (!p.active || p.mode !== "racing" || !p.account) return; // 로그인 유저만 기록됨
       const ms = Number(msg.ms);
       if (!Number.isFinite(ms) || ms < 3000 || ms > 600000) return; // 3초~10분 범위만 인정
-      const name = p.account ? p.account.nickname : (p.name || "Player");
-      timeRecords.push({ name, ms: Math.round(ms) });
-      timeRecords.sort((a, b) => a.ms - b.ms);
-      if (timeRecords.length > 10) timeRecords.length = 10;
-      saveRecords();
-      broadcastRecords();
+      const u = users[p.account.userId];
+      if (!u) return;
+      if (!u.bestTime || Math.round(ms) < u.bestTime) {
+        u.bestTime = Math.round(ms);
+        persistUser(p.account.userId);
+        sendStats(p);          // 대시보드 최고기록 갱신
+        broadcastRecords();    // TOP10 갱신
+      }
 
     } else if (msg.type === "state") {
       if (!p.active) return;
@@ -352,7 +380,10 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     const pc = players.get(id);
-    if (pc && pc.mode === "pro" && pc.active && pc.roomId != null) leaveRoom(id, pc);
+    if (pc) {
+      flushConnectedTime(pc); // 접속 종료 시점까지의 접속 시간 누적 반영
+      if (pc.mode === "pro" && pc.active && pc.roomId != null) leaveRoom(id, pc);
+    }
     players.delete(id);
     console.log(`[-] player ${id} disconnected (total ${players.size})`);
   });
@@ -584,7 +615,7 @@ function enterRoom(pid, p, roomId) {
   const room = rooms.get(roomId);
   if (!room) return;
   p.roomId = roomId;
-  p.ready = false; p.lap = 0; p.prog = 0; p.finished = false; p.finishTime = 0;
+  p.ready = false; p.lap = 0; p.lapMs = 0; p.prog = 0; p.finished = false; p.finishTime = 0;
   p.slot = assignSlot(roomId);
   p.state = null; p.invulnUntil = 0; p.graceUntil = 0;
   send(p, { type: "roomJoined", roomId, isHost: room.hostId === pid });
@@ -636,7 +667,7 @@ function endRoomRace(roomId) {
       u.proPlays = (u.proPlays || 0) + 1;
       if (counted && id === winnerId) u.proWins = (u.proWins || 0) + 1;
       persistUser(p.account.userId);
-      send(p, { type: "stats", proWins: u.proWins, proPlays: u.proPlays });
+      sendStats(p); // 대시보드 통계 갱신(우승/플레이/접속시간/최고기록)
     }
     send(p, { type: "toFreeRacing" }); // 자유 레이싱으로 이동
     p.active = false; p.state = null; p.roomId = null;
@@ -654,7 +685,7 @@ function proTick() {
       if (now >= room.countdownAt) {
         room.state = "racing"; room.raceStartAt = now;
         room.raceEndAt = room.timeLimitMs > 0 ? now + room.timeLimitMs : 0;
-        for (const { p } of roomMembers(rid)) { p.lap = 0; p.prog = 0; p.finished = false; p.finishTime = 0; }
+        for (const { p } of roomMembers(rid)) { p.lap = 0; p.lapMs = 0; p.prog = 0; p.finished = false; p.finishTime = 0; }
         broadcastRoomList();
       }
       broadcastRoom(rid);
@@ -765,8 +796,15 @@ setInterval(() => {
   }
 }, 1000 / TICK_RATE);
 
-// 계정/기록 캐시를 적재한 뒤 서버를 연다
-Promise.all([hydrateUsers(), hydrateRecords()]).then(() => {
+// 접속 중인 로그인 유저의 평생 접속 시간을 주기적으로 누적 저장(1분마다).
+//  (연결이 오래 유지돼도 중간중간 반영되도록 — 크래시/강제종료 대비)
+setInterval(() => {
+  for (const [, p] of players) flushConnectedTime(p);
+}, 60000);
+
+// 계정 캐시를 적재하고 토큰 인덱스를 구성한 뒤 서버를 연다
+hydrateUsers().then(() => {
+  rebuildTokens();
   server.listen(PORT, () => {
     console.log(`Car game server running at http://localhost:${PORT} (storage: ${useRedis ? "Upstash Redis" : "files"})`);
   });
