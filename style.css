@@ -486,7 +486,7 @@ html, body {
   cursor: pointer;
   transition: transform 0.1s ease, background 0.15s ease;
 }
-.auth-btn:hover { background: rgba(255, 255, 255, 0.26); transform: translateY(-2px); }
+.auth-btn:hover { background: rgba(255, 255, 255, 0.26); }
 /* 인풋과 버튼 사이 여백 */
 .auth-form .auth-btn { margin-top: 10px; }
 .auth-switch { font-size: 12px; color: rgba(255, 255, 255, 0.55); text-align: center; margin-top: 8px; }
