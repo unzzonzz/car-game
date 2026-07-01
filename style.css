@@ -636,7 +636,7 @@ html, body {
 #attackBtn,
 #proTimer {
   position: absolute;
-  top: 28px;
+  top: 22px;
   left: 50%;
   transform: translateX(-50%);
   outline: none;
