@@ -97,6 +97,211 @@ const account = {
   bestMs: 0,      // 자유 레이싱 개인 최고 기록(ms)
 };
 
+/* =============================================================================
+ *  효과음 (WebAudio 신디사이저 — 외부 오디오 파일 없이 즉석 합성)
+ *  브라우저 자동재생 정책상 첫 사용자 입력(클릭/키/터치)에서 컨텍스트를 연다.
+ *  종류: 버튼클릭 / 충돌 / 폭발 / 카운트다운 비프 / 출발(GO)·게임시작 /
+ *        랩 완료 / 기록 갱신 / 드리프트(지속 스크리치)
+ * ========================================================================== */
+const SFX = (() => {
+  let ctx = null, master = null, enabled = true, noiseBuf = null;
+  let driftSrc = null, driftGain = null; // 지속되는 드리프트 스크리치 노드
+  let engOsc1 = null, engOsc2 = null, engFilt = null, engGain = null; // 속도 연동 엔진 드론
+
+  function ensure() {
+    if (ctx) return ctx;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { enabled = false; return null; }
+    ctx = new AC();
+    master = ctx.createGain();
+    master.gain.value = 0.5;
+    master.connect(ctx.destination);
+    return ctx;
+  }
+  function resume() { const c = ensure(); if (c && c.state === "suspended") c.resume(); }
+
+  // 단순 오실레이터 톤 (필요 시 주파수 슬라이드)
+  function tone(freq, dur, { type = "sine", gain = 0.3, when = 0, slideTo = 0 } = {}) {
+    const c = ensure(); if (!c) return;
+    const t0 = c.currentTime + when;
+    const osc = c.createOscillator(), g = c.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t0);
+    if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(gain, t0 + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(g); g.connect(master);
+    osc.start(t0); osc.stop(t0 + dur + 0.03);
+  }
+
+  // 재사용 화이트 노이즈 소스
+  function noiseSource() {
+    const c = ensure(); if (!c) return null;
+    if (!noiseBuf) {
+      noiseBuf = c.createBuffer(1, c.sampleRate, c.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    const src = c.createBufferSource();
+    src.buffer = noiseBuf; src.loop = true;
+    return src;
+  }
+
+  // 노이즈 버스트 (충돌/폭발)
+  function burst(dur, { gain = 0.5, freq = 800 } = {}) {
+    const c = ensure(); if (!c) return;
+    const src = noiseSource(); if (!src) return;
+    const filt = c.createBiquadFilter();
+    filt.type = "lowpass"; filt.frequency.value = freq;
+    const g = c.createGain(), t0 = c.currentTime;
+    g.gain.setValueAtTime(gain, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(filt); filt.connect(g); g.connect(master);
+    src.start(t0); src.stop(t0 + dur + 0.03);
+  }
+
+  return {
+    resume,
+    setEnabled(v) { enabled = v; if (!v) { this.driftStop(); this.engineStop(); } },
+    isEnabled() { return enabled; },
+    click()     { if (enabled) tone(660, 0.06, { type: "triangle", gain: 0.16 }); },
+    collision() { if (!enabled) return; burst(0.32, { gain: 0.45, freq: 520 }); tone(95, 0.28, { type: "sawtooth", gain: 0.3, slideTo: 42 }); },
+    explosion() { if (!enabled) return; burst(0.6, { gain: 0.6, freq: 760 }); tone(72, 0.5, { type: "sawtooth", gain: 0.38, slideTo: 30 }); },
+    beep()      { if (enabled) tone(430, 0.13, { type: "square", gain: 0.22 }); },
+    go()        { if (enabled) tone(880, 0.3, { type: "square", gain: 0.28 }); },
+    start()     { if (!enabled) return; tone(523, 0.1, { gain: 0.22 }); tone(659, 0.1, { gain: 0.22, when: 0.1 }); tone(784, 0.2, { gain: 0.26, when: 0.2 }); },
+    lap()       { if (!enabled) return; tone(784, 0.1, { type: "triangle", gain: 0.24 }); tone(1047, 0.2, { type: "triangle", gain: 0.24, when: 0.1 }); },
+    record()    { if (!enabled) return; [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.15, { type: "triangle", gain: 0.24, when: i * 0.09 })); },
+    // 부스트 단계음 : 단계가 높을수록 톤/노이즈 스윕이 더 높고 밝게
+    boost(stage) {
+      if (!enabled) return;
+      const c = ensure(); if (!c) return;
+      const f0 = [0, 300, 380, 470][stage] || 300;
+      tone(f0, 0.4, { type: "sawtooth", gain: 0.2, slideTo: f0 * 2.4 }); // 상승 톤
+      const src = noiseSource(); if (!src) return;                       // 위로 훑는 휘슬 스윕
+      const filt = c.createBiquadFilter();
+      filt.type = "bandpass"; filt.Q.value = 1.2;
+      const t0 = c.currentTime;
+      filt.frequency.setValueAtTime(700, t0);
+      filt.frequency.exponentialRampToValueAtTime(3500 + stage * 800, t0 + 0.35);
+      const g = c.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.22, t0 + 0.05);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.4);
+      src.connect(filt); filt.connect(g); g.connect(master);
+      src.start(t0); src.stop(t0 + 0.45);
+    },
+    // 엔진 드론 : 속도에 따라 피치/밝기/음량이 자연스럽게 올라간다
+    engineStart() {
+      if (!enabled) return;
+      const c = ensure(); if (!c || engOsc1) return;
+      engOsc1 = c.createOscillator(); engOsc1.type = "sawtooth"; engOsc1.frequency.value = 55;
+      engOsc2 = c.createOscillator(); engOsc2.type = "triangle"; engOsc2.frequency.value = 110;
+      engFilt = c.createBiquadFilter(); engFilt.type = "lowpass"; engFilt.frequency.value = 420;
+      const g2 = c.createGain(); g2.gain.value = 0.2; // 옥타브 위 성분은 아주 작게(부드럽게)
+      engGain = c.createGain(); engGain.gain.value = 0.0001;
+      engOsc1.connect(engFilt);
+      engOsc2.connect(g2); g2.connect(engFilt);
+      engFilt.connect(engGain); engGain.connect(master);
+      engOsc1.start(); engOsc2.start();
+      engGain.gain.linearRampToValueAtTime(0.03, c.currentTime + 0.1);
+    },
+    engineUpdate(kmh) {
+      if (!engOsc1 || !ctx) return;
+      const t = ctx.currentTime;
+      const k = Math.min(kmh, 340);                    // 피치가 무한정 올라가 귀아프지 않게 상한
+      const f = 38 + k * 0.26;                          // 속도 → 피치(완만한 저역 럼블)
+      engOsc1.frequency.setTargetAtTime(f, t, 0.06);
+      engOsc2.frequency.setTargetAtTime(f * 2, t, 0.06);
+      engFilt.frequency.setTargetAtTime(320 + k * 2.6, t, 0.06); // 고음 억제
+      const gain = 0.026 + 0.035 * Math.min(kmh / 320, 1.2);     // 빠를수록 살짝만 커지게
+      engGain.gain.setTargetAtTime(enabled ? gain : 0.0001, t, 0.08);
+    },
+    engineStop() {
+      if (!engOsc1 || !ctx) { engOsc1 = engOsc2 = engFilt = engGain = null; return; }
+      const t = ctx.currentTime;
+      try {
+        engGain.gain.cancelScheduledValues(t);
+        engGain.gain.setTargetAtTime(0.0001, t, 0.05);
+        engOsc1.stop(t + 0.25); engOsc2.stop(t + 0.25);
+      } catch {}
+      engOsc1 = engOsc2 = engFilt = engGain = null;
+    },
+    driftStart() {
+      if (!enabled) return;
+      const c = ensure(); if (!c || driftSrc) return; // 이미 재생 중이면 무시
+      const src = noiseSource(); if (!src) return;
+      const filt = c.createBiquadFilter();
+      filt.type = "bandpass"; filt.frequency.value = 1900; filt.Q.value = 2.5;
+      const g = c.createGain();
+      g.gain.setValueAtTime(0.0001, c.currentTime);
+      g.gain.linearRampToValueAtTime(0.11, c.currentTime + 0.05);
+      src.connect(filt); filt.connect(g); g.connect(master);
+      src.start();
+      driftSrc = src; driftGain = g;
+    },
+    driftStop() {
+      if (!driftSrc || !ctx) { driftSrc = driftGain = null; return; }
+      const t = ctx.currentTime;
+      try {
+        driftGain.gain.cancelScheduledValues(t);
+        driftGain.gain.setValueAtTime(0.11, t);
+        driftGain.gain.linearRampToValueAtTime(0.0001, t + 0.08);
+        driftSrc.stop(t + 0.1);
+      } catch {}
+      driftSrc = driftGain = null;
+    },
+  };
+})();
+
+let sfxCountLit = -1; // 카운트다운에서 마지막으로 비프를 낸 불 개수(중복 방지)
+
+// 드리프트 지속음 : 실제 미끄러지는 동안(측면속도 큼 + 어느 정도 주행 중)만 재생
+let sfxDrifting = false;
+function updateDriftSfx() {
+  const want = gameState === "playing" && CAR.drifting && Math.abs(CAR.lf) > 20;
+  if (want && !sfxDrifting) { sfxDrifting = true; SFX.driftStart(); }
+  else if (!want && sfxDrifting) { sfxDrifting = false; SFX.driftStop(); }
+}
+
+// 엔진 드론 : 주행 중이면 켜고 매 프레임 속도로 피치 갱신
+let sfxEngineOn = false;
+function updateEngineSfx(kmh) {
+  if (!SFX.isEnabled()) return;
+  if (!sfxEngineOn) { sfxEngineOn = true; SFX.engineStart(); }
+  SFX.engineUpdate(kmh);
+}
+function stopEngineSfx() { if (sfxEngineOn) { sfxEngineOn = false; SFX.engineStop(); } }
+
+// 부스트 단계 : 450/500/525 통과 시 단계음 (경계 떨림 방지용 히스테리시스 15)
+let sfxBoostStage = 0;
+function updateBoostSfx(kmh) {
+  const up = [Infinity, 450, 500, 525], H = 15;
+  let stage = sfxBoostStage;
+  while (stage < 3 && kmh >= up[stage + 1]) stage++;       // 위로 통과 → 단계 상승
+  while (stage > 0 && kmh < up[stage] - H) stage--;         // 충분히 내려가면 단계 하강
+  if (stage > sfxBoostStage) SFX.boost(stage);             // 올라갈 때만 소리
+  sfxBoostStage = stage;
+}
+
+// 음소거 토글 (m 키) + 가운데 하단 토스트
+const muteToastEl = document.getElementById("muteToast");
+function showMuteToast(text) {
+  if (!muteToastEl) return;
+  muteToastEl.textContent = text;
+  muteToastEl.classList.remove("show");
+  void muteToastEl.offsetWidth; // 리플로우 → 연타해도 애니메이션 재시작
+  muteToastEl.classList.add("show");
+}
+function toggleMute() {
+  const enable = !SFX.isEnabled();
+  SFX.setEnabled(enable);
+  // 프레임 오디오 플래그 리셋 → 음소거 해제 시 엔진/드리프트가 다시 시작되도록
+  sfxEngineOn = false; sfxDrifting = false; sfxBoostStage = 0;
+  showMuteToast(enable ? "음소거 해제" : "음소거");
+}
+
 /* 레이싱 트랙(카트 서킷) ------------------------------------------------------
  *  중심선을 "별모양 보장(자기교차 없음)" 극좌표식 폐곡선으로 생성한다.
  *      point(θ) = center + ( R(θ)·cosθ , R(θ)·sinθ ),  R(θ) > 0
@@ -390,6 +595,7 @@ window.addEventListener("keydown", (e) => {
     case "KeyS": keys.s = true; break;
     case "KeyD": keys.d = true; break;
     case "Space": keys.space = true; e.preventDefault(); break;
+    case "KeyM": if (!e.repeat) toggleMute(); break; // 음소거 토글 (길게 눌러도 1회)
   }
 });
 window.addEventListener("keyup", (e) => {
@@ -641,14 +847,20 @@ function updatePhysics(car, dt) {
 
 /* 8) 충돌 처리 — 맵 경계 ------------------------------------------------------
  *  두 모드 모두 맵 밖으로 못 나가게 차체를 벽 안쪽에 가둔다(죽음 없음). */
+let lastWallSfx = 0; // 벽 충돌음 쿨다운(연속 마찰 시 스팸 방지)
 function updateCollision(car) {
   const half = car.length / 2;
+  const preSpeed = Math.hypot(car.vx, car.vy); // 충돌 전 속도(효과음 판단용)
   let hit = false;
   if (car.x < half) { car.x = half; car.vx = 0; hit = true; }
   if (car.x > world.w - half) { car.x = world.w - half; car.vx = 0; hit = true; }
   if (car.y < half) { car.y = half; car.vy = 0; hit = true; }
   if (car.y > world.h - half) { car.y = world.h - half; car.vy = 0; hit = true; }
-  if (hit) decompose(car); // 벽에 흡수된 속도를 차체 성분에 반영
+  if (hit) {
+    decompose(car); // 벽에 흡수된 속도를 차체 성분에 반영
+    const now = performance.now();
+    if (preSpeed > 60 && now - lastWallSfx > 250) { lastWallSfx = now; SFX.collision(); }
+  }
 }
 
 /* 9) 노면 — 레이싱 트랙 이탈 시 감속 ------------------------------------------
@@ -703,6 +915,7 @@ function updateLap(car) {
     race.lap++;
     race.checkpoint = false;
     race.lapStartTime = now; // 다음 랩 타이머 시작
+    SFX.lap();               // 랩 완료 차임
   }
   race.lastPhase = ph;
   race.prog = race.lap + ph;
@@ -996,6 +1209,7 @@ function drawRaceHud() {
   if (race.state === "countdown" && race.countdownEnd > now) {
     const remain = race.countdownEnd - now;
     const lit = clamp(5 - Math.floor(remain / 1000), 0, 5); // 1초마다 하나씩 차올라 5개 → 소등=출발
+    if (lit > sfxCountLit) { sfxCountLit = lit; if (lit > 0) SFX.beep(); } // 새 불이 켜질 때마다 비프
     const r = 26, gap = 70, y = canvas.height * 0.32;
     const startX = cx - (gap * 4) / 2;
     // 신호등 패널 배경
@@ -1501,7 +1715,11 @@ function connect() {
       account.proWins = msg.proWins || 0;
       account.proPlays = msg.proPlays || 0;
       if (typeof msg.totalTime === "number") { account.totalTime = msg.totalTime; account.totalTimeAt = Date.now(); }
-      if (typeof msg.bestMs === "number") account.bestMs = msg.bestMs;
+      if (typeof msg.bestMs === "number") {
+        const improved = msg.bestMs > 0 && (!account.bestMs || msg.bestMs < account.bestMs); // 더 빠른 기록
+        account.bestMs = msg.bestMs;
+        if (improved) SFX.record(); // 기록 갱신 팡파레
+      }
       updateDashboard();
     } else if (msg.type === "counts") {
       // 모드별 참가 인원 → 메뉴 버튼 배지 갱신
@@ -1523,6 +1741,7 @@ function connect() {
       // 서버 통지: 누군가 죽었다 → 그 자리에서 그 차 색으로 폭발
       const color = msg.victimId === net.id ? myColor() : colorForId(msg.victimId);
       spawnExplosion(msg.x, msg.y, color);
+      SFX.explosion(); // 폭발음
       // 내가 죽인 경우 내 화면을 흔든다 (타격감)
       if (msg.killerId === net.id) addShake(34);
     } else if (msg.type === "chat") {
@@ -1684,13 +1903,16 @@ function handleRaceMessage(msg) {
   race.countdownEnd = msg.countdownMs > 0 ? performance.now() + msg.countdownMs : 0;
   race.endEnd = msg.endMs > 0 ? performance.now() + msg.endMs : 0;
 
-  // 카운트다운 → 레이싱 전환 시 : 바퀴 추적/랩 타이머 초기화 + GO 표시
+  if (prevState !== "countdown" && race.state === "countdown") sfxCountLit = -1; // 새 카운트다운 비프 준비
+
+  // 카운트다운 → 레이싱 전환 시 : 바퀴 추적/랩 타이머 초기화 + GO 표시/효과음
   if (prevState !== "racing" && race.state === "racing") {
     race.lap = 0; race.prog = 0; race.checkpoint = false;
     race.lastPhase = trackPhase(CAR.x, CAR.y, world.track);
     race.lapStartTime = performance.now();
     race.lapMs = 0;
     race.goFlashUntil = performance.now() + 1200;
+    SFX.go(); // 출발 신호
   }
   updateRaceUI();
 }
@@ -2023,6 +2245,9 @@ function frame(now) {
 
   // 메뉴 화면(미입장)에선 물리/네트워크를 멈춘다 (메뉴 오버레이가 화면을 덮음)
   if (gameState !== "playing") {
+    if (sfxDrifting) { sfxDrifting = false; SFX.driftStop(); } // 재생 중이던 드리프트음 정지
+    stopEngineSfx();          // 엔진 드론 정지
+    sfxBoostStage = 0;        // 부스트 단계 리셋 → 재진입 시 다시 울림
     requestAnimationFrame(frame);
     return;
   }
@@ -2042,6 +2267,10 @@ function frame(now) {
   updateLap(CAR);             // 프로 레이싱 바퀴 추적
   updateAttack(CAR);          // 자유 모드 타임어택 계측
   updateSkid(CAR);            // 스키드 마크
+  const spdKmh = Math.abs(CAR.lf) * PXS_TO_KMH;
+  updateDriftSfx();           // 드리프트 스크리치(지속음) 시작/정지
+  updateEngineSfx(spdKmh);    // 엔진 드론 (속도 → 피치)
+  updateBoostSfx(spdKmh);     // 부스트 단계음 (450/500/525)
   updateCamera(CAR, dt);      // 카메라 추적 (+ 흔들림 감쇠)
 
   // ----- 네트워크 -----
@@ -2093,6 +2322,7 @@ function startGame(mode) {
   }
 
   if (mode === "racing" || mode === "hard") resetAttack();
+  if (mode !== "pro") SFX.start(); // 게임 시작 사운드(프로는 방/카운트다운에서 GO로 대체)
 
   gameState = "playing";
   document.getElementById("menu").classList.remove("show");
@@ -2328,4 +2558,17 @@ setupMenu();
 setupChat();
 setupAuth();
 setupTouch();
+setupAudio();
 requestAnimationFrame(frame);
+
+// 효과음 배선 : 첫 사용자 입력에서 오디오 컨텍스트 재개 + 버튼 클릭음
+function setupAudio() {
+  const wake = () => SFX.resume();
+  ["pointerdown", "keydown", "touchstart"].forEach((ev) =>
+    window.addEventListener(ev, wake, { passive: true }));
+  // 모든 버튼 클릭에 클릭음 (주행용 터치 버튼 제외 — 조작마다 울리면 시끄러움)
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (btn && !btn.classList.contains("touch-btn")) SFX.click();
+  }, true);
+}

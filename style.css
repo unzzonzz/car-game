@@ -46,6 +46,28 @@ html, body {
   pointer-events: none;
 }
 
+/* 음소거 토스트 — #time 과 완전히 동일한 텍스트 스타일, 위치만 가운데 하단 */
+#muteToast {
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  font-size: 14px;
+  font-weight: 400;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 1px;
+  pointer-events: none;
+  opacity: 0;
+}
+#muteToast.show { animation: muteToast 1.3s ease forwards; }
+@keyframes muteToast {
+  0% { opacity: 0; }
+  12% { opacity: 1; }
+  70% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
 /* 미니맵 */
 #minimap {
   position: absolute;
