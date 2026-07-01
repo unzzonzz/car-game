@@ -70,10 +70,13 @@ const race = {
   countdownEnd: 0,   // 로컬 시각(performance.now): 카운트다운 끝
   endEnd: 0,         // 로컬 시각: 종료 타이머 끝 (0=없음)
   goFlashUntil: 0,   // "GO!" 표시 끝 시각
-  // 내 바퀴 추적 + 랩 타이밍
+  // 내 바퀴 추적 + 레이스 타이밍
   lap: 0, prog: 0, lastPhase: 0, checkpoint: false,
-  lapStartTime: 0,   // 현재 랩 시작 시각(performance.now)
-  lapMs: 0,          // 현재 랩 진행 시간(ms)
+  raceStartTime: 0,  // 레이스 출발 시각(performance.now) — 랩마다 리셋하지 않음
+  lapMs: 0,          // 출발부터의 누적 시간(ms) — 완주 시 고정 (#time 라이브 표시용)
+  lapMark: 0,        // 마지막 랩을 넘긴 순간의 누적 시간(ms) — 순위판 기록용(랩마다만 갱신)
+  done: false,       // 마지막 바퀴까지 통과(완주)했는지 → 시간 정지
+  finalMs: 0,        // 완주 시점의 최종 누적 기록(ms)
 };
 
 const OFFTRACK_DRAG = 2.4;   // 트랙 이탈 시 추가 감속 계수 (클수록 풀밭처럼 느려짐)
@@ -908,18 +911,27 @@ function trackPhase(x, y, track) {
 // 프로 레이싱 : 바퀴수 추적 (중간 체크포인트를 지나야 시작선 통과를 1바퀴로 인정 → 역주행 악용 방지)
 function updateLap(car) {
   if (gameMode !== "pro" || race.state !== "racing") return;
+  if (race.done) { race.lapMs = race.finalMs; return; } // 완주 후 시간 고정
   const now = performance.now();
   const ph = trackPhase(car.x, car.y, world.track);
   if (ph > 0.4 && ph < 0.6) race.checkpoint = true;           // 중간 통과
   if (race.checkpoint && race.lastPhase > 0.75 && ph < 0.25) { // 시작선 정방향 통과 → 랩 완료
     race.lap++;
     race.checkpoint = false;
-    race.lapStartTime = now; // 다음 랩 타이머 시작
+    race.lapMark = now - race.raceStartTime; // 이 랩을 넘긴 순간의 누적 시간 → 순위판 기록
     SFX.lap();               // 랩 완료 차임
+    if (race.lap >= race.laps) {              // 마지막 바퀴 통과 → 완주, 누적 시간 정지
+      race.done = true;
+      race.finalMs = now - race.raceStartTime;
+      race.lapMs = race.finalMs;
+      race.lastPhase = ph;
+      race.prog = race.lap;
+      return;
+    }
   }
   race.lastPhase = ph;
   race.prog = race.lap + ph;
-  race.lapMs = now - race.lapStartTime; // 현재 랩 진행 시간
+  race.lapMs = now - race.raceStartTime; // 출발부터의 누적 시간(랩마다 리셋 안 함)
 }
 
 // 타임어택 상태 초기화 (모드 진입/이탈 시)
@@ -1905,11 +1917,12 @@ function handleRaceMessage(msg) {
 
   if (prevState !== "countdown" && race.state === "countdown") sfxCountLit = -1; // 새 카운트다운 비프 준비
 
-  // 카운트다운 → 레이싱 전환 시 : 바퀴 추적/랩 타이머 초기화 + GO 표시/효과음
+  // 카운트다운 → 레이싱 전환 시 : 바퀴 추적/누적 타이머 초기화 + GO 표시/효과음
   if (prevState !== "racing" && race.state === "racing") {
     race.lap = 0; race.prog = 0; race.checkpoint = false;
+    race.done = false; race.finalMs = 0; race.lapMark = 0;
     race.lastPhase = trackPhase(CAR.x, CAR.y, world.track);
-    race.lapStartTime = performance.now();
+    race.raceStartTime = performance.now();
     race.lapMs = 0;
     race.goFlashUntil = performance.now() + 1200;
     SFX.go(); // 출발 신호
@@ -2148,7 +2161,7 @@ function netSend(car, now) {
   if (gameMode === "pro" && race.state === "racing") {
     msg.lap = race.lap;
     msg.prog = +race.prog.toFixed(3);
-    msg.lapMs = Math.round(race.lapMs);
+    msg.lapMs = Math.round(race.lapMark); // 순위판: 랩 넘긴 순간의 기록(라이브 아님)
   }
   net.ws.send(JSON.stringify(msg));
 }
