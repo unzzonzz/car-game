@@ -493,25 +493,6 @@ html, body {
 .auth-link { color: #fff; font-weight: 700; cursor: pointer; text-decoration: underline; }
 #welcomeMsg { display: block; text-align: center; color: #fff; font-weight: 700; margin-bottom: 10px; }
 
-/* 대시보드 버튼 (좌측 하단) */
-#dashBtn {
-  position: absolute;
-  left: 24px;
-  bottom: 130px;     /* 속도계 위 */
-  display: none;     /* 로그인 시 JS 표시 */
-  padding: 9px 16px;
-  font-size: 14px;
-  font-weight: 700;
-  color: #fff;
-  background: rgba(0, 0, 0, 0.5);
-  border: none;
-  border-radius: 100px;
-  cursor: pointer;
-  z-index: 31;
-  transition: transform 0.1s ease, background 0.15s ease;
-}
-#dashBtn:hover { background: rgba(0, 0, 0, 0.72); }
-
 /* 대시보드 패널 */
 #dashboard {
   position: absolute;
@@ -633,6 +614,25 @@ html, body {
 #attackBtn {
   position: absolute;
   top: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  outline: none;
+  display: none;
+  font-size: 14px;
+  font-weight: 400;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 1px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  z-index: 22;
+  text-shadow: 0 4px 24px rgba(0, 0, 0, 0.7);
+}
+/* 대시보드 버튼 */
+#dashBtn {
+  position: absolute;
+  bottom: 28px;
   left: 50%;
   transform: translateX(-50%);
   outline: none;
