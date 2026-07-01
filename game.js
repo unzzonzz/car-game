@@ -1266,19 +1266,29 @@ function drawCar(car, color = "#e23b2e", isAdmin = false) {
   ctx.fillStyle = "#2a2a2a";
   ctx.fillRect(-L / 2 + 4, -W / 2 + 2, 6, W - 4); // 뒷유리
 
-  // 사이드미러 한 쌍 (앞유리 옆 = 차 앞쪽) — 앞뒤를 확실히 구분 ㅋㅋ
-  const mx = L / 2 - 12; // 앞유리 부근 x
-  const mLen = 5;        // 미러 길이(차 길이 방향)
-  const mDepth = 3.5;    // 차체 밖으로 튀어나온 깊이
-  // 미러 받침(스토크) — 차체 색
-  ctx.fillStyle = color;
-  ctx.fillRect(mx, -W / 2 - mDepth, mLen, mDepth);       // 왼쪽
-  ctx.fillRect(mx, W / 2, mLen, mDepth);                 // 오른쪽
-  // 미러 유리 — 어둡게
-  ctx.fillStyle = "#14181c";
-  ctx.fillRect(mx + 1, -W / 2 - mDepth, mLen - 2, mDepth - 1); // 왼쪽 유리
-  ctx.fillRect(mx + 1, W / 2 + 1, mLen - 2, mDepth - 1);       // 오른쪽 유리
+  // ===== 사이드미러 =====
+  const mx = L / 2 - 12;     // 앞유리 부근
+  const mirrorLen = 5;       // 길이
+  const mirrorWidth = 2;   // 두께
+  const mirrorGap = -.5;     // 차체와 거리
+  const mirrorAngle = 0.5;  // 약 19도
 
+  ctx.fillStyle = color;
+
+  // 왼쪽 미러
+  ctx.save();
+  ctx.translate(mx + mirrorLen, -W / 2 - mirrorGap); // 차체쪽 끝이 회전축
+  ctx.rotate(mirrorAngle);
+  ctx.fillRect(-mirrorLen - 2.7, -mirrorWidth / 2, mirrorLen, mirrorWidth);
+  ctx.restore();
+
+  // 오른쪽 미러
+  ctx.save();
+  ctx.translate(mx + mirrorLen, W / 2 + mirrorGap); // 차체쪽 끝이 회전축
+  ctx.rotate(-mirrorAngle);
+  ctx.fillRect(-mirrorLen - 2.7, -mirrorWidth / 2, mirrorLen, mirrorWidth);
+  ctx.restore();
+  
   ctx.restore();
 }
 
