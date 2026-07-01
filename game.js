@@ -375,6 +375,16 @@ function updateSteering(car, dt) {
   // 고속 권한 감소 : 1(저속) → highSpeedSteer(고속) 로 보간
   let authority = lerp(1, car.highSpeedSteer, speedRatio);
 
+  const trail =
+      car.braking > 0 &&
+      car.braking < 0.8 &&
+      speed > 90 * KMH_TO_PXS &&
+      Math.abs(car.steerInput) > 0.15;
+
+  if (trail) {
+      authority *= 1.18;
+  }
+
   // 드리프트 중엔 뒤가 풀려 차가 더 잘 돈다 → 조향 권한을 키워 슬립각을 크게 만든다
   //  (car.drifting 은 직전 프레임 updateGrip 에서 갱신된 값 — 한 프레임 지연은 무시 가능)
   if (car.drifting) authority *= car.driftSteerBoost;
@@ -469,7 +479,26 @@ function updateGrip(car, dt) {
   if (car.braking > 0 && speed > driftSpeed) {
     // 빠를수록 더 잘 미끄러지게 (driftGrip 쪽으로 강하게)
     const over = clamp((speed - driftSpeed) / (car.maxSpeed * KMH_TO_PXS - driftSpeed), 0, 1);
-    lateralFriction = lerp(car.grip * 0.35, car.driftGrip, over);
+    if (car.braking > 0 && Math.abs(car.steerInput) > 0.1) {
+
+    // 트레일 브레이킹
+    if (car.braking < 0.6) {
+
+        lateralFriction = lerp(
+            car.grip,
+            car.grip * 0.72,
+            over
+        );
+
+    } else {
+
+        // 기존 드리프트
+        lateralFriction =
+            lerp(car.grip * 0.35, car.driftGrip, over);
+
+    }
+
+  }
 
     // 실제로 옆으로 미끄러지고 있을 때(측면 속도 충분)만 "드리프트 중"으로 본다.
     //  → 브레이크만 밟고 직진하면 자국/부스트 없음. 조향을 같이 넣어야 드리프트.
