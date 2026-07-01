@@ -26,7 +26,6 @@ html, body {
   left: 28px;
   bottom: 22px;
   font-size: 14px;
-  font-weight: 400;
   color: #fff;
   font-variant-numeric: tabular-nums;
   letter-spacing: 1px;
@@ -39,7 +38,6 @@ html, body {
   right: 28px;
   bottom: 22px;
   font-size: 14px;
-  font-weight: 400;
   color: #fff;
   font-variant-numeric: tabular-nums;
   letter-spacing: 1px;
@@ -50,15 +48,15 @@ html, body {
 #muteToast {
   position: absolute;
   left: 50%;
-  bottom: 22px;
-  transform: translateX(-50%);
+  top: 50%;
+  transform: translate(-50%, -50%);
   font-size: 14px;
-  font-weight: 400;
   color: #fff;
   font-variant-numeric: tabular-nums;
   letter-spacing: 1px;
   pointer-events: none;
   opacity: 0;
+  text-shadow: 0 4px 24px rgba(0, 0, 0, 0.7);
 }
 #muteToast.show { animation: muteToast 1.3s ease forwards; }
 @keyframes muteToast {
@@ -644,7 +642,6 @@ html, body {
   outline: none;
   display: none;
   font-size: 14px;
-  font-weight: 400;
   color: #fff;
   font-variant-numeric: tabular-nums;
   letter-spacing: 1px;
@@ -663,7 +660,6 @@ html, body {
   outline: none;
   display: none;
   font-size: 14px;
-  font-weight: 400;
   color: #fff;
   font-variant-numeric: tabular-nums;
   letter-spacing: 1px;
