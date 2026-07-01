@@ -94,21 +94,25 @@ function persistUser(id) {
 }
 function hashPw(pw, salt) { return crypto.scryptSync(String(pw), salt, 32).toString("hex"); }
 
-// 자유 모드 타임어택 TOP10 : 각 유저의 개인 최고기록(user.bestTime)에서 파생.
+// 타임어택 TOP10 : 각 유저의 개인 최고기록 필드에서 파생 (모드별로 필드가 다름).
 //  → 로그인 유저만 기록되고, 유저당 최고 1개만 랭크된다.
-function topRecordsList() {
+//  자유 레이싱(racing)=bestTime, 하드코어(hard)=bestTimeHard 로 리더보드를 분리한다.
+const RECORD_FIELD = { racing: "bestTime", hard: "bestTimeHard" };
+function topRecordsList(field) {
   const arr = [];
   for (const id in users) {
     const u = users[id];
-    if (u.bestTime) arr.push({ name: u.nickname, ms: u.bestTime });
+    if (u[field]) arr.push({ name: u.nickname, ms: u[field] });
   }
   arr.sort((a, b) => a.ms - b.ms);
   return arr.slice(0, 10);
 }
-function broadcastRecords() {
-  const payload = JSON.stringify({ type: "topRecords", records: topRecordsList() });
+function broadcastRecords(mode) {
+  const field = RECORD_FIELD[mode];
+  if (!field) return;
+  const payload = JSON.stringify({ type: "topRecords", records: topRecordsList(field) });
   for (const [, p] of players) {
-    if (p.active && p.mode === "racing" && p.ws.readyState === p.ws.OPEN) p.ws.send(payload);
+    if (p.active && p.mode === mode && p.ws.readyState === p.ws.OPEN) p.ws.send(payload);
   }
 }
 
@@ -132,7 +136,7 @@ function loginPlayer(p, userId) {
   send(p, {
     type: "authOk", id: userId, nickname: u.nickname, isAdmin: p.isAdmin,
     token: u.token, proWins: u.proWins || 0, proPlays: u.proPlays || 0,
-    bestMs: u.bestTime || 0, totalTime: liveTotalTime(p),
+    bestMs: u.bestTime || 0, bestHardMs: u.bestTimeHard || 0, totalTime: liveTotalTime(p),
   });
 }
 
@@ -160,7 +164,7 @@ function sendStats(p) {
   if (!p.account) return;
   const u = users[p.account.userId];
   if (!u) return;
-  send(p, { type: "stats", proWins: u.proWins || 0, proPlays: u.proPlays || 0, bestMs: u.bestTime || 0, totalTime: liveTotalTime(p) });
+  send(p, { type: "stats", proWins: u.proWins || 0, proPlays: u.proPlays || 0, bestMs: u.bestTime || 0, bestHardMs: u.bestTimeHard || 0, totalTime: liveTotalTime(p) });
 }
 
 // --- 정적 파일 서버 ---------------------------------------------------------
@@ -279,9 +283,10 @@ wss.on("connection", (ws) => {
         p.invulnUntil = Date.now() + INVULN_MS;
         p.graceUntil = Date.now() + GRACE_MS;
         send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
-      } else { // racing/hard : 고정 맵. 자유 레이싱은 TOP10 기록도 전송
+      } else { // racing/hard : 고정 맵. 타임어택 모드는 각자 TOP10 기록도 전송
         p.state = null; p.invulnUntil = 0; p.graceUntil = 0;
-        if (mode === "racing") send(p, { type: "topRecords", records: topRecordsList() });
+        const field = RECORD_FIELD[mode];
+        if (field) send(p, { type: "topRecords", records: topRecordsList(field) });
       }
       console.log(`[>] player ${id} joined ${p.mode} as "${p.name}"`);
 
@@ -339,17 +344,18 @@ wss.on("connection", (ws) => {
       broadcastConnected(chatMsg);
 
     } else if (msg.type === "timeAttack") {
-      // 자유 모드 타임어택 기록 제출 → 로그인 유저만, 개인 최고기록 갱신 시 TOP10 반영
-      if (!p.active || p.mode !== "racing" || !p.account) return; // 로그인 유저만 기록됨
+      // 자유/하드 타임어택 기록 제출 → 로그인 유저만, 개인 최고기록 갱신 시 TOP10 반영
+      const field = RECORD_FIELD[p.mode]; // racing→bestTime, hard→bestTimeHard
+      if (!p.active || !field || !p.account) return; // 타임어택 모드 + 로그인 유저만
       const ms = Number(msg.ms);
       if (!Number.isFinite(ms) || ms < 3000 || ms > 600000) return; // 3초~10분 범위만 인정
       const u = users[p.account.userId];
       if (!u) return;
-      if (!u.bestTime || Math.round(ms) < u.bestTime) {
-        u.bestTime = Math.round(ms);
+      if (!u[field] || Math.round(ms) < u[field]) {
+        u[field] = Math.round(ms);
         persistUser(p.account.userId);
-        sendStats(p);          // 대시보드 최고기록 갱신
-        broadcastRecords();    // TOP10 갱신
+        sendStats(p);              // 대시보드 최고기록 갱신
+        broadcastRecords(p.mode);  // 해당 모드 TOP10 갱신
       }
 
     } else if (msg.type === "state") {

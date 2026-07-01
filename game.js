@@ -80,6 +80,7 @@ const race = {
 };
 
 const OFFTRACK_DRAG = 2.4;   // 트랙 이탈 시 추가 감속 계수 (클수록 풀밭처럼 느려짐)
+const OFFTRACK_DRAG_HARD = 6.5; // 하드 전용 : 이탈 시 매우 급격히 감속
 
 // 자유 모드 타임어택 상태
 const attack = {
@@ -98,6 +99,7 @@ const account = {
   totalTime: 0,   // 평생 누적 접속 시간(ms) — 서버가 보낸 "실시간" 값
   totalTimeAt: 0, // 위 값을 수신한 클라 시각(performance 아님) — 라이브 증가 기준
   bestMs: 0,      // 자유 레이싱 개인 최고 기록(ms)
+  bestHardMs: 0,  // 하드코어 레이싱 개인 최고 기록(ms)
 };
 
 /* =============================================================================
@@ -419,10 +421,10 @@ const HARD_POINTS = [
   { x: 8200, y: 4300 },
   { x: 6450, y: 4450 },
 
-  // 3) 더 가파른 S 코너: 짧은 거리에서 큰 좌우 전환
-  { x: 5000, y: 3650 },
-  { x: 6200, y: 2500 },
-  { x: 9050, y: 2850 },
+  // 3) S 코너: 헤어핀 아래쪽으로 크게 돌아 내려갔다 오른쪽으로 (헤어핀과 겹치지 않게)
+  { x: 5400, y: 4950 },
+  { x: 6600, y: 5650 },
+  { x: 8300, y: 5350 },
   { x: 9500, y: 5000 },
   { x: 10800, y: 3700 },
   { x: 10300, y: 5400 },
@@ -467,8 +469,8 @@ function generateTrack() {
 
 function generateHardTrack() {
   WORLD.hard.track = makeHardTrack(HARD_POINTS, {
-    halfWidth: 150, // 총 트랙 폭 300px
-    kerb: 22,
+    halfWidth: 112, // 총 트랙 폭 224px (자유 460px의 절반 이하 — 정밀 주행 요구)
+    kerb: 16,
     samplesPerSegment: 28,
     startPointIndex: 1,
     tension: 0.34,
@@ -871,8 +873,9 @@ function updateCollision(car) {
 function updateSurface(car, dt) {
   if (!isTrackWorld()) return;                 // 자유/프로/하드 레이싱 모두 적용
   if (isOnTrack(car.x, car.y)) return;
-  // 풀밭 저항 : 전진/측면 속도를 지수적으로 감쇠
-  const f = Math.exp(-OFFTRACK_DRAG * dt);
+  // 풀밭 저항 : 전진/측면 속도를 지수적으로 감쇠 (하드는 훨씬 가혹하게 → 이탈 시 크게 손해)
+  const drag = gameMode === "hard" ? OFFTRACK_DRAG_HARD : OFFTRACK_DRAG;
+  const f = Math.exp(-drag * dt);
   car.lf *= f;
   car.ll *= f;
 }
@@ -937,6 +940,9 @@ function updateLap(car) {
   race.lapMs = now - race.raceStartTime; // 출발부터의 누적 시간(랩마다 리셋 안 함)
 }
 
+// 타임어택 기록 기능이 있는 모드(자유/하드) 여부
+function isTimeAttackMode() { return gameMode === "racing" || gameMode === "hard"; }
+
 // 타임어택 상태 초기화 (모드 진입/이탈 시)
 function resetAttack() {
   attack.state = "idle";
@@ -963,7 +969,7 @@ function startAttack() {
 }
 
 function updateAttack(car) {
-  if (gameMode !== "racing" || attack.state === "idle") return;
+  if (!isTimeAttackMode() || attack.state === "idle") return;
   const now = performance.now();
   const ph = trackPhase(car.x, car.y, world.track);
   if (attack.state === "armed") {
@@ -1271,11 +1277,11 @@ function updateProTimer() {
   }
 }
 
-// #time HUD 갱신 (우측 하단) : 프로=현재 랩 시간, 자유=타임어택 진행/결과.
+// #time HUD 갱신 (우측 하단) : 프로=현재 랩 시간, 자유/하드=타임어택 진행/결과.
 function updateTimeHud() {
   if (gameMode === "pro" && race.state === "racing") {
     setTimeHud(fmtRaceTime(race.lapMs));
-  } else if (gameMode === "racing" && (attack.state !== "idle" || attack.hasRun)) {
+  } else if (isTimeAttackMode() && (attack.state !== "idle" || attack.hasRun)) {
     setTimeHud(fmtRaceTime(attack.ms));
   } else {
     setTimeHud("");
@@ -1718,6 +1724,7 @@ function connect() {
       account.totalTime = msg.totalTime || 0;
       account.totalTimeAt = Date.now();
       account.bestMs = msg.bestMs || 0;
+      account.bestHardMs = msg.bestHardMs || 0;
       account.loginTime = Date.now();
       playerName = msg.nickname;
       try { localStorage.setItem("carGameToken", msg.token); } catch {}
@@ -1734,6 +1741,11 @@ function connect() {
         const improved = msg.bestMs > 0 && (!account.bestMs || msg.bestMs < account.bestMs); // 더 빠른 기록
         account.bestMs = msg.bestMs;
         if (improved) SFX.record(); // 기록 갱신 팡파레
+      }
+      if (typeof msg.bestHardMs === "number") {
+        const improved = msg.bestHardMs > 0 && (!account.bestHardMs || msg.bestHardMs < account.bestHardMs);
+        account.bestHardMs = msg.bestHardMs;
+        if (improved) SFX.record(); // 하드 기록 갱신 팡파레
       }
       updateDashboard();
     } else if (msg.type === "counts") {
@@ -2428,7 +2440,7 @@ function sendLogout() {
   if (net.connected && net.ws.readyState === WebSocket.OPEN) net.ws.send(JSON.stringify({ type: "logout", token: tk }));
   account.loggedIn = false; account.isAdmin = false; account.userId = null;
   account.proWins = 0; account.proPlays = 0;
-  account.totalTime = 0; account.totalTimeAt = 0; account.bestMs = 0; account.loginTime = 0;
+  account.totalTime = 0; account.totalTimeAt = 0; account.bestMs = 0; account.bestHardMs = 0; account.loginTime = 0;
   updateAuthUI();
 }
 
@@ -2471,6 +2483,9 @@ function updateDashboard() {
   // 자유 레이싱 개인 최고 기록
   const best = document.getElementById("dashBest");
   if (best) best.textContent = account.bestMs ? fmtRaceTime(account.bestMs) : "-";
+  // 하드코어 레이싱 개인 최고 기록
+  const bestHard = document.getElementById("dashBestHard");
+  if (bestHard) bestHard.textContent = account.bestHardMs ? fmtRaceTime(account.bestHardMs) : "-";
 }
 function showDashboard() {
   document.getElementById("dashboard").classList.add("show");
@@ -2534,10 +2549,10 @@ function updateTouchVisibility() {
 
 // 자유 모드 UI (기록 시작 버튼 + TOP10) 표시/숨김
 function updateFreeUI() {
-  const free = gameMode === "racing" && gameState === "playing";
-  document.getElementById("attackBtn").style.display = free ? "block" : "none";
-  document.getElementById("topRecords").style.display = free ? "block" : "none";
-  if (free) updateTopRecords();
+  const show = isTimeAttackMode() && gameState === "playing"; // 자유/하드 둘 다 기록 UI 표시
+  document.getElementById("attackBtn").style.display = show ? "block" : "none";
+  document.getElementById("topRecords").style.display = show ? "block" : "none";
+  if (show) updateTopRecords();
 }
 
 // TOP10 기록 렌더 (채팅 아래)
