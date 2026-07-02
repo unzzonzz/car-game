@@ -2396,6 +2396,7 @@ function startGame(mode) {
   updateRaceUI();
   updateTouchVisibility();
   updateFreeUI();
+  updateMainLink(); // 메인 링크 숨김
 
   sendJoin(); // 서버에 입장
 }
@@ -2417,6 +2418,7 @@ function toMenu() {
   updateFreeUI();
   setTimeHud("");
   updateProTimer(); // 상단 종료 카운트다운 즉시 숨김
+  updateMainLink(); // 메인 링크 표시
 }
 
 // 메뉴 UI 배선
@@ -2597,6 +2599,12 @@ function updateFreeUI() {
   if (show) updateTopRecords();
 }
 
+// 메인(메뉴) 화면에서만 우측 하단 텍스트 링크 표시
+function updateMainLink() {
+  const el = document.getElementById("mainLink");
+  if (el) el.style.display = (gameState === "menu") ? "block" : "none";
+}
+
 // TOP10 기록 렌더 (채팅 아래)
 function updateTopRecords() {
   const el = document.getElementById("topRecordsList");
@@ -2632,6 +2640,7 @@ setupChat();
 setupAuth();
 setupTouch();
 setupAudio();
+updateMainLink(); // 시작 시 메인 화면이면 링크 표시
 requestAnimationFrame(frame);
 
 // 효과음 배선 : 첫 사용자 입력에서 오디오 컨텍스트 재개 + 버튼 클릭음
