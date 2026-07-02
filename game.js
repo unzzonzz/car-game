@@ -1186,8 +1186,8 @@ function addShake(amount) {
 }
 
 function updateCamera(car, dt) {
-  camera.x = car.x - canvas.width / 2;
-  camera.y = car.y - canvas.height / 2;
+  camera.x = car.x - viewW / 2;
+  camera.y = car.y - viewH / 2;
   // 흔들림은 시간에 따라 빠르게 잦아든다(약 0.4초)
   camera.shake *= Math.exp(-9 * dt);
   if (camera.shake < 0.3) camera.shake = 0;
@@ -1203,9 +1203,26 @@ const minimap = document.getElementById("minimap");
 const mctx = minimap.getContext("2d");
 const speedEl = document.getElementById("speed");
 
+// 논리(CSS) 뷰포트 크기 — 렌더 로직은 이 값을 쓴다(캔버스 백킹은 DPR 배율로 더 큼).
+let viewW = window.innerWidth, viewH = window.innerHeight;
+const MINIMAP_SIZE = 180; // 미니맵 논리 크기(고정)
+
+// HiDPI/레티나 대응 : 백킹 스토어를 devicePixelRatio 배율로 키워 선명하게(성능 위해 2배 상한).
 function resize() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  viewW = window.innerWidth; viewH = window.innerHeight;
+  // 메인 캔버스 : 백킹은 dpr 배율로 확대하되 표시 크기는 논리 픽셀로 고정(안 그러면 확대돼 보임)
+  canvas.width = Math.round(viewW * dpr);
+  canvas.height = Math.round(viewH * dpr);
+  canvas.style.width = viewW + "px";
+  canvas.style.height = viewH + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // 이후 모든 그리기는 논리 픽셀 좌표
+  // 미니맵 : CSS 크기 미지정 → 표시 크기 고정 + 백킹 확대
+  minimap.width = Math.round(MINIMAP_SIZE * dpr);
+  minimap.height = Math.round(MINIMAP_SIZE * dpr);
+  minimap.style.width = MINIMAP_SIZE + "px";
+  minimap.style.height = MINIMAP_SIZE + "px";
+  mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 window.addEventListener("resize", resize);
 resize();
@@ -1213,7 +1230,7 @@ resize();
 function render(car) {
   // 화면 클리어
   ctx.fillStyle = "#000";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, viewW, viewH);
 
   // 흔들림 오프셋 (킬 시 화면 진동)
   const sx = camera.shake ? (Math.random() * 2 - 1) * camera.shake : 0;
@@ -1255,14 +1272,14 @@ function render(car) {
 function drawRaceHud() {
   if (gameMode !== "pro") return;
   const now = performance.now();
-  const cx = canvas.width / 2;
+  const cx = viewW / 2;
 
   // 카운트다운 : 빨간 신호등 5개가 1초마다 하나씩 켜진다
   if (race.state === "countdown" && race.countdownEnd > now) {
     const remain = race.countdownEnd - now;
     const lit = clamp(5 - Math.floor(remain / 1000), 0, 5); // 1초마다 하나씩 차올라 5개 → 소등=출발
     if (lit > sfxCountLit) { sfxCountLit = lit; if (lit > 0) SFX.beep(); } // 새 불이 켜질 때마다 비프
-    const r = 26, gap = 70, y = canvas.height * 0.32;
+    const r = 26, gap = 70, y = viewH * 0.32;
     const startX = cx - (gap * 4) / 2;
     // 신호등 패널 배경
     ctx.fillStyle = "rgba(0,0,0,0.55)";
@@ -1289,7 +1306,7 @@ function drawRaceHud() {
     ctx.font = "800 90px 'Segoe UI', Arial, sans-serif";
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.shadowColor = "rgba(0,0,0,0.6)"; ctx.shadowBlur = 18;
-    ctx.fillText("GO!", cx, canvas.height * 0.32);
+    ctx.fillText("GO!", cx, viewH * 0.32);
     ctx.shadowBlur = 0;
   }
 }
@@ -1336,9 +1353,9 @@ function drawSurvivalGround() {
   ctx.lineWidth = 2;
   ctx.beginPath();
   const x0 = Math.max(0, Math.floor(camera.x / grid) * grid);
-  const x1 = Math.min(W, camera.x + canvas.width);
+  const x1 = Math.min(W, camera.x + viewW);
   const y0 = Math.max(0, Math.floor(camera.y / grid) * grid);
-  const y1 = Math.min(H, camera.y + canvas.height);
+  const y1 = Math.min(H, camera.y + viewH);
   for (let x = x0; x <= x1; x += grid) { ctx.moveTo(x, y0); ctx.lineTo(x, y1); }
   for (let y = y0; y <= y1; y += grid) { ctx.moveTo(x0, y); ctx.lineTo(x1, y); }
   ctx.stroke();
@@ -1605,7 +1622,7 @@ function blinkTime() {
 
 // 미니맵 : 맵 전체 + 차량 위치 + 차량 방향 (월드가 비정사각형이어도 비율 유지)
 function drawMinimap(car) {
-  const size = minimap.width;
+  const size = MINIMAP_SIZE; // 논리 크기(백킹은 dpr 배율, 컨텍스트가 스케일 처리)
   const scale = Math.min(size / world.w, size / world.h); // 박스에 맞춰 축소
   const ox = (size - world.w * scale) / 2;                // 가운데 정렬 오프셋
   const oy = (size - world.h * scale) / 2;
@@ -1647,7 +1664,7 @@ function drawMinimap(car) {
   // 현재 화면(뷰포트) 영역 표시
   mctx.strokeStyle = "rgba(255,255,255,0.4)";
   mctx.lineWidth = 1;
-  mctx.strokeRect(wx(camera.x), wy(camera.y), canvas.width * scale, canvas.height * scale);
+  mctx.strokeRect(wx(camera.x), wy(camera.y), viewW * scale, viewH * scale);
 
   // 다른 플레이어 (작은 점) — 관리자는 금색 + 블러 글로우
   for (const [id, r] of remotePlayers) {
