@@ -42,16 +42,18 @@ const CONFIG = {
  *  - survival : 5000² 오픈 맵. 머리로 받혀 죽으면 모드 선택으로 복귀.
  *  - racing   : 사진 같은 꼬불꼬불한 카트 서킷. 죽음 없음. 트랙 이탈 시 감속.
  *  - hard     : 좁은 폭 + 웨이포인트 스플라인 기반의 고난도 서킷.
+ *  - serp     : 완전 구불구불한 슬라럼 코스(연속 U턴). 트랙 폭 300px.
  * ========================================================================== */
 const WORLD = {
   survival: { w: 5000, h: 5000, type: "open" },
   racing: { w: 10000, h: 6000, type: "track", track: null },  // 자유 레이싱
   hard: { w: 18000, h: 11500, type: "hardTrack", track: null }, // 하드 레이싱
+  serp: { w: 4780, h: 3350, type: "serpTrack", track: null },  // 구불구불 레이싱
   pro: { w: 10000, h: 6000, type: "track", track: null },     // 프로 레이싱(다른 서킷)
 };
 
 // 현재 모드/월드/게임 상태
-let gameMode = "survival";   // "survival" | "racing" | "hard" | "pro"
+let gameMode = "survival";   // "survival" | "racing" | "hard" | "serp" | "pro"
 let world = WORLD.survival;  // 현재 월드 치수/타입
 let gameState = "menu";      // "menu" | "playing"
 let playerName = "Player";
@@ -100,6 +102,7 @@ const account = {
   totalTimeAt: 0, // 위 값을 수신한 클라 시각(performance 아님) — 라이브 증가 기준
   bestMs: 0,      // 자유 레이싱 개인 최고 기록(ms)
   bestHardMs: 0,  // 하드코어 레이싱 개인 최고 기록(ms)
+  bestSerpMs: 0,  // 구불구불 레이싱 개인 최고 기록(ms)
 };
 
 /* =============================================================================
@@ -477,9 +480,37 @@ function generateHardTrack() {
   });
 }
 
+/* 구불구불 레이싱 : 연속 U턴(슬라럼) 폐곡선. 짧고 좁은 기둥 8개를 가파른 U턴으로
+ *  촘촘히 잇고(직선 짧게·구불구불 많게), 마지막에 바깥(아래→왼쪽)으로 돌아 시작점으로
+ *  닫는다. 가로로 길쭉한 맵 → 잘하는 사람 기준 30초 미만. */
+const SERP_POINTS = [
+  { x: 1200, y: 1200 }, { x: 1200, y: 2625 },   // 기둥0 (아래로)
+  { x: 1540, y: 2625 }, { x: 1540, y: 1200 },   // 기둥1 (위로)
+  { x: 1880, y: 1200 }, { x: 1880, y: 2625 },   // 기둥2 (아래로)
+  { x: 2220, y: 2625 }, { x: 2220, y: 1200 },   // 기둥3 (위로)
+  { x: 2560, y: 1200 }, { x: 2560, y: 2625 },   // 기둥4 (아래로)
+  { x: 2900, y: 2625 }, { x: 2900, y: 1200 },   // 기둥5 (위로)
+  { x: 3240, y: 1200 }, { x: 3240, y: 2625 },   // 기둥6 (아래로)
+  { x: 3580, y: 2625 }, { x: 3580, y: 1200 },   // 기둥7 (위로)
+  { x: 4280, y: 3325 },                          // 바깥 복귀 : 우하단
+  { x: 750, y: 3325 },                           //           좌하단
+  { x: 750, y: 1200 },                           //           좌상단 → 시작점으로 닫힘
+];
+
+function generateSerpTrack() {
+  WORLD.serp.track = makeHardTrack(SERP_POINTS, {
+    halfWidth: 105, // 총 트랙 폭 210px (좁게 — 회전 여유 축소)
+    kerb: 16,
+    samplesPerSegment: 28,
+    startPointIndex: 0,
+    tension: 0.34,
+  });
+}
+
 function generateTracks() {
   generateTrack();
   generateHardTrack();
+  generateSerpTrack();
 }
 
 // km/h -> px/s 변환 계수.  (km/h ÷ 3.6 = m/s) × (m -> px)
@@ -626,7 +657,7 @@ function speedOf(car) {
 }
 
 function isTrackWorld() {
-  return world.type === "track" || world.type === "hardTrack";
+  return world.type === "track" || world.type === "hardTrack" || world.type === "serpTrack";
 }
 
 
@@ -941,7 +972,7 @@ function updateLap(car) {
 }
 
 // 타임어택 기록 기능이 있는 모드(자유/하드) 여부
-function isTimeAttackMode() { return gameMode === "racing" || gameMode === "hard"; }
+function isTimeAttackMode() { return gameMode === "racing" || gameMode === "hard" || gameMode === "serp"; }
 
 // 타임어택 상태 초기화 (모드 진입/이탈 시)
 function resetAttack() {
@@ -1725,6 +1756,7 @@ function connect() {
       account.totalTimeAt = Date.now();
       account.bestMs = msg.bestMs || 0;
       account.bestHardMs = msg.bestHardMs || 0;
+      account.bestSerpMs = msg.bestSerpMs || 0;
       account.loginTime = Date.now();
       playerName = msg.nickname;
       try { localStorage.setItem("carGameToken", msg.token); } catch {}
@@ -1747,6 +1779,11 @@ function connect() {
         account.bestHardMs = msg.bestHardMs;
         if (improved) SFX.record(); // 하드 기록 갱신 팡파레
       }
+      if (typeof msg.bestSerpMs === "number") {
+        const improved = msg.bestSerpMs > 0 && (!account.bestSerpMs || msg.bestSerpMs < account.bestSerpMs);
+        account.bestSerpMs = msg.bestSerpMs;
+        if (improved) SFX.record(); // 구불구불 기록 갱신 팡파레
+      }
       updateDashboard();
     } else if (msg.type === "counts") {
       // 모드별 참가 인원 → 메뉴 버튼 배지 갱신
@@ -1754,6 +1791,7 @@ function connect() {
       set("countSurvival", msg.survival || 0);
       set("countRacing", msg.racing || 0);
       set("countHard", msg.hard || 0);
+      set("countSerp", msg.serp || 0);
       set("countPro", msg.pro || 0);
     } else if (msg.type === "spawn") {
       // 서버가 정한 입장/부활 위치 → 거기서 시작
@@ -2334,11 +2372,11 @@ function startGame(mode) {
   keys.w = keys.a = keys.s = keys.d = keys.space = false; // 메뉴 조작으로 눌린 키 초기화
 
   // 레이싱 위치 결정
-  //  - racing/hard  : 트랙 출발점에서 시작 (서버 spawn 없음)
+  //  - racing/hard/serp : 트랙 출발점에서 시작 (서버 spawn 없음)
   //  - pro         : 로비 진입. 서버 proStart 가 그리드 슬롯을 정해줌.
   //  - survival    : 서버가 spawn 으로 위치 통지.
   race.state = "none"; race.myReady = false;
-  if (mode === "racing" || mode === "hard") {
+  if (isTimeAttackMode()) {
     const s = world.track.start;
     CAR.x = s.x; CAR.y = s.y; CAR.angle = s.angle;
     CAR.invulnUntil = performance.now() + 1500;
@@ -2349,7 +2387,7 @@ function startGame(mode) {
     race.isHost = false; race.myReady = false; race.rooms = [];
   }
 
-  if (mode === "racing" || mode === "hard") resetAttack();
+  if (isTimeAttackMode()) resetAttack();
   if (mode !== "pro") SFX.start(); // 게임 시작 사운드(프로는 방/카운트다운에서 GO로 대체)
 
   gameState = "playing";
@@ -2390,6 +2428,7 @@ function setupMenu() {
   document.getElementById("btnSurvival").addEventListener("click", () => startGame("survival"));
   document.getElementById("btnRacing").addEventListener("click", () => startGame("racing"));
   document.getElementById("btnHard").addEventListener("click", () => startGame("hard"));
+  document.getElementById("btnSerp").addEventListener("click", () => startGame("serp"));
   document.getElementById("btnPro").addEventListener("click", () => startGame("pro"));
   document.getElementById("exitBtn").addEventListener("click", toMenu);
 
@@ -2440,7 +2479,7 @@ function sendLogout() {
   if (net.connected && net.ws.readyState === WebSocket.OPEN) net.ws.send(JSON.stringify({ type: "logout", token: tk }));
   account.loggedIn = false; account.isAdmin = false; account.userId = null;
   account.proWins = 0; account.proPlays = 0;
-  account.totalTime = 0; account.totalTimeAt = 0; account.bestMs = 0; account.bestHardMs = 0; account.loginTime = 0;
+  account.totalTime = 0; account.totalTimeAt = 0; account.bestMs = 0; account.bestHardMs = 0; account.bestSerpMs = 0; account.loginTime = 0;
   updateAuthUI();
 }
 
@@ -2486,6 +2525,9 @@ function updateDashboard() {
   // 하드코어 레이싱 개인 최고 기록
   const bestHard = document.getElementById("dashBestHard");
   if (bestHard) bestHard.textContent = account.bestHardMs ? fmtRaceTime(account.bestHardMs) : "-";
+  // 구불구불 레이싱 개인 최고 기록
+  const bestSerp = document.getElementById("dashBestSerp");
+  if (bestSerp) bestSerp.textContent = account.bestSerpMs ? fmtRaceTime(account.bestSerpMs) : "-";
 }
 function showDashboard() {
   document.getElementById("dashboard").classList.add("show");

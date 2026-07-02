@@ -281,6 +281,7 @@ html, body {
 .mode-btn.survival:hover { border-color: #ff5a4d; }
 .mode-btn.racing:hover { border-color: #3b82f6; }
 .mode-btn.hard:hover { border-color: #ff8a2a; }
+.mode-btn.serp:hover { border-color: #2ee59d; }
 .mode-btn.pro:hover { border-color: #f1c40f; }
 .mode-name {
   font-weight: 700;
