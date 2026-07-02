@@ -1709,8 +1709,7 @@ const net = {
   ws: null,
   id: null,             // 서버가 부여한 내 플레이어 id
   connected: false,
-  sendInterval: 1000 / 60, // 내 상태 송신율 (서버 TICK_RATE 와 맞춤)
-  lastSend: 0,
+  lastSend: 0,            // 마지막 상태 송신 시각(매 프레임 전송, 6ms 안전 상한)
   pendingTeleport: false, // true면 다음 상태 송신에 teleport 플래그를 실어 보낸다
   hasServerTime: false,   // 서버가 스냅샷에 st(송신시각)를 넣어주는지 (재배포 여부)
   serverNewest: 0,        // 가장 최근에 받은 서버 타임스탬프(st)
@@ -2217,10 +2216,11 @@ function setupChat() {
   });
 }
 
-// 내 차 상태를 주기적으로 서버에 전송
+// 내 차 상태를 서버에 전송 — 모니터 주사율대로(매 프레임). 안전 상한 ~165Hz(6ms)만 둔다.
+//  → 서버가 항상 최신 위치를 갖고, 남들 화면에선 수신측 보간이 각자 모니터 Hz로 렌더한다.
 function netSend(car, now) {
   if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
-  if (now - net.lastSend < net.sendInterval) return;
+  if (now - net.lastSend < 6) return; // 매 프레임 전송(60·120·144Hz 그대로), 6ms 미만만 차단
   net.lastSend = now;
 
   const msg = {
@@ -2244,6 +2244,7 @@ function netSend(car, now) {
 // 확보해두고 "서버 송신 시각(일정 간격)" 기준으로 두 스냅샷을 보간한다.
 // → 도착 지터/버스트가 있어도 일정 속도로 매끈하게 움직인다.
 const INTERP_DELAY = 90; // ms (60Hz면 스냅샷 ~5개분 버퍼 → 지연 줄이면서도 안전)
+const MAX_EXTRAP = 140;  // ms : 패킷이 늦으면 마지막 속도로 이 시간까지만 외삽(그 뒤 정지)
 
 // 원격 차량 : 서버 타임스탬프 기반 엔티티 보간 (Source 엔진식).
 //  서버가 st 를 주지 않으면(재배포 전) 기존 지수 스무딩으로 폴백한다.
@@ -2257,8 +2258,9 @@ function updateRemotes(dt) {
   else {
     net.playT += dt * 1000;
     net.playT += (target - net.playT) * clamp(dt * 2.5, 0, 1); // 드리프트 보정
-    if (net.playT > net.serverNewest) net.playT = net.serverNewest;      // 데이터보다 앞서지 않게
-    if (net.serverNewest - net.playT > INTERP_DELAY + 400) net.playT = target; // 너무 뒤처지면 리싱크
+    // 데이터보다 조금 앞서는 것은 허용(짧은 외삽으로 끊김 방지) — 단 상한을 둔다
+    if (net.playT > net.serverNewest + MAX_EXTRAP) net.playT = net.serverNewest + MAX_EXTRAP;
+    if (net.serverNewest - net.playT > INTERP_DELAY + 500) net.playT = target; // 너무 뒤처지면 리싱크
   }
   const renderT = net.playT;
 
@@ -2270,23 +2272,36 @@ function updateRemotes(dt) {
 
     if (buf.length === 0) continue;
 
-    if (buf.length === 1 || renderT <= buf[0].t) {
-      // 보간할 두 점이 없으면(막 입장/패킷 부족) 가장 이른 샘플을 그대로 사용
-      const s = buf[0];
-      r.x = s.x; r.y = s.y; r.angle = s.angle; r.drifting = s.drifting;
-    } else {
+    if (buf.length >= 2 && renderT >= buf[0].t) {
       // buf[0].t <= renderT < buf[1].t 사이를 선형 보간
       const a = buf[0], b = buf[1];
       const span = b.t - a.t;
       const t = clamp(span > 0 ? (renderT - a.t) / span : 1, 0, 1);
       r.x = lerp(a.x, b.x, t);
       r.y = lerp(a.y, b.y, t);
-      // 각도는 -π~π 경계를 고려해 최단 경로로
       let d = b.angle - a.angle;
       while (d > Math.PI) d -= Math.PI * 2;
       while (d < -Math.PI) d += Math.PI * 2;
       r.angle = a.angle + d * t;
       r.drifting = a.drifting; // 진행 중인 구간의 드리프트 상태
+      // 이 구간의 속도를 저장 → 버퍼가 마르면(패킷 손실) 이 속도로 짧게 외삽
+      if (span > 0) { r.vx = (b.x - a.x) / span; r.vy = (b.y - a.y) / span; r.va = d / span; r.vOk = true; }
+    } else if (buf.length >= 2) {
+      // renderT 가 가장 이른 샘플보다도 과거(막 입장 등) → 첫 샘플 그대로
+      const s = buf[0];
+      r.x = s.x; r.y = s.y; r.angle = s.angle; r.drifting = s.drifting;
+    } else {
+      // 샘플이 1개뿐(버퍼 고갈/패킷 손실) → 마지막 속도로 짧게 외삽(최대 MAX_EXTRAP), 그 뒤 정지
+      const s = buf[0];
+      const ahead = clamp(renderT - s.t, 0, MAX_EXTRAP);
+      if (r.vOk && ahead > 0) {
+        r.x = s.x + r.vx * ahead;
+        r.y = s.y + r.vy * ahead;
+        r.angle = s.angle + r.va * ahead;
+      } else {
+        r.x = s.x; r.y = s.y; r.angle = s.angle;
+      }
+      r.drifting = s.drifting;
     }
 
     // 드리프트 중인 원격 차량의 타이어 자국 (관리자는 금색)
