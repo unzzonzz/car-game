@@ -2501,6 +2501,9 @@ function updateAuthUI() {
   document.getElementById("authOpenBtn").style.display = inn ? "none" : "block";
   document.getElementById("loggedIn").style.display = inn ? "block" : "none";
   document.getElementById("dashBtn").style.display = inn ? "block" : "none";
+  // 로그인 상태면 닉네임 입력/라벨을 아예 숨긴다(계정 닉네임 사용). 비로그인 시 표시.
+  document.getElementById("nameInput").style.display = inn ? "none" : "block";
+  document.getElementById("nameLabel").style.display = inn ? "none" : "block";
   if (inn) {
     document.getElementById("welcomeMsg").textContent =
       `${account.nickname}님 환영합니다${account.isAdmin ? " (관리자)" : ""}`;
