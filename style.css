@@ -89,7 +89,7 @@ html, body {
 /* 채팅창 (미니맵 하단) — 메뉴/로비 오버레이 위에 떠서 어디서나 채팅 가능 */
 #chat {
   position: absolute;
-  top: 206px;       /* 미니맵(top18 + 180) 아래 */
+  top: calc(18px + var(--mm, 180px) + 8px);  /* 미니맵 아래 (미니맵 크기는 JS 가 --mm 으로 전달) */
   right: 18px;
   width: 240px;
   display: flex;
@@ -684,3 +684,61 @@ html, body {
 /* 타임어택 종료 시 #time(우측 하단 숫자)가 3번 깜빡 */
 @keyframes blink3 { 50% { opacity: 0; } }
 #time.blink { animation: blink3 0.32s 3; }
+
+/* =============================================================================
+ *  모바일 가로모드(낮은 화면) 최적화
+ * -----------------------------------------------------------------------------
+ *  화면 높이가 낮을 때(가로모드 폰) HUD/채팅/터치버튼이 겹치지 않게 재배치한다.
+ *  - 미니맵 크기는 JS 가 --mm(=104px)으로 축소, 채팅/순위판은 그 아래로 자동 정렬.
+ *  - 터치 버튼은 하단 양 모서리, 주행 버튼은 가로 한 줄로(세로 스택 제거) → 상단 공간 확보.
+ *  - 노치 대응 : env(safe-area-inset-*) 로 가장자리 여백.
+ * ========================================================================== */
+@media (max-height: 540px) {
+  #minimap { top: 10px; right: calc(10px + env(safe-area-inset-right)); }
+
+  #chat {
+    top: calc(10px + var(--mm, 104px) + 6px);
+    right: calc(10px + env(safe-area-inset-right));
+    width: 176px;
+  }
+  #chatLog { height: 54px; font-size: 11px; padding: 6px 8px; }
+  #chatInput { padding: 6px 8px; font-size: 12px; }
+  #chatSend { padding: 0 10px; font-size: 12px; }
+
+  /* 순위판 / TOP10 : 채팅 아래, 낮게 제한 + 스크롤 (주행 버튼과 안 겹치게) */
+  #standings, #topRecords {
+    top: calc(10px + var(--mm, 104px) + 6px + 90px);
+    right: calc(10px + env(safe-area-inset-right));
+    width: 176px;
+    max-height: 64px;
+    overflow-y: auto;
+    font-size: 11px;
+    padding: 6px 8px;
+  }
+
+  /* 나가기 / 속도 : 왼쪽 모서리 (속도는 조향 버튼 위) */
+  #exitBtn { left: calc(12px + env(safe-area-inset-left)); top: 10px; }
+  #speed { left: calc(12px + env(safe-area-inset-left)); bottom: 92px; }
+
+  /* 상단 중앙 기록 버튼 / 카운트다운 */
+  #attackBtn, #proTimer { top: 10px; }
+
+  /* 현재 시간 : 하단 중앙 (우하단 주행 버튼과 겹치지 않게) */
+  #time { right: auto; left: 50%; transform: translateX(-50%); bottom: 12px; }
+
+  /* 터치 컨트롤 : 하단 양 모서리, 작게. 주행은 가로 한 줄. */
+  #touchSteer {
+    left: calc(12px + env(safe-area-inset-left));
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    gap: 12px;
+  }
+  #touchDrive {
+    right: calc(12px + env(safe-area-inset-right));
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    flex-direction: row;
+    align-items: flex-end;
+    gap: 10px;
+  }
+  .touch-btn { width: 60px; height: 60px; font-size: 13px; }
+  .touch-btn.gas { width: 74px; height: 74px; }
+}

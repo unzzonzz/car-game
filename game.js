@@ -1205,12 +1205,14 @@ const speedEl = document.getElementById("speed");
 
 // 논리(CSS) 뷰포트 크기 — 렌더 로직은 이 값을 쓴다(캔버스 백킹은 DPR 배율로 더 큼).
 let viewW = window.innerWidth, viewH = window.innerHeight;
-const MINIMAP_SIZE = 180; // 미니맵 논리 크기(고정)
+let minimapSize = 180; // 미니맵 논리 크기(모바일 가로모드처럼 화면이 낮으면 축소)
 
 // HiDPI/레티나 대응 : 백킹 스토어를 devicePixelRatio 배율로 키워 선명하게(성능 위해 2배 상한).
 function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   viewW = window.innerWidth; viewH = window.innerHeight;
+  // 화면이 낮으면(모바일 가로) 미니맵을 줄여 채팅/컨트롤 공간 확보
+  minimapSize = viewH <= 540 ? 104 : 180;
   // 메인 캔버스 : 백킹은 dpr 배율로 확대하되 표시 크기는 논리 픽셀로 고정(안 그러면 확대돼 보임)
   canvas.width = Math.round(viewW * dpr);
   canvas.height = Math.round(viewH * dpr);
@@ -1218,11 +1220,13 @@ function resize() {
   canvas.style.height = viewH + "px";
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // 이후 모든 그리기는 논리 픽셀 좌표
   // 미니맵 : CSS 크기 미지정 → 표시 크기 고정 + 백킹 확대
-  minimap.width = Math.round(MINIMAP_SIZE * dpr);
-  minimap.height = Math.round(MINIMAP_SIZE * dpr);
-  minimap.style.width = MINIMAP_SIZE + "px";
-  minimap.style.height = MINIMAP_SIZE + "px";
+  minimap.width = Math.round(minimapSize * dpr);
+  minimap.height = Math.round(minimapSize * dpr);
+  minimap.style.width = minimapSize + "px";
+  minimap.style.height = minimapSize + "px";
   mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // CSS 가 채팅/순위판을 미니맵 크기에 맞춰 배치하도록 변수로 노출
+  document.documentElement.style.setProperty("--mm", minimapSize + "px");
 }
 window.addEventListener("resize", resize);
 resize();
@@ -1622,7 +1626,7 @@ function blinkTime() {
 
 // 미니맵 : 맵 전체 + 차량 위치 + 차량 방향 (월드가 비정사각형이어도 비율 유지)
 function drawMinimap(car) {
-  const size = MINIMAP_SIZE; // 논리 크기(백킹은 dpr 배율, 컨텍스트가 스케일 처리)
+  const size = minimapSize; // 논리 크기(백킹은 dpr 배율, 컨텍스트가 스케일 처리)
   const scale = Math.min(size / world.w, size / world.h); // 박스에 맞춰 축소
   const ox = (size - world.w * scale) / 2;                // 가운데 정렬 오프셋
   const oy = (size - world.h * scale) / 2;
