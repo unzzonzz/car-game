@@ -50,7 +50,87 @@ const WORLD = {
   hard: { w: 18000, h: 11500, type: "hardTrack", track: null }, // 하드 레이싱
   serp: { w: 4780, h: 3350, type: "serpTrack", track: null },  // 구불구불 레이싱
   pro: { w: 10000, h: 6000, type: "track", track: null },     // 프로 레이싱(다른 서킷)
+  lobby: { w: 3600, h: 3600, type: "lobby" },                 // 로비(메인 화면) — 로컬 전용
 };
+
+/* 로비 : 접속하자마자 차를 몰 수 있는 웜 화이트 월드. 게이트에 들어가면 모드 입장.
+ *  게이트 = 플랫 컬러 패치(아치형 배치), 0.8초 머무르면 확정. 클릭/탭으로도 입장 가능. */
+const LOBBY_SPAWN = { x: 1800, y: 2150 };
+// 게이트 : 가로 한 줄의 "그룹 메뉴". 통과하면 그룹별 맵 카드 팝업이 열린다.
+//  차고 게이트는 팝업 대신 차 색상 커스텀(32색 링 픽커)을 연다.
+const LOBBY_GATES = [
+  { group: "arcade",   label: "아케이드", color: "#e8604c", x: 1160, y: 1560, w: 250, h: 150 },
+  { group: "racing",   label: "레이싱",  color: "#4f8ee8", x: 1480, y: 1560, w: 250, h: 150 },
+  { group: "plaza",    label: "광장",    color: "#57b868", x: 1800, y: 1560, w: 250, h: 150 },
+  { group: "custom",   label: "커스텀",  color: "#f2c94c", x: 2120, y: 1560, w: 250, h: 150 },
+  { group: "practice", label: "연습",    color: "#7a55d6", x: 2440, y: 1560, w: 250, h: 150 },
+  { group: "garage",   label: "차고",    color: "#3a3a3a", x: 2600, y: 2150, w: 220, h: 140 },
+];
+
+/* 그룹별 맵 목록 (팝업 카드). mode 가 null 이면 아직 개발 전 → "준비 중" 비활성 카드.
+ *  ※ 새 맵들(술래잡기/스모/광장 등)은 추후 구현 — 지금은 메뉴/팝업 구조만. */
+const MAP_GROUPS = {
+  arcade: {
+    title: "아케이드",
+    desc: "다른 플레이어들과 경쟁하는 버라이어티 맵",
+    maps: [
+      { name: "서바이벌", desc: "머리로 들이받아 상대를 터뜨리기", mode: "survival" },
+      { name: "술래잡기", desc: "술래를 피해 도망치는 추격전", mode: null },
+      { name: "스모", desc: "링 밖으로 상대를 밀어내는 몸싸움", mode: null },
+    ],
+  },
+  racing: {
+    title: "레이싱",
+    desc: "다른 플레이어들과 경쟁하는 레이싱 맵",
+    maps: [
+      { name: "초보자 코스", desc: "완만한 코너로 달리는 입문용 서킷", mode: "racing" },
+      { name: "어려움 코스", desc: "좁은 폭과 헤어핀의 고난도 서킷", mode: "hard" },
+      { name: "구불구불 코스", desc: "쉼 없이 이어지는 연속 U턴 슬라럼", mode: "serp" },
+    ],
+  },
+  plaza: {
+    title: "광장",
+    desc: "다른 사용자들과 어울리는 자유 공간",
+    maps: [
+      { name: "채널 1", desc: "자유롭게 대화하고 어울리는 광장", mode: null },
+      { name: "채널 2", desc: "자유롭게 대화하고 어울리는 광장", mode: null },
+      { name: "채널 3", desc: "자유롭게 대화하고 어울리는 광장", mode: null },
+    ],
+  },
+  // 커스텀 그룹은 팝업 없이 게이트에서 바로 방 목록(pro)으로 직행한다.
+  practice: {
+    title: "연습",
+    desc: "혼자서 맵을 연습하고 기록을 재는 모드",
+    maps: [
+      { name: "초보자 코스", desc: "완만한 코너로 달리는 입문용 서킷", mode: "racing" },
+      { name: "어려움 코스", desc: "좁은 폭과 헤어핀의 고난도 서킷", mode: "hard" },
+      { name: "구불구불 코스", desc: "쉼 없이 이어지는 연속 U턴 슬라럼", mode: "serp" },
+    ],
+  },
+};
+const mapPopup = { open: false, group: null };
+
+// 초대 링크(?room=ID)로 접속하면 welcome 수신 후 해당 방으로 바로 참가 시도
+let pendingRoomJoin = null;
+try {
+  const rp = new URLSearchParams(location.search).get("room");
+  if (rp) {
+    pendingRoomJoin = parseInt(rp, 10);
+    history.replaceState(null, "", location.pathname); // 새로고침 시 재참가 방지
+  }
+} catch {}
+const lobby = { ui: "idle", stopMs: 0, gate: null, prog: 0, holdGate: null }; // ui: idle | hidden
+
+/* 차 색상 커스텀 : 32색(웜 플랫 크로마 26 + 뉴트럴 6). 코랄이 12시(기본색). */
+const CAR_COLORS = [
+  "#E8604C","#EF6A3B","#F2854C","#F29C4C","#F2B54C","#F2CB4C","#E7D34F","#C9D44E",
+  "#A3CB4F","#79BD54","#57B868","#43AF7E","#3DAD96","#44B3AD","#4FB5C6","#55A6DC",
+  "#4F8EE8","#4A73E0","#4A5FD6","#5D54D8","#7A55D6","#9855D1","#B355C9","#C955B4",
+  "#DA5697","#E0577A","#FFFFFF","#E9E4D8","#B8B2A6","#7A756B","#4A4E57","#2F2F2F",
+];
+const CUSTOM_RING_R = 175; // 링 반지름(월드 px)
+const custom = { active: false, cx: 0, cy: 0, selAnim: null }; // selAnim = 픽커(선택 링) 슬라이드 애니메이션
+const modeCounts = { survival: 0, racing: 0, hard: 0, serp: 0, pro: 0, total: 0 };
 
 // 현재 모드/월드/게임 상태
 let gameMode = "survival";   // "survival" | "racing" | "hard" | "serp" | "pro"
@@ -613,7 +693,15 @@ function typingInInput() {
 }
 
 window.addEventListener("keydown", e => {
-  if (e.key === 'Escape') toMenu()
+  if (e.key !== 'Escape') return;
+  if (gameMode === "lobby") {
+    if (mapPopup.open) { closeMapPopup(); return; }            // 팝업 먼저 닫기
+    if (race.state === "lobby") { sendLeaveRoom(); return; }   // 대기실 → 방 나가기(목록으로)
+    if (race.state === "browsing") { closeCustomRooms(); return; } // 커스텀 방 목록 닫기
+    lobbyIdle(); // 로비: 그 자리에서 줌인 + 메뉴 오버레이 복귀
+  } else {
+    toMenu();
+  }
 })
 
 window.addEventListener("keydown", (e) => {
@@ -775,10 +863,12 @@ function updateEngine(car, dt) {
  *  강력하지만 즉시 0 으로 만들지 않는다. 일정한 감속도를 매 프레임 빼되,
  *  음수(후진)로 내려가지 않도록 0 에서 멈춘다 (ABS가 잡아주는 느낌). */
 function updateBrake(car, dt) {
-  if (car.braking <= 0 || car.lf <= 0) return;
+  if (car.braking <= 0 || car.lf === 0) return;
 
   const decel = car.brakePower * car.braking * dt;
-  car.lf = Math.max(0, car.lf - decel);
+  // 전진/후진 모두 0 방향으로 감속 (후진 중 브레이크 밟으면 멈춤)
+  if (car.lf > 0) car.lf = Math.max(0, car.lf - decel);
+  else car.lf = Math.min(0, car.lf + decel);
 }
 
 /* 4-b) 후진 (S) --------------------------------------------------------------
@@ -1170,7 +1260,9 @@ function pushSkid(x, y, angle, color) {
 // 내 차 : 드리프트 중일 때만 내 색으로 타이어 자국을 남긴다.
 function updateSkid(car) {
   if (car.drifting) {
-    pushSkid(car.x, car.y, car.angle, account.isAdmin ? "rgba(255,217,77,0.55)" : skidColorForId(net.id ?? 0));
+    pushSkid(car.x, car.y, car.angle,
+      gameMode === "lobby" ? "rgba(90,84,72,0.16)" // 로비: 흰 바닥 위 연한 웜 그레이 자국
+      : skidColorForId(net.id ?? 0));
   }
 }
 
@@ -1178,7 +1270,9 @@ function updateSkid(car) {
 /* =============================================================================
  *  카메라 — 차량을 항상 화면 중앙에 두고 맵이 움직인다
  * ========================================================================== */
-const camera = { x: 0, y: 0, shake: 0 };
+// zoom: 배율(클수록 확대). ay: 차가 화면 세로 어느 지점에 오는지(0.5=중앙, 0.36=위쪽).
+//  로비 대기 상태는 확대+위쪽(0.36), 주행 시작하면 줌아웃+중앙으로 부드럽게 전환된다.
+const camera = { x: 0, y: 0, shake: 0, zoom: 1, zoomT: 1, ay: 0.5, ayT: 0.5 };
 
 // 화면 흔들림을 추가한다(상대를 죽였을 때 등). 값이 클수록 세게 흔들림.
 function addShake(amount) {
@@ -1186,8 +1280,11 @@ function addShake(amount) {
 }
 
 function updateCamera(car, dt) {
-  camera.x = car.x - viewW / 2;
-  camera.y = car.y - viewH / 2;
+  const k = clamp(dt * 3.2, 0, 1);
+  camera.zoom += (camera.zoomT - camera.zoom) * k;
+  camera.ay += (camera.ayT - camera.ay) * k;
+  camera.x = car.x - (viewW / 2) / camera.zoom;
+  camera.y = car.y - (viewH * camera.ay) / camera.zoom;
   // 흔들림은 시간에 따라 빠르게 잦아든다(약 0.4초)
   camera.shake *= Math.exp(-9 * dt);
   if (camera.shake < 0.3) camera.shake = 0;
@@ -1232,8 +1329,8 @@ window.addEventListener("resize", resize);
 resize();
 
 function render(car) {
-  // 화면 클리어
-  ctx.fillStyle = "#000";
+  // 화면 클리어 (로비는 월드 밖도 웜 화이트로 이어지게)
+  ctx.fillStyle = gameMode === "lobby" ? "#fdfcf8" : "#000";
   ctx.fillRect(0, 0, viewW, viewH);
 
   // 흔들림 오프셋 (킬 시 화면 진동)
@@ -1241,7 +1338,8 @@ function render(car) {
   const sy = camera.shake ? (Math.random() * 2 - 1) * camera.shake : 0;
 
   ctx.save();
-  ctx.translate(-camera.x + sx, -camera.y + sy); // 월드 → 화면 변환 (+흔들림)
+  ctx.scale(camera.zoom, camera.zoom); // 줌 (로비: 대기 확대 → 주행 줌아웃)
+  ctx.translate(-camera.x + sx / camera.zoom, -camera.y + sy / camera.zoom); // 월드 → 화면 변환 (+흔들림)
 
   drawGround();
   drawSkid();
@@ -1249,23 +1347,28 @@ function render(car) {
   // 속도 불꽃 (내 차 뒤만) — 차체 아래에 깔리도록 차량보다 먼저 그린다
   drawSpeedFlame(car.x, car.y, car.angle, Math.abs(car.lf) * PXS_TO_KMH);
 
-  // 다른 플레이어 차량 (보간된 위치) — 관리자는 금색
+  // 다른 플레이어 차량 (보간된 위치) — 커스텀 색 우선(없으면 id 색 폴백)
   for (const [id, r] of remotePlayers) {
-    drawCar(r, r.admin ? GOLD : colorForId(id), r.admin);
+    drawCar(r, r.color || colorForId(id));
   }
-  // 내 차량 (관리자면 금색)
-  drawCar(car, account.isAdmin ? GOLD : myColor(), account.isAdmin);
+  // 내 차량
+  drawCar(car, myColor());
 
-  // 이름표 (차 아래) — 회전 영향 안 받게 차량 그린 뒤 별도로
-  for (const r of remotePlayers.values()) drawName(r.name, r.x, r.y, r.admin);
-  drawName(playerName, car.x, car.y, account.isAdmin);
+  // 이름표 (차 아래) — 회전 영향 안 받게 차량 그린 뒤 별도로 (로비에선 표시 안 함)
+  if (gameMode !== "lobby") {
+    for (const r of remotePlayers.values()) drawName(r.name, r.x, r.y);
+    drawName(playerName, car.x, car.y);
+  }
 
   // 폭발 이펙트 (차량 위에)
   drawExplosions();
 
+  // 커스텀 32색 링 : 캔버스 최상위 (스키드/차에 가려지지 않게)
+  if (gameMode === "lobby") drawCustomRing();
+
   ctx.restore();
 
-  drawMinimap(car);
+  if (gameMode !== "lobby") drawMinimap(car);
   drawSpeed(car);
   drawRaceHud(); // 프로 레이싱 신호등/GO
   updateTimeHud(); // 우측 하단 #time (프로 현재 랩 / 타임어택)
@@ -1340,9 +1443,10 @@ function updateTimeHud() {
   }
 }
 
-// 바닥 : 모드에 따라 오픈 맵(그리드) 또는 레이싱 트랙
+// 바닥 : 모드에 따라 로비 / 오픈 맵(그리드) / 레이싱 트랙
 function drawGround() {
-  if (isTrackWorld()) drawRacingGround();
+  if (gameMode === "lobby") drawLobbyGround();
+  else if (isTrackWorld()) drawRacingGround();
   else drawSurvivalGround();
 }
 
@@ -1357,9 +1461,9 @@ function drawSurvivalGround() {
   ctx.lineWidth = 2;
   ctx.beginPath();
   const x0 = Math.max(0, Math.floor(camera.x / grid) * grid);
-  const x1 = Math.min(W, camera.x + viewW);
+  const x1 = Math.min(W, camera.x + viewW / camera.zoom);
   const y0 = Math.max(0, Math.floor(camera.y / grid) * grid);
-  const y1 = Math.min(H, camera.y + viewH);
+  const y1 = Math.min(H, camera.y + viewH / camera.zoom);
   for (let x = x0; x <= x1; x += grid) { ctx.moveTo(x, y0); ctx.lineTo(x, y1); }
   for (let y = y0; y <= y1; y += grid) { ctx.moveTo(x0, y); ctx.lineTo(x1, y); }
   ctx.stroke();
@@ -1367,6 +1471,138 @@ function drawSurvivalGround() {
   ctx.strokeStyle = "#d8d040";
   ctx.lineWidth = 8;
   ctx.strokeRect(0, 0, W, H);
+}
+
+/* 로비 바닥 : 웜 화이트 + 보일 듯 말 듯한 격자 + 모드 게이트(플랫 컬러 패치).
+ *  광원 좌상단 고정 → 게이트 그림자는 우하단 플랫 오프셋(#E9E4D8, 블러 0). */
+function drawLobbyGround() {
+  const W = world.w, H = world.h;
+  ctx.fillStyle = "#fdfcf8";
+  ctx.fillRect(0, 0, W, H);
+
+  // 격자 : 맵을 정확히 나눠떨어지게 칸 크기를 스냅 (경계에서 칸이 잘리지 않도록).
+  //  목표 56px 기준으로 가장 가까운 "정수 칸수"를 구해 셀 크기를 역산 → 마지막 선이 경계에 딱 맞음.
+  const gx = W / Math.round(W / 56);
+  const gy = H / Math.round(H / 56);
+  ctx.strokeStyle = "#f2efe8";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  const vx0 = camera.x, vx1 = camera.x + viewW / camera.zoom;
+  const vy0 = camera.y, vy1 = camera.y + viewH / camera.zoom;
+  const ix0 = Math.max(0, Math.floor(vx0 / gx)), ix1 = Math.min(Math.round(W / gx), Math.ceil(vx1 / gx));
+  const iy0 = Math.max(0, Math.floor(vy0 / gy)), iy1 = Math.min(Math.round(H / gy), Math.ceil(vy1 / gy));
+  const y0 = Math.max(0, vy0), y1 = Math.min(H, vy1);
+  const x0 = Math.max(0, vx0), x1 = Math.min(W, vx1);
+  for (let i = ix0; i <= ix1; i++) { const x = i * gx; ctx.moveTo(x, y0); ctx.lineTo(x, y1); }
+  for (let j = iy0; j <= iy1; j++) { const y = j * gy; ctx.moveTo(x0, y); ctx.lineTo(x1, y); }
+  ctx.stroke();
+
+  // 모드 게이트 : 순수 평면 컬러 패치 (그림자/깊이 효과 없음)
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (const g of LOBBY_GATES) {
+    const gx = g.x - g.w / 2, gy = g.y - g.h / 2, r = 30;
+    ctx.fillStyle = g.color;
+    roundRect(gx, gy, g.w, g.h, r);
+    ctx.fill();
+
+    const entering = lobby.gate === g && lobby.prog > 0;
+    if (!entering) {
+      // 라벨 + 서브라벨 (모드 = "N명 접속 중", 커스텀 = 설명)
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "500 30px Jua, sans-serif";
+      ctx.fillText(g.label, g.x, g.y - 16);
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.font = "400 20px Jua, sans-serif";
+      ctx.fillText(gateSub(g), g.x, g.y + 28);
+    } else {
+      // 진입 도넛 : 12시(0도)에서 시작해 시계방향으로 채워짐 → 가득 차면 입장
+      const pr = clamp(lobby.prog, 0, 1);
+      ctx.lineWidth = 11;
+      ctx.strokeStyle = "rgba(255,255,255,0.28)"; // 트랙(비어있는 도넛)
+      ctx.beginPath();
+      ctx.arc(g.x, g.y, 42, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = "#ffffff";                // 채워지는 진행분
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.arc(g.x, g.y, 42, -Math.PI / 2, -Math.PI / 2 + pr * Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+}
+
+/* 커스텀 링 픽커 : 차를 중심으로 32색 스와치가 원형 배치. 클릭=선택(즉시 저장),
+ *  호버=확대, 현재 색=잉크 링 표시. 출발하면 닫힌다. */
+// 게이트 서브라벨 : 그룹에 속한 모드들의 접속 인원 합, 또는 안내 문구
+function gateSub(g) {
+  switch (g.group) {
+    case "arcade": return `${modeCounts.survival || 0}명 접속 중`;
+    case "racing": return `${(modeCounts.racing || 0) + (modeCounts.hard || 0) + (modeCounts.serp || 0)}명 접속 중`;
+    case "plaza": return "준비 중";
+    case "custom": return `${modeCounts.pro || 0}명 접속 중`;
+    case "practice": return "혼자 연습";
+    case "garage": return "차 색상 바꾸기";
+    default: return "";
+  }
+}
+
+function customSwatchAngle(i) {
+  return -Math.PI / 2 + (i * 2 * Math.PI) / CAR_COLORS.length;
+}
+function customSwatchPos(i) {
+  const a = customSwatchAngle(i);
+  return { x: custom.cx + Math.cos(a) * CUSTOM_RING_R, y: custom.cy + Math.sin(a) * CUSTOM_RING_R };
+}
+// 픽커 링의 현재 표시 각도 (슬라이드 애니메이션 진행분 반영)
+function currentPickerAngle() {
+  const selI = CAR_COLORS.findIndex((c) => c.toLowerCase() === myColor().toLowerCase());
+  let a = selI >= 0 ? customSwatchAngle(selI) : -Math.PI / 2;
+  if (custom.selAnim) {
+    const t = clamp((performance.now() - custom.selAnim.at) / 280, 0, 1);
+    const e = 1 - Math.pow(1 - t, 3); // ease-out
+    a = custom.selAnim.from + custom.selAnim.delta * e;
+    if (t >= 1) custom.selAnim = null;
+  }
+  return a;
+}
+function hitCustomSwatch(wx, wy) {
+  for (let i = 0; i < CAR_COLORS.length; i++) {
+    const p = customSwatchPos(i);
+    if (Math.hypot(wx - p.x, wy - p.y) < 20) return i;
+  }
+  return -1;
+}
+function drawCustomRing() {
+  if (!custom.active) return;
+  // 팔레트 : 정적 스와치 (애니메이션 없음)
+  for (let i = 0; i < CAR_COLORS.length; i++) {
+    const p = customSwatchPos(i);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 14, 0, Math.PI * 2);
+    ctx.fillStyle = CAR_COLORS[i];
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(0,0,0,0.08)"; // 밝은 스와치(흰색 등) 경계
+    ctx.stroke();
+  }
+  // 픽커 링 : 선택 표시 하나만 — 색을 바꾸면 원호를 따라 새 스와치로 슬라이드
+  const a = currentPickerAngle();
+  ctx.beginPath();
+  ctx.arc(custom.cx + Math.cos(a) * CUSTOM_RING_R, custom.cy + Math.sin(a) * CUSTOM_RING_R, 21, 0, Math.PI * 2);
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = "#3a3a3a";
+  ctx.stroke();
+  // 하단 : 현재 색 hex + 안내
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#3a3a3a";
+  ctx.font = "600 26px Quicksand, sans-serif";
+  ctx.fillText(myColor().toUpperCase(), custom.cx, custom.cy + CUSTOM_RING_R + 64);
+  ctx.fillStyle = "#b6b0a4";
+  ctx.font = "400 20px Jua, sans-serif";
+  ctx.fillText("색을 고르고 출발하면 저장돼요", custom.cx, custom.cy + CUSTOM_RING_R + 98);
 }
 
 // 트랙 리본(커브+아스팔트+중앙선)을 주어진 컨텍스트에 그린다.
@@ -1431,16 +1667,16 @@ function drawRacingGround() {
 }
 
 // 차 아래에 이름표를 그린다 (회전 없이, 가독성 위해 어두운 외곽선 + 흰 글자)
-function drawName(text, x, y, isAdmin = false) {
+function drawName(text, x, y) {
   if (!text) return;
-  ctx.font = (isAdmin ? "800 14px" : "600 14px") + " 'Segoe UI', Arial, sans-serif";
+  ctx.font = "600 14px 'Segoe UI', Arial, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   const ny = y + CAR.length / 2 + 6;
   ctx.lineWidth = 3;
   ctx.strokeStyle = "rgba(0,0,0,0.85)";
   ctx.strokeText(text, x, ny);
-  ctx.fillStyle = isAdmin ? GOLD : "#ffffff";
+  ctx.fillStyle = "#ffffff";
   ctx.fillText(text, x, ny);
 }
 
@@ -1520,72 +1756,107 @@ function drawSpeedFlame(x, y, angle, kmh) {
   ctx.restore();
 }
 
-function drawCar(car, color = "#e23b2e", isAdmin = false) {
-  ctx.save();
-  ctx.translate(car.x, car.y);
-  ctx.rotate(car.angle);
+/* 차량 렌더 : 포르쉐 실루엣 탑뷰 (확정 쉐입).
+ *  - 쉐입 좌표계 : 190x266 (앞 = -y). car.angle(+x 전방)에 맞춰 +90도 회전해 그린다.
+ *  - 그림자 : 광원 좌상단 고정 → 회전과 무관하게 우하단 오프셋 (로비=웜 그레이, 트랙=반투명 검정).
+ *  - 루프/후드라인 : 바디 색 위에 흰/검 반투명을 겹쳐 어떤 색이든 톤 관계 유지. */
+const CARP = {
+  body: new Path2D("M 95 16 C 67 16 51 25 46 46 C 41.5 62 39.5 80 39.5 98 C 39.5 116 41 128 41 138 C 41 150 39 164 38.5 180 C 37.5 202 41 219 48 230 C 56 242 78 248 95 248 C 112 248 134 242 142 230 C 149 219 152.5 202 151.5 180 C 151 164 149 150 149 138 C 149 128 150.5 116 150.5 98 C 150.5 80 148.5 62 144 46 C 139 25 123 16 95 16 Z"),
+  hood: new Path2D("M 74 36 C 71 58 69 76 70 92 M 116 36 C 119 58 121 76 120 92"),
+  wind: new Path2D("M 59 96 C 72 85 118 85 131 96 L 126 122 C 113 113 77 113 64 122 Z"),
+  dash: new Path2D("M 64 97 C 76 89 114 89 126 97 L 124 104 C 113 96 77 96 66 104 Z"),
+  sideL: new Path2D("M 55 126 C 54 142 54 158 55 172 L 63 168 C 62 156 62 140 63 128 Z"),
+  sideR: new Path2D("M 135 126 C 136 142 136 158 135 172 L 127 168 C 128 156 128 140 127 128 Z"),
+  rear: new Path2D("M 64 178 C 77 186 113 186 126 178 L 121 206 C 109 198 81 198 69 206 Z"),
+};
 
-  // 부활 직후 무적 상태면 깜빡이게 표시 (내 차: invulnUntil / 원격: 서버의 invuln 플래그)
-  if ((car.invulnUntil && performance.now() < car.invulnUntil) || car.invuln) {
-    ctx.globalAlpha = 0.4 + 0.35 * Math.abs(Math.sin(performance.now() / 90));
-  }
+// 쉐입 로컬 좌표계로 진입 (차 중심 = (95,132), 스케일 s)
+function carShapeTransform(x, y, rot, s) {
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  ctx.scale(s, s);
+  ctx.translate(-95, -132);
+}
 
+function drawCar(car, color = "#e8604c") {
   const L = car.length || CAR.length;
-  const W = car.width || CAR.width;
+  const s = (L + 10) / 232;           // 시각 길이는 충돌 길이보다 살짝 크게
+  const rot = car.angle + Math.PI / 2; // 쉐입 전방(-y) → car.angle 전방(+x)
 
-  // 그림자
-  ctx.fillStyle = "rgba(0,0,0,0.35)";
-  ctx.fillRect(-L / 2 + 2, -W / 2 + 3, L, W);
-
-  // 차체
-  if (isAdmin) {
-    // 관리자 : 금색 + 빛나는 글로우 + 빛이 비치는 그라데이션
-    const pulse = 14 + 8 * Math.abs(Math.sin(performance.now() / 260));
-    ctx.shadowColor = GOLD;
-    ctx.shadowBlur = pulse;
-    const g = ctx.createLinearGradient(0, -W / 2, 0, W / 2);
-    g.addColorStop(0, "#fff6cf");   // 위쪽 하이라이트(빛 반사)
-    g.addColorStop(0.5, GOLD);
-    g.addColorStop(1, "#b8860b");   // 아래쪽 음영
-    ctx.fillStyle = g;
-    roundRect(-L / 2, -W / 2, L, W, 5);
-    ctx.fill();
-    ctx.shadowBlur = 0;
+  // ---- 그림자 (수직 아래로만 떨어짐 — 광원이 바로 위) ----
+  //  로비 : multiply 블렌드 — 아래 색을 "곱해서" 어둡게 만들므로 격자든 게이트든 자연스럽다
+  ctx.save();
+  carShapeTransform(car.x, car.y + 7, rot, s);
+  if (gameMode === "lobby") {
+    ctx.globalCompositeOperation = "multiply";
+    ctx.fillStyle = "#e9e4d8";
   } else {
-    ctx.fillStyle = color;
-    roundRect(-L / 2, -W / 2, L, W, 5);
-    ctx.fill();
+    ctx.fillStyle = "rgba(0,0,0,0.30)";
   }
-
-  // 앞부분(코) 표시 — 진행방향 식별
-  ctx.fillStyle = "#1b1b1b";
-  ctx.fillRect(L / 2 - 8, -W / 2 + 2, 6, W - 4); // 앞유리
-  ctx.fillStyle = "#2a2a2a";
-  ctx.fillRect(-L / 2 + 4, -W / 2 + 2, 6, W - 4); // 뒷유리
-
-  // ===== 사이드미러 =====
-  const mx = L / 2 - 12;     // 앞유리 부근
-  const mirrorLen = 5;       // 길이
-  const mirrorWidth = 2;   // 두께
-  const mirrorGap = -.5;     // 차체와 거리
-  const mirrorAngle = 0.5;  // 약 19도
-
-  ctx.fillStyle = color;
-
-  // 왼쪽 미러
-  ctx.save();
-  ctx.translate(mx + mirrorLen, -W / 2 - mirrorGap); // 차체쪽 끝이 회전축
-  ctx.rotate(mirrorAngle);
-  ctx.fillRect(-mirrorLen - 2.7, -mirrorWidth / 2, mirrorLen, mirrorWidth);
+  ctx.fill(CARP.body);
   ctx.restore();
 
-  // 오른쪽 미러
   ctx.save();
-  ctx.translate(mx + mirrorLen, W / 2 + mirrorGap); // 차체쪽 끝이 회전축
-  ctx.rotate(-mirrorAngle);
-  ctx.fillRect(-mirrorLen - 2.7, -mirrorWidth / 2, mirrorLen, mirrorWidth);
-  ctx.restore();
-  
+  carShapeTransform(car.x, car.y, rot, s);
+
+  // ---- 바디 + 사이드미러 + 은은한 아웃라인(바닥과 분리, 튀지 않게) ----
+  //  아웃라인 = 바디색을 살짝 어둡게 (밝은 색이면 웜 그레이) → 어떤 색이든 자연스러운 테두리.
+  const outline = carOutline(color);
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
+  // 사이드미러 (바디보다 먼저 → 바디 테두리가 미러 밑동을 덮어 깔끔)
+  const drawMirror = (tx, rr) => {
+    ctx.save();
+    ctx.translate(tx, 111); ctx.rotate(rr);
+    roundRect(-9.5, -5, 19, 10, 5);
+    ctx.fillStyle = color; ctx.fill();
+    // ctx.strokeStyle = outline; ctx.lineWidth = 3; ctx.stroke();
+    ctx.restore();
+  };
+  drawMirror(29, -0.28);
+  drawMirror(161, 0.28);
+  // 바디
+  ctx.fillStyle = color; ctx.fill(CARP.body);
+  // ctx.strokeStyle = outline; ctx.lineWidth = 3.5; ctx.stroke(CARP.body);
+
+  // ---- 후드 라인 (바디보다 어두운 톤) ----
+  ctx.strokeStyle = "rgba(0,0,0,0.14)";
+  ctx.lineWidth = 3.5;
+  ctx.lineCap = "round";
+  // ctx.stroke(CARP.hood);
+
+  // ---- 헤드라이트 (펜더에 파묻힌 티어드롭) ----
+  ctx.fillStyle = "#3a3f47";
+  ctx.beginPath(); ctx.ellipse(62, 40, 12, 8, -0.31, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(128, 40, 12, 8, 0.31, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#f6efe0";
+  ctx.beginPath(); ctx.arc(59, 38, 3.2, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(131, 38, 3.2, 0, Math.PI * 2); ctx.fill();
+
+  // ---- 유리 (윈드실드/사이드/리어) ----
+  ctx.fillStyle = "#2f333b";
+  ctx.fill(CARP.wind);
+  ctx.fill(CARP.sideL);
+  ctx.fill(CARP.sideR);
+  ctx.fill(CARP.rear);
+
+  // ---- 버건디 인테리어 (대시보드 + 리어 시트) ----
+  ctx.fillStyle = "#8e4444";
+  ctx.fill(CARP.dash);
+  roundRect(76, 186, 14, 9, 4.5); ctx.fill();
+  roundRect(100, 186, 14, 9, 4.5); ctx.fill();
+
+  // ---- 루프 (바디 +32% 밝게 : 색 위에 흰 반투명 한 겹) ----
+  // ctx.fillStyle = color;
+  // roundRect(66, 118, 58, 56, 17); ctx.fill();
+  // ctx.fillStyle = "rgba(255,255,255,0.32)";
+  // roundRect(66, 118, 58, 56, 17); ctx.fill();
+
+  // ---- 엔진 데크 + 세로 슬랫 ----
+  ctx.fillStyle = "#2f333b";
+  roundRect(68, 214, 54, 21, 9); ctx.fill();
+  ctx.fillStyle = "#4a4e57";
+  for (let i = 0; i < 6; i++) { roundRect(75 + i * 8, 218, 2.5, 13, 1.25); ctx.fill(); }
+
   ctx.restore();
 }
 
@@ -1668,24 +1939,21 @@ function drawMinimap(car) {
   // 현재 화면(뷰포트) 영역 표시
   mctx.strokeStyle = "rgba(255,255,255,0.4)";
   mctx.lineWidth = 1;
-  mctx.strokeRect(wx(camera.x), wy(camera.y), viewW * scale, viewH * scale);
+  mctx.strokeRect(wx(camera.x), wy(camera.y), (viewW / camera.zoom) * scale, (viewH / camera.zoom) * scale);
 
-  // 다른 플레이어 (작은 점) — 관리자는 금색 + 블러 글로우
+  // 다른 플레이어 (작은 점) — 커스텀 색 우선(없으면 id 색)
   for (const [id, r] of remotePlayers) {
-    if (r.admin) { mctx.shadowColor = GOLD; mctx.shadowBlur = 8; mctx.fillStyle = GOLD; }
-    else { mctx.shadowBlur = 0; mctx.fillStyle = colorForId(id); }
+    mctx.fillStyle = r.color || colorForId(id);
     mctx.beginPath();
-    mctx.arc(wx(r.x), wy(r.y), r.admin ? 4 : 3, 0, Math.PI * 2);
+    mctx.arc(wx(r.x), wy(r.y), 3, 0, Math.PI * 2);
     mctx.fill();
   }
-  mctx.shadowBlur = 0;
 
-  // 내 차량 위치 + 방향(삼각형) — 관리자는 금색 + 블러
+  // 내 차량 위치 + 방향(삼각형)
   mctx.save();
   mctx.translate(wx(car.x), wy(car.y));
   mctx.rotate(car.angle);
-  if (account.isAdmin) { mctx.shadowColor = GOLD; mctx.shadowBlur = 8; mctx.fillStyle = GOLD; }
-  else mctx.fillStyle = myColor();
+  mctx.fillStyle = myColor();
   mctx.beginPath();
   mctx.moveTo(7, 0);    // 앞쪽 꼭지점
   mctx.lineTo(-5, -4);
@@ -1734,8 +2002,30 @@ function skidColorForId(id) {
   return `hsla(${hueForId(id)}, 55%, 30%, 0.5)`;
 }
 // 내 차 색 (서버가 id 를 줄 때까지는 id 0 기준 색)
+// 내 차 색 : 기본 코랄, 커스텀 게이트(32색 링)에서 선택 → localStorage 영속 + 캐시
+let carColorCache = null;
 function myColor() {
-  return colorForId(net.id ?? 0);
+  if (carColorCache) return carColorCache;
+  try { carColorCache = localStorage.getItem("carColor") || "#e8604c"; } catch { carColorCache = "#e8604c"; }
+  return carColorCache;
+}
+function setCarColor(c) {
+  carColorCache = c;
+  try { localStorage.setItem("carColor", c); } catch {}
+}
+// 밝기(0~1) — 흰색 계열 차가 흰 바닥에 묻히지 않게 아웃라인 판단용
+function hexLum(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+}
+// 차 아웃라인 색 : 바디색을 살짝 어둡게(밝은 색은 웜 그레이) → 바닥과 분리되되 튀지 않는 테두리
+function carOutline(color) {
+  if (typeof color !== "string" || color[0] !== "#" || color.length < 7) return "rgba(0,0,0,0.22)";
+  const n = parseInt(color.slice(1), 16);
+  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const f = hexLum(color) > 0.82 ? 0.78 : 0.62; // 밝을수록 더 눌러 회색 테두리 확보
+  r = Math.round(r * f); g = Math.round(g * f); b = Math.round(b * f);
+  return `rgb(${r},${g},${b})`;
 }
 
 function connect() {
@@ -1755,7 +2045,7 @@ function connect() {
       if (tk) net.ws.send(JSON.stringify({ type: "auth", token: tk }));
     } catch {}
     // 재접속 시, 플레이 중이었다면 같은 모드로 자동 재입장
-    if (gameState === "playing") sendJoin();
+    if (gameState === "playing" && gameMode !== "lobby") sendJoin(); // 로비는 서버 미입장
   };
 
   net.ws.onmessage = (ev) => {
@@ -1764,6 +2054,15 @@ function connect() {
 
     if (msg.type === "welcome") {
       net.id = msg.id;
+      // 초대 링크(?room=ID)로 들어온 경우 : 방 목록 팝업 열고 해당 방으로 바로 참가 시도
+      if (pendingRoomJoin != null) {
+        const rid = pendingRoomJoin;
+        pendingRoomJoin = null;
+        if (gameMode === "lobby") {
+          openCustomRooms();
+          net.ws.send(JSON.stringify({ type: "joinRoom", roomId: rid }));
+        }
+      }
     } else if (msg.type === "authOk") {
       // 로그인/회원가입 성공
       account.loggedIn = true;
@@ -1806,15 +2105,20 @@ function connect() {
       }
       updateDashboard();
     } else if (msg.type === "counts") {
-      // 모드별 참가 인원 → 메뉴 버튼 배지 갱신
-      const set = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = `${n}명`; };
-      set("countSurvival", msg.survival || 0);
-      set("countRacing", msg.racing || 0);
-      set("countHard", msg.hard || 0);
-      set("countSerp", msg.serp || 0);
-      set("countPro", msg.pro || 0);
+      // 모드별 참가 인원 → 로비 게이트 숫자 + 온라인 표시 갱신
+      modeCounts.survival = msg.survival || 0;
+      modeCounts.racing = msg.racing || 0;
+      modeCounts.hard = msg.hard || 0;
+      modeCounts.serp = msg.serp || 0;
+      modeCounts.pro = msg.pro || 0;
+      modeCounts.total = typeof msg.total === "number"
+        ? msg.total
+        : modeCounts.survival + modeCounts.racing + modeCounts.hard + modeCounts.serp + modeCounts.pro;
+      const on = document.getElementById("lobOnline");
+      if (on) on.textContent = `온라인 ${modeCounts.total}`;
     } else if (msg.type === "spawn") {
-      // 서버가 정한 입장/부활 위치 → 거기서 시작
+      // 서버가 정한 입장/부활 위치 → 거기서 시작 (로비에선 무시 — 서버 미입장 상태)
+      if (gameMode === "lobby") return;
       CAR.x = msg.x; CAR.y = msg.y; CAR.angle = msg.angle;
       CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
       CAR.invulnUntil = performance.now() + 1500;
@@ -1851,22 +2155,19 @@ function connect() {
       }
       updateRaceUI();
     } else if (msg.type === "roomJoined") {
-      // 방 입장 승인 → 로비로 (구체 상태는 곧 race 메시지로)
+      // 방 입장 승인 → 대기실 팝업 (스테이지 진입은 전원 준비 후 시작 시점에)
+      race.roomId = msg.roomId;
       race.isHost = !!msg.isHost;
       race.state = "lobby";
       race.myReady = false;
       hideCreateRoom();
       updateRaceUI();
     } else if (msg.type === "proStart") {
-      // 트랙 적용 후 내 그리드 슬롯에 배치
+      // 트랙/슬롯 저장. 그리드 배치는 스테이지에 있을 때만 (로비 대기 중엔 시작 시 배치)
       race.slot = msg.slot;
       race.laps = msg.laps || 3;
       if (typeof msg.trackIndex === "number") WORLD.pro.track = buildProTrack(msg.trackIndex);
-      const g = proGridPosition(msg.slot);
-      CAR.x = g.x; CAR.y = g.y; CAR.angle = g.angle;
-      CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
-      net.pendingTeleport = true;
-      updateCamera(CAR, 0);
+      if (gameMode === "pro") placeOnProGrid();
     } else if (msg.type === "joinReject") {
       // 방 입장 실패 → 브라우저에 남고 사유 표시
       alert(msg.reason || "입장할 수 없습니다.");
@@ -1898,6 +2199,7 @@ function connect() {
         r.invuln = p.invuln;
         r.name = p.name;
         r.admin = p.admin;
+        r.color = p.color; // 상대의 커스텀 차 색 (없으면 렌더에서 id 색 폴백)
 
         // 스냅샷을 "서버 송신 시각(st)"과 함께 버퍼에 쌓는다 (엔티티 보간용)
         if (p.teleport) {
@@ -1988,9 +2290,15 @@ function handleRaceMessage(msg) {
   race.countdownEnd = msg.countdownMs > 0 ? performance.now() + msg.countdownMs : 0;
   race.endEnd = msg.endMs > 0 ? performance.now() + msg.endMs : 0;
 
-  if (prevState !== "countdown" && race.state === "countdown") sfxCountLit = -1; // 새 카운트다운 비프 준비
+  if (prevState !== "countdown" && race.state === "countdown") {
+    sfxCountLit = -1; // 새 카운트다운 비프 준비
+    // 로비 위 대기실에서 시작 확정 → 이제 스테이지 진입 + 그리드 배치
+    if (gameMode === "lobby") { enterProStage(); placeOnProGrid(); }
+  }
 
   // 카운트다운 → 레이싱 전환 시 : 바퀴 추적/누적 타이머 초기화 + GO 표시/효과음
+  // 안전망 : 카운트다운 메시지를 놓치고 바로 racing 이 온 경우에도 스테이지 진입
+  if (gameMode === "lobby" && race.state === "racing") { enterProStage(); placeOnProGrid(); }
   if (prevState !== "racing" && race.state === "racing") {
     race.lap = 0; race.prog = 0; race.checkpoint = false;
     race.done = false; race.finalMs = 0; race.lapMark = 0;
@@ -2065,8 +2373,9 @@ function renderRoomList() {
 // 로비 패널 + 순위판 + 방 브라우저 DOM 갱신
 function updateRaceUI() {
   const inPro = gameMode === "pro";
-  const browsing = inPro && race.state === "browsing";
-  const inLobby = inPro && race.state === "lobby";
+  // 방 목록/대기실은 로비(메인 화면) 위에서도 뜬다 — 스테이지 진입은 게임 시작 시점
+  const browsing = (inPro || gameMode === "lobby") && race.state === "browsing";
+  const inLobby = (inPro || gameMode === "lobby") && race.state === "lobby";
   const showStand = inPro && (race.state === "lobby" || race.state === "countdown" || race.state === "racing");
 
   document.getElementById("roomBrowser").classList.toggle("show", browsing);
@@ -2081,7 +2390,7 @@ function updateRaceUI() {
     info.textContent = `${courseLabel(race.course)} · ${race.laps}바퀴 · 시간제한 ${timeLabel(race.timeLimit)} · 최대 ${race.maxPlayers}명`;
   }
   const title = document.getElementById("lobbyTitle");
-  if (title) title.textContent = race.roomName ? `${race.roomName}` : "프로 레이싱 로비";
+  if (title) title.textContent = race.roomName ? `${race.roomName}` : "커스텀 대기실";
 
   // 로비 플레이어 목록
   const lobbyList = document.getElementById("lobbyList");
@@ -2108,7 +2417,7 @@ function updateRaceUI() {
   btn.textContent = race.myReady ? "준비 취소" : "준비";
   btn.classList.toggle("ready", race.myReady);
   document.getElementById("lobbyHint").textContent =
-    "모두 준비하면 자동으로 시작됩니다 (혼자여도 가능)";
+    "모두 준비하면 자동으로 시작됩니다 (최소 2명)";
 
   // 순위판 : 순위 · 이름 · 현재 랩 기록 · 현재랩/전체랩
   const sList = document.getElementById("standingsList");
@@ -2219,6 +2528,7 @@ function setupChat() {
 // 내 차 상태를 서버에 전송 — 모니터 주사율대로(매 프레임). 안전 상한 ~165Hz(6ms)만 둔다.
 //  → 서버가 항상 최신 위치를 갖고, 남들 화면에선 수신측 보간이 각자 모니터 Hz로 렌더한다.
 function netSend(car, now) {
+  if (gameMode === "lobby") return; // 로비는 로컬 전용(서버 미입장)
   if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
   if (now - net.lastSend < 6) return; // 매 프레임 전송(60·120·144Hz 그대로), 6ms 미만만 차단
   net.lastSend = now;
@@ -2228,6 +2538,7 @@ function netSend(car, now) {
     x: Math.round(car.x), y: Math.round(car.y),
     angle: +car.angle.toFixed(3),
     drifting: car.drifting, // 드리프트 중일 때만 → 남들 화면에도 그때만 자국
+    color: myColor(),       // 커스텀 차 색 → 서버가 스냅샷으로 릴레이
   };
   // 막 텔레포트(벽/플레이어 리스폰)했으면 서버·남들에게 스냅하라고 알린다
   if (net.pendingTeleport) { msg.teleport = true; net.pendingTeleport = false; }
@@ -2305,7 +2616,7 @@ function updateRemotes(dt) {
     }
 
     // 드리프트 중인 원격 차량의 타이어 자국 (관리자는 금색)
-    if (r.drifting) pushSkid(r.x, r.y, r.angle, r.admin ? "rgba(255,217,77,0.55)" : skidColorForId(id));
+    if (r.drifting) pushSkid(r.x, r.y, r.angle, skidColorForId(id));
   }
 }
 
@@ -2322,7 +2633,7 @@ function updateRemotesFallback() {
     while (d < -Math.PI) d += Math.PI * 2;
     r.angle += d * 0.25;
     r.drifting = tgt.drifting;
-    if (r.drifting) pushSkid(r.x, r.y, r.angle, r.admin ? "rgba(255,217,77,0.55)" : skidColorForId(id));
+    if (r.drifting) pushSkid(r.x, r.y, r.angle, skidColorForId(id));
   }
 }
 
@@ -2369,6 +2680,7 @@ function frame(now) {
   updateLap(CAR);             // 프로 레이싱 바퀴 추적
   updateAttack(CAR);          // 자유 모드 타임어택 계측
   updateSkid(CAR);            // 스키드 마크
+  if (gameMode === "lobby") updateLobby(dt); // 로비: 오버레이 상태 + 게이트 진입 판정
   const spdKmh = Math.abs(CAR.lf) * PXS_TO_KMH;
   updateDriftSfx();           // 드리프트 스크리치(지속음) 시작/정지
   updateEngineSfx(spdKmh);    // 엔진 드론 (속도 → 피치)
@@ -2392,11 +2704,24 @@ function startGame(mode) {
   gameMode = mode;
   world = WORLD[mode];
 
-  // 이름 확정 + 저장
-  const input = document.getElementById("nameInput");
-  playerName = (input.value || "").trim().slice(0, 12) || "Player";
+  // 이름 확정 : 로그인 = 계정 닉네임, 비로그인 = 저장된 이름 (닉네임 편집은 계정 팝업에서)
+  if (account.loggedIn) {
+    playerName = account.nickname;
+  } else {
+    let stored = "";
+    try { stored = (localStorage.getItem("carGameName") || "").trim(); } catch {}
+    playerName = stored.slice(0, 12) || "Player";
+  }
 
-  try { localStorage.setItem("carGameName", playerName); } catch {}
+  // 로비 오버레이/팝업 숨김 + 카메라 원복(줌/앵커)
+  document.getElementById("lobbyUI").style.display = "none";
+  document.getElementById("mapModal").classList.remove("show");
+  mapPopup.open = false;
+  document.body.classList.remove("lobby"); // 인게임은 다크 스킨 유지
+  camera.zoom = camera.zoomT = 1;
+  camera.ay = camera.ayT = 0.5;
+  minimap.style.display = "block";
+  speedEl.style.display = "block";
 
   // 상태 초기화
   remotePlayers.clear();
@@ -2437,24 +2762,268 @@ function startGame(mode) {
   sendJoin(); // 서버에 입장
 }
 
+// "메뉴로" = 로비 월드로 복귀 (접속 화면 = 로비)
 function toMenu() {
-  if (gameState === "menu") return;
-  gameState = "menu";
+  if (gameMode === "lobby") return;
+  enterLobby();
+}
+
+/* 로비 진입 : 웜 화이트 월드에 차 스폰, 대기 오버레이 표시. 서버엔 미입장(로컬 전용). */
+function enterLobby() {
   sendLeave();
-  gameMode = "survival";
+  gameMode = "lobby";
+  world = WORLD.lobby;
+  gameState = "playing"; // 로비도 실제 주행 상태 (물리/렌더 모두 동작)
   race.state = "none";
   remotePlayers.clear();
   skidMarks.length = 0;
+  explosions.length = 0;
+  camera.shake = 0;
+  resetAttack();
+
+  // 차 스폰 (가운데 아래쪽, 위를 보고)
+  CAR.x = LOBBY_SPAWN.x; CAR.y = LOBBY_SPAWN.y; CAR.angle = -Math.PI / 2;
+  CAR.vx = CAR.vy = CAR.lf = CAR.ll = CAR.steerInput = 0;
+  keys.w = keys.a = keys.s = keys.d = keys.space = false;
+
+  // 카메라 : 대기 상태 = 확대 + 차가 화면 36% 지점
+  camera.zoom = camera.zoomT = 1.15;
+  camera.ay = camera.ayT = 0.36;
+  updateCamera(CAR, 0);
+
+  // 오버레이 : 대기(전부 표시)
+  lobby.ui = "idle"; lobby.stopMs = 0; lobby.gate = null; lobby.prog = 0;
+  const ui = document.getElementById("lobbyUI");
+  ui.style.display = "block";
+  ui.classList.remove("s-hidden");
+  document.body.classList.add("lobby"); // 채팅 등 DOM 라이트 스킨
+
+  // 로비에서 안 쓰는 HUD 숨김
   document.getElementById("exitBtn").style.display = "none";
   document.getElementById("death").classList.remove("show");
-  document.getElementById("menu").classList.add("show");
-  resetAttack();  // 측정 중이었어도 초기화
-  updateRaceUI(); // 로비/순위판 숨김
+  minimap.style.display = "none";
+  speedEl.style.display = "none";
+  updateRaceUI();
   updateTouchVisibility();
   updateFreeUI();
   setTimeHud("");
-  updateProTimer(); // 상단 종료 카운트다운 즉시 숨김
-  updateMainLink(); // 메인 링크 표시
+  updateProTimer();
+}
+
+/* 로비 대기 상태로 복귀 (ESC) : 리스폰 없이 "그 자리에서" 줌인 + 메뉴 오버레이 전체 표시 */
+function lobbyIdle() {
+  if (lobby.ui === "idle" && !custom.active && !mapPopup.open) return;
+  if (custom.active) closeCustom();
+  if (mapPopup.open) closeMapPopup();
+  lobby.ui = "idle"; lobby.stopMs = 0; lobby.gate = null; lobby.prog = 0;
+  CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0; // 메뉴 보는 동안 차 정지
+  const ui = document.getElementById("lobbyUI");
+  ui.classList.remove("s-hidden");
+  camera.zoomT = 1.15; // 다시 줌인
+  camera.ayT = 0.36;   // 차를 위쪽(36%)으로
+}
+
+/* 로비 갱신 : 오버레이 상태 머신 + 게이트 진입 판정 */
+function updateLobby(dt) {
+  const ui = document.getElementById("lobbyUI");
+  const inputHeld = keys.w || keys.s || keys.a || keys.d || keys.space;
+
+  // 로비 전용 : 입력이 없으면 금방 멈추도록 추가 감쇠 (메뉴 공간에서 하염없이 미끄러지지 않게)
+  if (!inputHeld) {
+    const f = Math.exp(-1.6 * dt);
+    CAR.vx *= f; CAR.vy *= f;
+  }
+  const speed = Math.hypot(CAR.vx, CAR.vy);
+
+  // 커스텀(색상 선택) 열림 : 오버레이/게이트 상태머신 정지.
+  //  키 입력이 아니라 "실제로 차가 움직여야" 닫힌다 (조향/브레이크만 눌러선 유지).
+  if (custom.active) {
+    if (speed > 30) closeCustom();
+    return;
+  }
+  // 맵 팝업 열림 : 마찬가지로 실제로 움직이면 닫힌다
+  if (mapPopup.open) {
+    if (speed > 30) closeMapPopup();
+    return;
+  }
+  // 커스텀 방 목록 열림 (로비 위 브라우징) : 움직이면 닫힌다
+  if (race.state === "browsing") {
+    if (speed > 30) closeCustomRooms();
+    return;
+  }
+  // 대기실(방 참가 상태) : 시작까지 로비에서 차 고정 — 움직여도 방에서 나가지지 않는다
+  if (race.state === "lobby" || race.state === "countdown") {
+    CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0;
+    return;
+  }
+
+  if (lobby.ui === "idle") {
+    // 첫 입력 → UI 걷힘 + 줌아웃 + 차 중앙으로
+    if (inputHeld || speed > 30) {
+      lobby.ui = "hidden";
+      ui.classList.add("s-hidden");
+      camera.zoomT = 0.95; // 시야 살짝 넓게 (과하지 않게)
+      camera.ayT = 0.5;    // 차 중앙
+    }
+  } else {
+    // 1.5초 정지 → ESC 와 동일하게 전체 UI 페이드인 + 카메라 복귀
+    if (speed < 20 && !inputHeld) {
+      lobby.stopMs += dt * 1000;
+      if (lobby.stopMs >= 1500) lobbyIdle();
+    } else {
+      lobby.stopMs = 0;
+    }
+  }
+
+  // 게이트 진입 : 패치 안에 머무르면 도넛이 차오르고, 가득 차면 입장
+  let g = null;
+  for (const gate of LOBBY_GATES) {
+    if (Math.abs(CAR.x - gate.x) < gate.w / 2 && Math.abs(CAR.y - gate.y) < gate.h / 2) { g = gate; break; }
+  }
+  // 재무장 대기 : 방금 커스텀을 닫은 게이트는 완전히 벗어나야 다시 반응한다
+  if (lobby.holdGate) {
+    if (g === lobby.holdGate) g = null;
+    else lobby.holdGate = null;
+  }
+  if (g !== lobby.gate) {
+    lobby.gate = g;
+    lobby.prog = 0;
+  } else if (g) {
+    lobby.prog += dt / 1.6; // 진입까지 1.6초 (도넛이 12시→360도)
+    if (lobby.prog >= 1) {
+      const grp = g.group;
+      lobby.gate = null; lobby.prog = 0;
+      if (grp === "garage") openCustom();
+      else if (grp === "custom") openCustomRooms(); // 커스텀: 로비 위에 방 목록 팝업만
+      else openMapPopup(grp);
+    }
+  }
+}
+
+/* 커스텀 방 목록 : 로비(메인 화면)에 머문 채 팝업만 연다.
+ *  실제 스테이지 진입은 방을 만들거나 참가해서 roomJoined 를 받았을 때(enterProStage). */
+function openCustomRooms() {
+  CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0; // 보는 동안 차 정지
+  race.state = "browsing";
+  race.isHost = false; race.myReady = false; race.rooms = [];
+  lobby.ui = "hidden"; lobby.stopMs = 0;
+  document.getElementById("lobbyUI").classList.add("s-hidden");
+  // 서버에 커스텀(pro) 브라우징으로 입장 → roomList 실시간 수신
+  if (net.connected && net.ws.readyState === WebSocket.OPEN) {
+    let stored = "";
+    try { stored = (localStorage.getItem("carGameName") || "").trim(); } catch {}
+    playerName = account.loggedIn ? account.nickname : (stored.slice(0, 12) || "Player");
+    net.ws.send(JSON.stringify({ type: "join", mode: "pro", name: playerName }));
+  }
+  updateRaceUI();
+}
+
+function closeCustomRooms() {
+  race.state = "none";
+  sendLeave(); // 서버 브라우징에서 이탈
+  hideCreateRoom();
+  // 게이트를 벗어나야 재무장 (다른 팝업들과 동일)
+  lobby.holdGate = LOBBY_GATES.find((x) => x.group === "custom") || null;
+  updateRaceUI();
+}
+
+/* 내 그리드 슬롯에 차 배치 (스테이지 안에서만 호출) */
+function placeOnProGrid() {
+  const g = proGridPosition(race.slot);
+  CAR.x = g.x; CAR.y = g.y; CAR.angle = g.angle;
+  CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
+  net.pendingTeleport = true;
+  updateCamera(CAR, 0);
+}
+
+/* 게임 시작(카운트다운) 확정 → 이제 실제 스테이지(커스텀 월드)로 전환 */
+function enterProStage() {
+  gameMode = "pro";
+  world = WORLD.pro;
+  remotePlayers.clear();
+  skidMarks.length = 0;
+  explosions.length = 0;
+  camera.shake = 0;
+  camera.zoom = camera.zoomT = 1;
+  camera.ay = camera.ayT = 0.5;
+  document.getElementById("lobbyUI").style.display = "none";
+  document.getElementById("mapModal").classList.remove("show");
+  mapPopup.open = false;
+  document.body.classList.remove("lobby");
+  minimap.style.display = "block";
+  speedEl.style.display = "block";
+  document.getElementById("exitBtn").style.display = "block";
+  updateTouchVisibility();
+  updateFreeUI();
+}
+
+/* 그룹 맵 팝업 : 카드(16:9, 최대 3열)로 맵 목록 표시. 클릭 = 입장, 준비 중 = 비활성. */
+function openMapPopup(groupKey) {
+  const grp = MAP_GROUPS[groupKey];
+  if (!grp) return;
+  mapPopup.open = true;
+  mapPopup.group = groupKey;
+  CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0; // 고르는 동안 차 정지
+  document.getElementById("mapModalTitle").textContent = grp.title;
+  document.getElementById("mapModalDesc").textContent = grp.desc;
+  const grid = document.getElementById("mapGrid");
+  grid.innerHTML = "";
+  for (const m of grp.maps) {
+    const card = document.createElement("button");
+    card.className = "map-card" + (m.mode ? "" : " soon");
+    const nm = document.createElement("div");
+    nm.className = "map-card-name";
+    nm.textContent = m.name;
+    const ds = document.createElement("div");
+    ds.className = "map-card-desc";
+    ds.textContent = m.desc;
+    card.append(nm, ds);
+    if (m.mode) {
+      card.addEventListener("click", () => { closeMapPopup(); startGame(m.mode); });
+    } else {
+      const chip = document.createElement("span");
+      chip.className = "map-card-soon";
+      chip.textContent = "준비 중";
+      card.appendChild(chip);
+      card.disabled = true;
+    }
+    grid.appendChild(card);
+  }
+  document.getElementById("mapModal").classList.add("show");
+}
+
+function closeMapPopup() {
+  if (!mapPopup.open) return;
+  mapPopup.open = false;
+  document.getElementById("mapModal").classList.remove("show");
+  // 게이트 위에 있어도 팝업이 바로 다시 열리지 않게 — 벗어나야 재무장
+  const g = LOBBY_GATES.find((x) => x.group === mapPopup.group);
+  if (g) lobby.holdGate = g;
+}
+
+/* 커스텀 열기 : 차 정지 + 현재 위치를 링 중심으로 고정, 카메라 살짝 줌인 */
+function openCustom() {
+  custom.active = true;
+  custom.cx = CAR.x;
+  custom.cy = CAR.y;
+  CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0;
+  lobby.ui = "hidden";
+  lobby.stopMs = 0;
+  document.getElementById("lobbyUI").classList.add("s-hidden");
+  document.body.classList.add("customizing"); // 채팅 등 DOM 이 링을 가리지 않게 페이드아웃
+  camera.zoomT = 1.2;
+  camera.ayT = 0.5;
+}
+
+function closeCustom() {
+  custom.active = false;
+  custom.selAnim = null;
+  // 아직 게이트 위에 있어도 도넛이 바로 다시 차지 않게 — 게이트를 벗어나야 재무장
+  lobby.holdGate = LOBBY_GATES.find((g) => g.group === "garage") || null;
+  document.body.classList.remove("customizing");
+  canvas.style.cursor = "";
+  camera.zoomT = 0.95; // 주행 뷰로 복귀
+  camera.ayT = 0.5;
 }
 
 // 메뉴 UI 배선
@@ -2485,8 +3054,90 @@ function setupMenu() {
 
   // 자유 모드 타임어택 기록 시작
   document.getElementById("attackBtn").addEventListener("click", startAttack);
+}
 
-  document.getElementById("menu").classList.add("show"); // 시작은 메뉴
+/* 로비 오버레이 배선 : 원형 아이콘 버튼(계정/대시보드/로그아웃/디스코드) + 게이트 클릭 입장 */
+function setupLobbyUI() {
+  document.getElementById("lobAccount").addEventListener("click", () => {
+    if (account.loggedIn) showDashboard();
+    else showAuthModal();
+  });
+  document.getElementById("lobDash").addEventListener("click", showDashboard);
+  document.getElementById("lobLogout").addEventListener("click", () => { sendLogout(); });
+
+  // 게이트 클릭/탭으로도 입장 (모바일 폴백) + 커스텀 스와치 선택
+  canvas.addEventListener("pointerdown", (e) => {
+    if (gameMode !== "lobby") return;
+    const wx = camera.x + e.clientX / camera.zoom;
+    const wy = camera.y + e.clientY / camera.zoom;
+    if (custom.active) {
+      const i = hitCustomSwatch(wx, wy);
+      if (i >= 0) {
+        // 픽커(선택 링)가 이전 색 → 새 색으로 원호를 따라 슬라이드 (팔레트는 정적)
+        const prevI = CAR_COLORS.findIndex((c) => c.toLowerCase() === myColor().toLowerCase());
+        if (prevI >= 0 && prevI !== i) {
+          const from = custom.selAnim ? currentPickerAngle() : customSwatchAngle(prevI);
+          const to = customSwatchAngle(i);
+          const delta = Math.atan2(Math.sin(to - from), Math.cos(to - from)); // 최단 방향
+          custom.selAnim = { from, delta, at: performance.now() };
+        }
+        setCarColor(CAR_COLORS[i]);
+        SFX.click();
+      }
+      return; // 커스텀 중엔 게이트 클릭 무시
+    }
+    for (const g of LOBBY_GATES) {
+      if (Math.abs(wx - g.x) < g.w / 2 && Math.abs(wy - g.y) < g.h / 2) {
+        if (g.group === "garage") openCustom();
+        else if (g.group === "custom") openCustomRooms(); // 커스텀: 로비 위에 방 목록 팝업만
+        else openMapPopup(g.group);
+        return;
+      }
+    }
+  });
+
+  // 맵 팝업 닫기 : 닫기 버튼 / 배경(딤) 클릭
+  document.getElementById("mapModalClose").addEventListener("click", closeMapPopup);
+  document.getElementById("mapModal").addEventListener("pointerdown", (e) => {
+    if (e.target.id === "mapModal") closeMapPopup();
+  });
+
+  // 커스텀 방 목록 닫기 : 배경(딤) 클릭 (로비 위에서 브라우징 중일 때만)
+  document.getElementById("roomBrowser").addEventListener("pointerdown", (e) => {
+    if (e.target.id === "roomBrowser" && gameMode === "lobby") closeCustomRooms();
+  });
+
+  // 대기실 초대 링크 복사 (원형 버튼) : 누르면 클립보드에 복사 + 체크 표시
+  const shareBtn = document.getElementById("shareRoomBtn");
+  shareBtn.addEventListener("click", async () => {
+    if (race.roomId == null) return;
+    const url = `${location.origin}${location.pathname}?room=${race.roomId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      // 클립보드 API 실패 시 폴백
+      const t = document.createElement("input");
+      t.value = url;
+      document.body.appendChild(t);
+      t.select();
+      document.execCommand("copy");
+      t.remove();
+    }
+    shareBtn.classList.add("copied");
+    setTimeout(() => shareBtn.classList.remove("copied"), 1200);
+  });
+
+  // 스와치 위에서만 pointer 커서 (호버 확대 효과는 없음)
+  canvas.addEventListener("mousemove", (e) => {
+    if (!(gameMode === "lobby" && custom.active)) {
+      if (canvas.style.cursor) canvas.style.cursor = "";
+      return;
+    }
+    const wx = camera.x + e.clientX / camera.zoom;
+    const wy = camera.y + e.clientY / camera.zoom;
+    canvas.style.cursor = hitCustomSwatch(wx, wy) >= 0 ? "pointer" : "";
+  });
+
 }
 
 /* =============================================================================
@@ -2536,7 +3187,10 @@ function updateAuthUI() {
   const inn = account.loggedIn;
   document.getElementById("authOpenBtn").style.display = inn ? "none" : "block";
   document.getElementById("loggedIn").style.display = inn ? "block" : "none";
-  document.getElementById("dashBtn").style.display = inn ? "block" : "none";
+  document.getElementById("dashBtn").style.display = "none"; // 구 대시보드 버튼 → 로비 원형 버튼으로 대체
+  // 로비 원형 버튼 : 비로그인 = 계정+디스코드만, 로그인 = 4개 전부
+  document.getElementById("lobDash").style.display = inn ? "flex" : "none";
+  document.getElementById("lobLogout").style.display = inn ? "flex" : "none";
   // 로그인 상태면 닉네임 입력/라벨을 아예 숨긴다(계정 닉네임 사용). 비로그인 시 표시.
   document.getElementById("nameInput").style.display = inn ? "none" : "block";
   document.getElementById("nameLabel").style.display = inn ? "none" : "block";
@@ -2679,7 +3333,8 @@ setupChat();
 setupAuth();
 setupTouch();
 setupAudio();
-updateMainLink(); // 시작 시 메인 화면이면 링크 표시
+setupLobbyUI();
+enterLobby();     // 접속하자마자 로비 월드에서 시작 (메뉴 화면 없음)
 requestAnimationFrame(frame);
 
 // 효과음 배선 : 첫 사용자 입력에서 오디오 컨텍스트 재개 + 버튼 클릭음

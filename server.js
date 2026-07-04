@@ -294,7 +294,7 @@ wss.on("connection", (ws) => {
     } else if (msg.type === "createRoom") {
       if (!p.active || p.mode !== "pro" || p.roomId != null) return;
       const laps = clampInt(msg.laps, 1, 20, 3);
-      const maxPlayers = clampInt(msg.maxPlayers, 1, PRO_MAX, 7); // 1 = 솔로 방
+      const maxPlayers = clampInt(msg.maxPlayers, 2, PRO_MAX, 7); // 최소 2명
       const timeLimitMs = TIME_LIMITS.includes(msg.timeLimit) ? msg.timeLimit : 0;
       let course, trackIndex;
       if (msg.course === "random") { course = "random"; trackIndex = Math.floor(Math.random() * NAMED_COURSES); }
@@ -362,6 +362,8 @@ wss.on("connection", (ws) => {
     } else if (msg.type === "state") {
       if (!p.active) return;
       if (Date.now() < (p.graceUntil || 0)) return;
+      // 커스텀 차 색 (형식 검증 후 저장 → 스냅샷으로 릴레이)
+      if (typeof msg.color === "string" && /^#[0-9a-fA-F]{6}$/.test(msg.color)) p.color = msg.color;
       p.state = {
         x: msg.x, y: msg.y, angle: msg.angle,
         drifting: !!msg.drifting,
@@ -514,7 +516,7 @@ function broadcastCounts() {
   for (const [, p] of players) {
     if (p.active && counts[p.mode] !== undefined) counts[p.mode]++;
   }
-  const payload = JSON.stringify({ type: "counts", ...counts });
+  const payload = JSON.stringify({ type: "counts", ...counts, total: players.size }); // total = 로비 포함 전체 접속자
   for (const [, p] of players) {
     if (p.ws.readyState === p.ws.OPEN) p.ws.send(payload);
   }
@@ -609,7 +611,7 @@ function broadcastRoom(roomId) {
     roomId, roomName: room.name, hostId: room.hostId,
     state: room.state, laps: room.laps, course: room.course,
     timeLimit: room.timeLimitMs, maxPlayers: room.maxPlayers, trackIndex: room.trackIndex,
-    canReady: roomMembers(roomId).length >= 1, // 솔로(1명)도 시작 가능
+    canReady: roomMembers(roomId).length >= 2, // 최소 2명부터 준비/시작 가능
     countdownMs: room.state === "countdown" ? Math.max(0, room.countdownAt - now) : 0,
     endMs: (room.state === "racing" && room.raceEndAt > 0) ? Math.max(0, room.raceEndAt - now) : 0,
     players: rankedRoom(roomId),
@@ -651,7 +653,7 @@ function maybeStartCountdown(roomId) {
   const room = rooms.get(roomId);
   if (!room || room.state !== "lobby") return;
   const m = roomMembers(roomId);
-  if (m.length < 1 || !m.every((e) => e.p.ready)) return; // 솔로(1명)도 시작 가능
+  if (m.length < 2 || !m.every((e) => e.p.ready)) return; // 최소 2명 + 전원 준비
   room.state = "countdown";
   room.countdownAt = Date.now() + COUNTDOWN_MS;
   room.raceEndAt = 0;
@@ -779,6 +781,7 @@ setInterval(() => {
       teleport: !!p.state.teleport,
       invuln: now < (p.invulnUntil || 0),
       admin: !!p.isAdmin, // 관리자 금색 차 표시용
+      color: p.color,     // 커스텀 차 색 (미설정 시 undefined → 클라가 id 색 폴백)
     };
     if (p.mode === "pro") {
       if (p.roomId != null) {

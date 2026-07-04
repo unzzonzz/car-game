@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>Top-View Supercar Physics</title>
+  <title>RacingClub.io</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;600&family=Jua&display=swap" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -24,6 +27,28 @@
 
   <!-- 메인(메뉴) 화면 우측 하단 텍스트 링크 : #time 과 동일 스타일. href 는 직접 채워 넣기 -->
   <a id="mainLink" href="https://discord.gg/G8n88REdCe" target="_blank" rel="noopener">디스코드 입장</a>
+
+  <!-- 로비 오버레이 : 접속 직후 대기 화면 (움직이면 걷힘, 정지하면 버튼만 복귀) -->
+  <div id="lobbyUI">
+    <span id="lobBrand" class="lob-el">RacingClub.io</span>
+    <span id="lobOnline" class="lob-el">온라인 0</span>
+    <div id="lobHint" class="lob-el"><span>움직여서 시작</span></div>
+    <div id="lobBtns" class="lob-el">
+      <button id="lobAccount" class="lob-btn" aria-label="계정">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="7" r="4"/><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/></svg>
+      </button>
+      <button id="lobDash" class="lob-btn" aria-label="대시보드">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 20v-8"/><path d="M12 20V5"/><path d="M19 20v-11"/></svg>
+      </button>
+      <button id="lobLogout" class="lob-btn" aria-label="로그아웃">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+      </button>
+      <a id="lobDiscord" class="lob-btn" href="https://discord.gg/G8n88REdCe" target="_blank" rel="noopener" aria-label="디스코드">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5.2a13 13 0 0 1 6 0"/><path d="M6.3 5.6C4.6 6.2 3.4 7.2 3 8.4c-.9 2.9-1.1 5.8-.6 8.6 1.4 1.1 2.9 1.8 4.5 2.2l.9-1.8"/><path d="M17.7 5.6c1.7.6 2.9 1.6 3.3 2.8.9 2.9 1.1 5.8.6 8.6-1.4 1.1-2.9 1.8-4.5 2.2l-.9-1.8"/><path d="M8.6 17.7c2.2.5 4.6.5 6.8 0"/><circle cx="9.3" cy="12" r="0.8" fill="currentColor"/><circle cx="14.7" cy="12" r="0.8" fill="currentColor"/></svg>
+      </a>
+    </div>
+    <span id="lobWasd" class="lob-el">W A S D &middot; SPACE</span>
+  </div>
   
   <!-- 우측 상단 미니맵 -->
   <canvas id="minimap" width="180" height="180"></canvas>
@@ -64,7 +89,7 @@
   <!-- 시작/모드 선택 화면 (새로고침·사망·나가기 시 표시) -->
   <div id="menu">
     <div class="menu-card">
-      <h1>MadeInChinaCarGame</h1>
+      <h1>RacingClub.io</h1>
       <label id="nameLabel" for="nameInput">닉네임</label>
       <input id="nameInput" type="text" maxlength="12" placeholder="이름을 입력하세요"
              autocomplete="off" />
@@ -124,6 +149,16 @@
     </div>
   </div>
 
+  <!-- 게이트 그룹 팝업 : 카드(16:9)로 맵 선택 -->
+  <div id="mapModal">
+    <div class="map-panel">
+      <h2 id="mapModalTitle"></h2>
+      <p id="mapModalDesc"></p>
+      <div id="mapGrid"></div>
+      <button id="mapModalClose" class="auth-btn auth-close">닫기</button>
+    </div>
+  </div>
+
   <!-- 좌측 하단 대시보드 버튼 (로그인 시) -->
   <button id="dashBtn">대시보드</button>
 
@@ -137,7 +172,7 @@
       <div class="dash-row"><span>구불구불 최고 기록</span><span id="dashBestSerp">-</span></div>
       <div class="dash-row"><span>프로 우승</span><span id="dashWins">0</span></div>
       <div class="dash-row"><span>프로 플레이</span><span id="dashPlays">0</span></div>
-      <button id="dashClose" class="auth-btn">닫기</button>
+      <button id="dashClose" class="auth-btn auth-close">닫기</button>
     </div>
   </div>
 
@@ -145,7 +180,7 @@
   <div id="roomBrowser">
     <div class="browser-card">
       <div class="browser-head">
-        <h2>프로 레이싱 방 목록</h2>
+        <h2>커스텀 방</h2>
         <button id="createRoomBtn">+ 방 만들기</button>
       </div>
       <div id="roomList"></div>
@@ -164,8 +199,8 @@
           <input id="crLaps" type="number" min="1" max="20" value="3" />
         </div>
         <div class="cr-field">
-          <label>최대 인원 (1=솔로)</label>
-          <input id="crMax" type="number" min="1" max="7" value="7" />
+          <label>최대 인원 (2~7명)</label>
+          <input id="crMax" type="number" min="2" max="7" value="7" />
         </div>
       </div>
       <label>코스</label>
@@ -194,13 +229,17 @@
   <!-- 프로 레이싱 로비(방) -->
   <div id="lobby">
     <div class="lobby-card">
-      <h2 id="lobbyTitle">프로 레이싱 로비</h2>
+      <h2 id="lobbyTitle">커스텀 대기실</h2>
       <p id="lobbyInfo" class="lobby-info"></p>
       <div id="lobbyList"></div>
       <p id="lobbyHint" class="lobby-hint"></p>
       <div class="lobby-buttons">
         <button id="readyBtn">준비</button>
         <button id="lobbyLeave">나가기</button>
+        <button id="shareRoomBtn" aria-label="초대 링크 복사">
+          <svg class="icon-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+          <svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+        </button>
       </div>
     </div>
   </div>

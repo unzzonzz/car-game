@@ -344,8 +344,7 @@ html, body {
 .stand-lap { color: rgba(255,255,255,0.8); font-variant-numeric: tabular-nums; min-width: 30px; text-align: right; }
 
 /* =============================================================================
- *  공통 오버레이 — 메인 메뉴 스타일로 통일
- *  (보더 없음 · 카드 배경 없음 · 알약 버튼 · 반투명 흰 표면 · 라디얼 그라데이션)
+ *  커스텀 (방 목록 / 방 생성 / 대기실) — 게이트·계정 팝업과 동일한 웜 화이트 스타일
  * ========================================================================== */
 #roomBrowser, #createRoom, #lobby {
   position: absolute;
@@ -353,116 +352,128 @@ html, body {
   display: none;
   align-items: center;
   justify-content: center;
-  background: radial-gradient(circle at 50% 35%, #243042, #0d1117 75%);
+  background: rgba(58, 54, 46, 0.34);
 }
 #roomBrowser.show, #createRoom.show, #lobby.show { display: flex; }
-#lobby { z-index: 9; }
-#roomBrowser { z-index: 11; }
-#createRoom { z-index: 12; }
+/* 채팅(z 30)보다 위 — 게이트/계정 팝업(41)과 동일하게 모달이 최상위 */
+#lobby { z-index: 31; }
+#roomBrowser { z-index: 32; }
+#createRoom { z-index: 33; }
 
-/* 카드 = 메뉴처럼 배경/보더 없는 투명 컨테이너 */
+/* 흰 카드 (게이트/계정 팝업과 동일 계열) */
 .browser-card, .cr-card, .lobby-card {
-  width: min(520px, 92vw);
-  padding: 36px 32px 30px;
-  background: none;
-  border: none;
-  box-shadow: none;
+  width: min(560px, 92vw);
+  padding: 40px 34px 34px;
+  background: #ffffff;
+  border: 1px solid #ece8df;
+  border-radius: 24px;
+  box-shadow: 0 24px 60px rgba(58, 54, 46, 0.14);
   text-align: center;
 }
-.cr-card { width: min(400px, 90vw); }
-.lobby-card { width: min(460px, 90vw); }
+.cr-card { width: min(420px, 90vw); }
+.lobby-card { width: min(480px, 90vw); }
 
-/* 알약 버튼 공통 (메뉴 mode-btn 과 동일 계열) */
+/* 버튼 : 주요 = 다크 알약 (계정 팝업과 동일) */
 #createRoomBtn, .browser-leave, #crCreate, #crCancel, #readyBtn, #lobbyLeave {
-  border: none;
-  border-radius: 100px;
-  color: #fff;
+  border: 1px solid #3a3a3a;
+  border-radius: 999px;
+  color: #ffffff;
   cursor: pointer;
-  font-weight: 700;
-  background: rgba(255, 255, 255, 0.08);
-  transition: transform 0.1s ease, background 0.15s ease;
+  font-family: 'Jua', sans-serif;
+  font-weight: 400;
+  background: #3a3a3a;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
-#createRoomBtn:hover, .browser-leave:hover, #crCreate:hover,
-#crCancel:hover, #readyBtn:hover:not(:disabled), #lobbyLeave:hover {
-  background: rgba(255, 255, 255, 0.16);
+#createRoomBtn:hover, #crCreate:hover, #readyBtn:hover:not(:disabled) { background: #1c1c1c; border-color: #1c1c1c; }
+/* 보조(취소/나가기) : 고스트 */
+#crCancel, #lobbyLeave, .browser-leave {
+  color: #8a857b;
+  background: transparent;
+  border-color: #ece8df;
 }
-/* 주요 액션은 조금 더 밝게 */
-#createRoomBtn, #crCreate, #readyBtn { background: rgba(255, 255, 255, 0.18); }
-#createRoomBtn:hover, #crCreate:hover, #readyBtn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.26); }
+#crCancel:hover, #lobbyLeave:hover, .browser-leave:hover { background: #f6f4ee; color: #3a3a3a; border-color: #e5e0d4; }
 
-/* 입력/셀렉트 공통 (메뉴 nameInput 과 동일 계열) */
+/* 입력/셀렉트 : 알약 (계정 팝업과 동일) */
 .cr-card input, .cr-card select {
   width: 100%;
-  padding: 12px 14px;
+  padding: 13px 18px;
+  font-family: 'Jua', sans-serif;
   font-size: 14px;
-  color: #fff;
-  background: rgba(255, 255, 255, 0.08);
-  border: none;
-  border-radius: 12px;
+  color: #3a3a3a;
+  background: #ffffff;
+  border: 1px solid #ece8df;
+  border-radius: 999px;
   outline: none;
+  transition: border-color 0.15s ease;
 }
-.cr-card input:focus, .cr-card select:focus { background: rgba(255, 255, 255, 0.13); }
-.cr-card select option { color: #000; }
+.cr-card input:focus, .cr-card select:focus { border-color: #b6b0a4; }
+.cr-card input::placeholder { color: #c6c0b2; }
+.cr-card select option { color: #3a3a3a; }
 
 /* ----- 방 브라우저 ----- */
 .browser-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 20px;
+  margin-bottom: 22px;
 }
-.browser-head h2 { font-size: 24px; font-weight: 800; color: #fff; }
-#createRoomBtn { padding: 11px 18px; font-size: 14px; }
+.browser-head h2 { font-family: 'Jua', sans-serif; font-size: 22px; font-weight: 400; color: #3a3a3a; }
+#createRoomBtn { padding: 11px 20px; font-size: 14px; }
 #roomList {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   max-height: 54vh;
   overflow-y: auto;
-  margin-bottom: 18px;
+  margin-bottom: 20px;
 }
-.room-empty { text-align: center; color: rgba(255, 255, 255, 0.45); padding: 34px 0; font-size: 14px; }
+#roomList::-webkit-scrollbar { width: 6px; }
+#roomList::-webkit-scrollbar-thumb { background: #e5e0d4; border-radius: 3px; }
+.room-empty { text-align: center; color: #c6c0b2; padding: 36px 0; font-size: 14px; font-family: 'Jua', sans-serif; }
 .room-card {
   text-align: left;
-  padding: 14px 18px;
-  background: rgba(255, 255, 255, 0.06);
-  border: none;
-  border-radius: 18px;
+  padding: 15px 20px;
+  background: #faf8f3;
+  border: 1px solid #ece8df;
+  border-radius: 16px;
   cursor: pointer;
-  transition: transform 0.1s ease, background 0.15s ease;
+  font-family: 'Jua', sans-serif;
+  transition: transform 0.15s ease, border-color 0.15s ease;
 }
-.room-card:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
-.room-card:disabled { opacity: 0.4; cursor: not-allowed; }
+.room-card:hover:not(:disabled) { border-color: #d8d2c4; }
+.room-card:disabled { opacity: 0.45; cursor: not-allowed; }
 .room-top { display: flex; justify-content: space-between; align-items: center; }
-.room-name { font-size: 16px; font-weight: 700; color: #fff; }
+.room-name { font-size: 16px; color: #3a3a3a; }
 .room-count {
-  font-size: 13px; font-weight: 700; color: #fff;
-  background: rgba(255, 255, 255, 0.16); border-radius: 100px; padding: 2px 10px;
+  font-size: 12px; color: #8a857b;
+  background: #f1eee6; border-radius: 999px; padding: 3px 10px;
+  font-family: 'Quicksand', sans-serif; font-weight: 600;
 }
-.room-meta { font-size: 12px; color: rgba(255, 255, 255, 0.55); margin-top: 5px; }
-.browser-leave { padding: 12px 22px; font-size: 14px; font-weight: 600; }
+.room-meta { font-size: 12px; color: #b6b0a4; margin-top: 5px; }
+.browser-leave { padding: 12px 22px; font-size: 14px; }
 
 /* ----- 방 만들기 ----- */
-.cr-card h2 { font-size: 24px; font-weight: 800; color: #fff; margin-bottom: 18px; }
+.cr-card h2 { font-family: 'Jua', sans-serif; font-size: 22px; font-weight: 400; color: #3a3a3a; margin-bottom: 22px; }
 .cr-card label {
   display: block; text-align: left;
-  font-size: 12px; color: rgba(255, 255, 255, 0.55);
-  margin: 12px 0 6px;
+  font-family: 'Jua', sans-serif;
+  font-size: 12px; color: #b6b0a4;
+  margin: 14px 0 6px;
 }
 .cr-row { display: flex; gap: 12px; }
 .cr-field { flex: 1; }
-.cr-buttons { display: flex; gap: 10px; margin-top: 26px; }
+.cr-buttons { display: flex; gap: 10px; margin-top: 28px; }
 #crCreate { flex: 2; padding: 14px; font-size: 15px; }
-#crCancel { flex: 1; padding: 14px; font-size: 15px; font-weight: 600; }
+#crCancel { flex: 1; padding: 14px; font-size: 14px; }
 
-/* ----- 로비 ----- */
-.lobby-card h2 { font-size: 26px; font-weight: 800; color: #fff; margin-bottom: 6px; }
-.lobby-info { text-align: center; font-size: 13px; color: rgba(255, 255, 255, 0.6); margin-bottom: 20px; }
+/* ----- 대기실 ----- */
+.lobby-card h2 { font-family: 'Jua', sans-serif; font-size: 22px; font-weight: 400; color: #3a3a3a; margin-bottom: 6px; }
+.lobby-info { text-align: center; font-family: 'Jua', sans-serif; font-size: 13px; color: #b6b0a4; margin-bottom: 22px; }
 #lobbyList {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  margin-bottom: 14px;
+  gap: 8px;
+  margin-bottom: 16px;
   max-height: 280px;
   overflow-y: auto;
 }
@@ -470,21 +481,21 @@ html, body {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 11px 16px;
-  background: rgba(255, 255, 255, 0.06);
-  border-radius: 100px;
+  padding: 12px 18px;
+  background: #f6f4ee;
+  border-radius: 999px;
 }
 .lobby-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
-.lobby-name { flex: 1; color: #fff; font-weight: 600; }
-.lobby-ready { font-size: 12px; font-weight: 700; }
-.lobby-ready.on { color: #5fe08a; }
-.lobby-ready.off { color: rgba(255, 255, 255, 0.4); }
-.lobby-hint { text-align: center; font-size: 12px; color: rgba(255, 255, 255, 0.5); margin-bottom: 18px; }
+.lobby-name { flex: 1; text-align: left; color: #3a3a3a; font-family: 'Jua', sans-serif; }
+.lobby-ready { font-size: 12px; font-family: 'Jua', sans-serif; }
+.lobby-ready.on { color: #57b868; }
+.lobby-ready.off { color: #c6c0b2; }
+.lobby-hint { text-align: center; font-size: 12px; font-family: 'Jua', sans-serif; color: #b6b0a4; margin-bottom: 20px; }
 .lobby-buttons { display: flex; gap: 10px; }
-#readyBtn { flex: 2; padding: 14px; font-size: 16px; }
-#readyBtn.ready { background: rgba(95, 224, 138, 0.32); }
-#readyBtn:disabled { background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.4); cursor: not-allowed; transform: none; }
-#lobbyLeave { flex: 1; padding: 14px; font-size: 15px; font-weight: 600; }
+#readyBtn { flex: 2; padding: 15px; font-size: 15px; }
+#readyBtn.ready { background: #57b868; border-color: #57b868; }
+#readyBtn:disabled { background: #f1eee6; border-color: #f1eee6; color: #c6c0b2; cursor: not-allowed; }
+#lobbyLeave { flex: 1; padding: 15px; font-size: 14px; }
 
 /* =============================================================================
  *  로그인 / 회원가입 (메뉴 하단) — 메인 스타일과 통일
@@ -494,37 +505,53 @@ html, body {
   padding-top: 18px;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
-.auth-form { display: flex; flex-direction: column; gap: 10px; align-items: stretch; }
+/* =============================================================================
+ *  계정 팝업 (로그인/회원가입 + 대시보드) — 웜 화이트 라이트 스킨
+ *  흰 카드 + 헤어라인, 알약 인풋/버튼, Jua/Quicksand, 딤은 웜 톤 반투명.
+ * ========================================================================== */
+.auth-form { display: flex; flex-direction: column; align-items: stretch; }
 .auth-form input {
   width: 100%;
-  padding: 12px 14px;
-  font-size: 14px;
-  color: #fff;
-  background: rgba(255, 255, 255, 0.08);
-  border: none;
-  border-radius: 12px;
+  padding: 15px 20px;
+  margin-bottom: 14px;           /* 인풋 위아래 사이 간격 */
+  font-family: 'Jua', sans-serif;
+  font-size: 15px;
+  color: #3a3a3a;
+  background: #ffffff;
+  border: 1px solid #ece8df;
+  border-radius: 999px;
   outline: none;
+  transition: border-color 0.15s ease;
 }
-.auth-form input:focus { background: rgba(255, 255, 255, 0.13); }
-.auth-form input::placeholder { color: rgba(255, 255, 255, 0.4); }
+.auth-form input:focus { border-color: #b6b0a4; }
+.auth-form input::placeholder { color: #c6c0b2; }
 .auth-btn {
   width: 100%;
-  padding: 13px;
+  padding: 15px;
+  font-family: 'Jua', sans-serif;
   font-size: 15px;
-  font-weight: 700;
-  color: #fff;
-  background: rgba(255, 255, 255, 0.18);
-  border: none;
-  border-radius: 100px;
+  color: #ffffff;
+  background: #3a3a3a;
+  border: 1px solid #3a3a3a;
+  border-radius: 999px;
   cursor: pointer;
-  transition: transform 0.1s ease, background 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
-.auth-btn:hover { background: rgba(255, 255, 255, 0.26); }
-/* 인풋과 버튼 사이 여백 */
-.auth-form .auth-btn { margin-top: 10px; }
-.auth-switch { font-size: 12px; color: rgba(255, 255, 255, 0.55); text-align: center; margin-top: 8px; }
-.auth-link { color: #fff; font-weight: 700; cursor: pointer; text-decoration: underline; }
-#welcomeMsg { display: block; text-align: center; color: #fff; font-weight: 700; margin-bottom: 10px; }
+.auth-btn:hover { background: #1c1c1c; border-color: #1c1c1c; }
+/* 보조 버튼(닫기) : 고스트 */
+.auth-close {
+  width: 100%;
+  color: #8a857b;
+  background: transparent;
+  border-color: #ece8df;
+}
+.auth-close:hover { background: #f6f4ee; color: #3a3a3a; border-color: #e5e0d4; }
+/* 인풋 그룹과 기본 버튼 사이 간격 (인풋 하단 margin 14 + 이 값) */
+.auth-form .auth-btn { margin-top: 6px; }
+.auth-switch { font-family: 'Jua', sans-serif; font-size: 13px; color: #b6b0a4; text-align: center; margin-top: 20px; }
+.auth-link { color: #e8604c; cursor: pointer; }
+.auth-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+#welcomeMsg { display: block; text-align: center; font-family: 'Jua', sans-serif; color: #3a3a3a; margin-bottom: 10px; }
 
 /* 대시보드 패널 */
 #dashboard {
@@ -533,31 +560,33 @@ html, body {
   display: none;
   align-items: center;
   justify-content: center;
-  background: rgba(8, 12, 18, 0.6);
+  background: rgba(58, 54, 46, 0.28);
   z-index: 40;
 }
 #dashboard.show { display: flex; }
 .dash-card {
-  width: min(360px, 90vw);
-  padding: 30px 28px;
-  background: rgba(20, 26, 34, 0.96);
+  width: min(400px, 90vw);
+  padding: 40px 34px 34px;
+  background: #ffffff;
+  border: 1px solid #ece8df;
   border-radius: 24px;
   text-align: center;
+  box-shadow: 0 24px 60px rgba(58, 54, 46, 0.14);
 }
-.dash-card h2 { font-size: 22px; font-weight: 800; color: #fff; margin-bottom: 18px; }
+.dash-card h2 { font-family: 'Jua', sans-serif; font-size: 22px; font-weight: 400; color: #3a3a3a; margin-bottom: 26px; }
 .dash-row {
   display: flex;
   justify-content: space-between;
-  padding: 12px 14px;
-  margin-bottom: 8px;
-  background: rgba(255, 255, 255, 0.06);
-  border-radius: 12px;
+  align-items: center;
+  padding: 15px 18px;
+  margin-bottom: 10px;
+  background: #f6f4ee;
+  border-radius: 14px;
   font-size: 15px;
-  color: #fff;
 }
-.dash-row span:first-child { color: rgba(255, 255, 255, 0.6); }
-.dash-row span:last-child { font-weight: 700; }
-.dash-card .auth-btn { width: 100%; margin-top: 12px; background: rgba(255,255,255,0.1); }
+.dash-row span:first-child { font-family: 'Jua', sans-serif; color: #8a857b; }
+.dash-row span:last-child { font-family: 'Quicksand', sans-serif; font-weight: 600; color: #3a3a3a; font-variant-numeric: tabular-nums; }
+.dash-card .auth-btn { width: 100%; margin-top: 22px; }
 
 /* 로그인/회원가입 팝업 */
 #authOpenBtn { width: 100%; display: block; }
@@ -567,18 +596,21 @@ html, body {
   display: none;
   align-items: center;
   justify-content: center;
-  background: rgba(8, 12, 18, 0.72);
+  background: rgba(58, 54, 46, 0.34);
   z-index: 41;
 }
 #authModal.show { display: flex; }
 .auth-card {
-  width: min(360px, 90vw);
-  padding: 30px 28px;
-  background: rgba(20, 26, 34, 0.97);
+  width: min(380px, 90vw);
+  padding: 40px 34px 34px;
+  background: #ffffff;
+  border: 1px solid #ece8df;
   border-radius: 24px;
+  box-shadow: 0 24px 60px rgba(58, 54, 46, 0.14);
 }
-.auth-card h2 { font-size: 22px; font-weight: 800; color: #fff; text-align: center; margin-bottom: 16px; }
-.auth-close { margin-top: 14px; width: 100%; background: rgba(255, 255, 255, 0.1); }
+.auth-card h2 { font-family: 'Jua', sans-serif; font-size: 22px; font-weight: 400; color: #3a3a3a; text-align: center; margin-bottom: 26px; }
+/* 닫기 버튼은 폼(회원가입 안내) 아래로 넉넉히 떨어뜨림 */
+.auth-card > .auth-close { margin-top: 24px; }
 
 /* 모바일 터치 조작 (JS 가 터치 기기 + 플레이 중일 때만 .show 부여) */
 #touchControls {
@@ -742,3 +774,228 @@ html, body {
   .touch-btn { width: 60px; height: 60px; font-size: 13px; }
   .touch-btn.gas { width: 74px; height: 74px; }
 }
+
+/* =============================================================================
+ *  로비 오버레이 — 접속 직후 대기 화면 (웜 화이트 월드 위에 떠 있는 요소들)
+ * -----------------------------------------------------------------------------
+ *  상태: (기본)=idle 전부 표시 / .s-hidden=주행 중 전부 걷힘 / .s-buttons=정지 후 버튼만
+ *  여백 규칙: 힌트 50% / 버튼 열 61.8%(골든 섹션), 버튼 52px, 간격 20px
+ * ========================================================================== */
+#lobbyUI {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  display: none; /* 로비에 있을 때만 JS 가 block */
+  pointer-events: none;
+  font-family: 'Quicksand', 'Jua', sans-serif;
+}
+.lob-el { transition: opacity 0.3s ease; }
+#lobBrand {
+  position: absolute;
+  left: 28px;
+  top: 22px;
+  font-weight: 600;
+  font-size: 17px;
+  letter-spacing: -0.2px;
+  color: #3a3a3a;
+}
+#lobOnline {
+  position: absolute;
+  right: 28px;
+  top: 24px;
+  font-family: 'Jua', sans-serif;
+  font-size: 14px;
+  color: #b6b0a4;
+}
+#lobHint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  text-align: center;
+  font-family: 'Jua', sans-serif;
+  font-size: 17px;
+  letter-spacing: 9px;
+  text-indent: 9px; /* letter-spacing 으로 인한 중앙 쏠림 보정 */
+  color: #b6b0a4;
+}
+/* 펄스는 안쪽 span 에 — 바깥(.lob-el)의 페이드인/아웃과 독립적으로 동작 */
+#lobHint span { display: inline-block; animation: lobPulse 2.6s ease-in-out infinite; }
+@keyframes lobPulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+#lobBtns {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 61.8%;
+  transform: translateY(-50%);
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+  pointer-events: auto;
+}
+.lob-btn {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1px solid #ece8df;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #3a3a3a;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.15s ease;
+}
+.lob-btn:hover { transform: scale(1.08); }
+.lob-btn svg { width: 22px; height: 22px; }
+#lobWasd {
+  position: absolute;
+  left: 28px;
+  bottom: 22px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 3px;
+  color: #d8d2c6;
+}
+/* 주행 중 : 전부 걷힘 (복귀는 정지 1.5초 또는 ESC — 둘 다 전체 UI 페이드인) */
+#lobbyUI.s-hidden .lob-el { opacity: 0; pointer-events: none; }
+
+/* =============================================================================
+ *  로비 채팅 라이트 스킨 — 프레임 없는 플로팅 (body.lobby 일 때만)
+ *  로그는 배경 없이 흰 월드 위에 떠 있는 텍스트, 입력은 원형 버튼과 같은 결의 알약.
+ * ========================================================================== */
+body.lobby #chat {
+  background: transparent;
+  overflow: visible;
+  border-radius: 0;
+}
+body.lobby #chatLog {
+  font-family: 'Jua', sans-serif;
+  color: #6a655c;
+}
+body.lobby #chatLog::-webkit-scrollbar-thumb { background: #e5e0d4; }
+body.lobby .chat-time { color: #cfc9bb; }
+body.lobby .chat-text { color: #5a564e; }
+body.lobby #chatRow {
+  margin-top: 8px;
+  background: #ffffff;
+  border: 1px solid #ece8df;
+  border-radius: 999px;
+  overflow: hidden;
+}
+body.lobby #chatInput {
+  font-family: 'Jua', sans-serif;
+  color: #3a3a3a;
+  border-right: none;
+  padding: 9px 6px 9px 16px;
+}
+body.lobby #chatInput::placeholder { color: #c6c0b2; }
+body.lobby #chatSend {
+  font-family: 'Jua', sans-serif;
+  font-weight: 400;
+  color: #3a3a3a;
+  padding: 0 16px 0 10px;
+}
+
+/* 커스텀(색상 선택) 열림 중 : 링을 가릴 수 있는 채팅을 잠시 걷는다 */
+#chat { transition: opacity 0.25s ease; }
+body.customizing #chat { opacity: 0; pointer-events: none; }
+
+/* =============================================================================
+ *  게이트 그룹 팝업 — 로그인 모달과 동일한 웜 화이트 스타일, 맵은 16:9 카드(최대 3열)
+ * ========================================================================== */
+#mapModal {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(58, 54, 46, 0.34);
+  z-index: 41;
+}
+#mapModal.show { display: flex; }
+.map-panel {
+  width: min(640px, 92vw);
+  padding: 40px 34px 34px;
+  background: #ffffff;
+  border: 1px solid #ece8df;
+  border-radius: 24px;
+  box-shadow: 0 24px 60px rgba(58, 54, 46, 0.14);
+}
+#mapModalTitle {
+  font-family: 'Jua', sans-serif;
+  font-size: 22px;
+  font-weight: 400;
+  color: #3a3a3a;
+  text-align: center;
+}
+#mapModalDesc {
+  font-family: 'Jua', sans-serif;
+  font-size: 13px;
+  color: #b6b0a4;
+  text-align: center;
+  margin: 8px 0 24px;
+}
+#mapGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr); /* 가로 최대 3개 */
+  gap: 14px;
+}
+.map-card {
+  position: relative;
+  aspect-ratio: 16 / 9; /* 카드 비율 */
+  border: 1px solid #ece8df;
+  border-radius: 16px;
+  background: #faf8f3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-family: 'Jua', sans-serif;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+.map-card:hover:not(:disabled) { transform: translateY(-3px); border-color: #d8d2c4; }
+.map-card-name { font-size: 16px; color: #3a3a3a; }
+.map-card-desc { font-size: 11.5px; color: #b6b0a4; line-height: 1.4; text-align: center; }
+.map-card.soon { cursor: default; }
+.map-card.soon .map-card-name,
+.map-card.soon .map-card-desc { color: #d3cec2; }
+.map-card-soon {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 10px;
+  color: #b6b0a4;
+  background: #f1eee6;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+.map-panel .auth-close { margin-top: 24px; }
+
+/* 대기실 초대 링크 공유 버튼 (원형, 나가기 오른쪽) */
+.lobby-buttons { align-items: center; }
+#shareRoomBtn {
+  flex: 0 0 50px;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1px solid #ece8df;
+  color: #3a3a3a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.15s ease;
+}
+#shareRoomBtn:hover { transform: scale(1.08); }
+#shareRoomBtn svg { width: 20px; height: 20px; }
+#shareRoomBtn .icon-check { display: none; }
+#shareRoomBtn.copied .icon-link { display: none; }
+#shareRoomBtn.copied .icon-check { display: block; color: #57b868; }
