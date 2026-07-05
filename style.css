@@ -1245,15 +1245,15 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
  *  같은 모서리를 고르면 채팅이 미니맵을 비켜 위/아래로 쌓인다. */
 @media (min-height: 541px) {
   body:not(.lobby).mm-tl #minimap { top: 18px; left: 18px; bottom: auto; right: auto; }
-  body:not(.lobby).mm-tr #minimap { top: 18px; right: 18px; bottom: auto; left: auto; }
+  body:not(.lobby).mm-tr #minimap { top: var(--top10bottom, 18px); right: 18px; bottom: auto; left: auto; }
   body:not(.lobby).mm-bl #minimap { bottom: 18px; left: 18px; top: auto; right: auto; }
   body:not(.lobby).mm-br #minimap { bottom: 18px; right: 18px; top: auto; left: auto; }
   body:not(.lobby).chat-tl #chat { top: 18px; left: 18px; bottom: auto; right: auto; }
-  body:not(.lobby).chat-tr #chat { top: 18px; right: 18px; bottom: auto; left: auto; }
+  body:not(.lobby).chat-tr #chat { top: var(--top10bottom, 18px); right: 18px; bottom: auto; left: auto; }
   body:not(.lobby).chat-bl #chat { bottom: 18px; left: 18px; top: auto; right: auto; }
   body:not(.lobby).chat-br #chat { bottom: 18px; right: 18px; top: auto; left: auto; }
   body:not(.lobby).mm-tl.chat-tl #chat { top: calc(18px + var(--mm, 180px) + 8px); }
-  body:not(.lobby).mm-tr.chat-tr #chat { top: calc(18px + var(--mm, 180px) + 8px); }
+  body:not(.lobby).mm-tr.chat-tr #chat { top: calc(var(--top10bottom, 18px) + var(--mm, 180px) + 8px); }
   body:not(.lobby).mm-bl.chat-bl #chat { bottom: calc(18px + var(--mm, 180px) + 8px); }
   body:not(.lobby).mm-br.chat-br #chat { bottom: calc(18px + var(--mm, 180px) + 8px); }
   /* 좌상단에 미니맵/채팅이 있으면 속력을 그 요소 오른쪽으로 (겹침 방지).

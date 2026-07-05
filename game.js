@@ -527,6 +527,17 @@ function applyHudLayout() {
 function saveHudLayout() {
   try { localStorage.setItem("hudLayout", JSON.stringify(hudLayout)); } catch {}
 }
+/* 우측 상단 TOP10 패널(순위표/기록표)이 떠 있으면, 우상단에 놓인 미니맵·채팅이
+   그 아래로 내려가도록 --top10bottom (패널 아래 y좌표)을 계산해 둔다. 안 떠 있으면 18px. */
+function updateTop10Offset() {
+  const stand = document.getElementById("standings");
+  const recs = document.getElementById("topRecords");
+  let panel = null;
+  if (stand && stand.style.display !== "none") panel = stand;
+  else if (recs && recs.style.display !== "none") panel = recs;
+  const bottom = panel ? 18 + panel.offsetHeight + 12 : 18;
+  document.body.style.setProperty("--top10bottom", bottom + "px");
+}
 applyHudLayout();
 
 /* 현재 속력 표시 여부 : 기본 꺼짐. 설정에서 켜면 인게임 좌측 상단에 표시. localStorage 영속. */
@@ -1585,6 +1596,7 @@ function resize() {
   mctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   // CSS 가 채팅/순위판을 미니맵 크기에 맞춰 배치하도록 변수로 노출
   document.documentElement.style.setProperty("--mm", minimapSize + "px");
+  updateTop10Offset();
 }
 window.addEventListener("resize", resize);
 resize();
@@ -2913,6 +2925,7 @@ function updateRaceUI() {
     row.append(rank, star, nm, time, lap);
     sList.appendChild(row);
   }
+  updateTop10Offset();
 }
 
 /* =============================================================================
@@ -3895,6 +3908,7 @@ function updateFreeUI() {
   document.getElementById("topRecords").style.display = show ? "block" : "none";
   document.getElementById("othersToggle").style.display = show ? "block" : "none";
   if (show) { updateTopRecords(); applyOthersToggle(); }
+  updateTop10Offset();
 }
 
 // 메인(메뉴) 화면에서만 우측 하단 텍스트 링크 표시
@@ -3930,6 +3944,7 @@ function updateTopRecords() {
     row.append(rank, nm, t);
     el.appendChild(row);
   });
+  updateTop10Offset();
 }
 
 init();
