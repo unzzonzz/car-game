@@ -529,6 +529,15 @@ function saveHudLayout() {
 }
 applyHudLayout();
 
+/* 현재 속력 표시 여부 : 기본 꺼짐. 설정에서 켜면 인게임 좌측 상단에 표시. localStorage 영속. */
+let showSpeed = false;
+try { showSpeed = localStorage.getItem("showSpeed") === "1"; } catch {}
+function applySpeedVisibility() {
+  const el = document.getElementById("speed");
+  const ingame = gameState === "playing" && gameMode !== "lobby";
+  if (el) el.style.display = (showSpeed && ingame) ? "block" : "none";
+}
+
 /* 연습(타임어택) 중 다른 유저 표시 여부 : 켜면 원격 차량을 화면/미니맵에 그린다. localStorage 영속.
  *  프로 등 경쟁 모드에선 항상 보이고, 이 토글은 연습/타임어택에서만 적용된다. */
 let showOthers = true;
@@ -2720,7 +2729,46 @@ function handleRaceMessage(msg) {
     race.goFlashUntil = performance.now() + 1200;
     SFX.go(); // 출발 신호
   }
+
+  // 레이스 종료 → 방(대기실)로 복귀 : 같은 설정으로 다시 준비하거나 나갈 수 있다
+  if (prevState === "racing" && race.state === "lobby" && gameMode === "pro") {
+    wipeTo(returnToWaitingRoom, { title: "레이스 종료", desc: "다시 준비하거나 나갈 수 있어요" });
+  }
   updateRaceUI();
+}
+
+// 커스텀 레이스 종료 → 로비 월드로 복귀하되 방(대기실)은 유지.
+//  같은 설정으로 다시 준비(재플레이)하거나 나가기를 고를 수 있다. race.state 는 서버가 "lobby" 로 준다.
+function returnToWaitingRoom() {
+  gameMode = "lobby";
+  world = WORLD.lobby;
+  gameState = "playing";
+  remotePlayers.clear();
+  skidMarks.length = 0;
+  explosions.length = 0;
+  camera.shake = 0;
+  resetAttack();
+  CAR.x = LOBBY_SPAWN.x; CAR.y = LOBBY_SPAWN.y; CAR.angle = -Math.PI / 2;
+  CAR.vx = CAR.vy = CAR.lf = CAR.ll = CAR.steerInput = 0;
+  keys.w = keys.a = keys.s = keys.d = keys.space = false;
+  camera.zoom = camera.zoomT = zoomFor(1.15);
+  camera.ay = camera.ayT = 0.36;
+  updateCamera(CAR, 0);
+  // 게이트 선택 오버레이는 숨김(방 안이므로), 대기실 팝업만 표시
+  lobby.ui = "hidden"; lobby.stopMs = 0; lobby.gate = null; lobby.prog = 0;
+  const ui = document.getElementById("lobbyUI");
+  ui.style.display = "block";
+  ui.classList.add("s-hidden");
+  document.body.classList.add("lobby");
+  document.getElementById("exitBtn").style.display = "none";
+  document.getElementById("death").classList.remove("show");
+  minimap.style.display = "none";
+  speedEl.style.display = "none";
+  updateRaceUI();      // race.state === "lobby" → 대기실(#lobby) 표시
+  updateTouchVisibility();
+  updateFreeUI();
+  setTimeHud("");
+  updateProTimer();
 }
 
 // 프로 종료 → 자유 레이싱으로 자연스럽게 입장
@@ -2818,7 +2866,7 @@ function updateRaceUI() {
     row.className = "lobby-row";
     const dot = document.createElement("span");
     dot.className = "lobby-dot";
-    dot.style.background = colorForId(p.id);
+    dot.style.background = p.color || colorForId(p.id); // 각 플레이어 차 색 (미설정 시 id색 폴백)
     const nm = document.createElement("span");
     nm.className = "lobby-name";
     nm.textContent = p.name + (p.id === net.id ? " (나)" : "");
@@ -2848,10 +2896,10 @@ function updateRaceUI() {
     rank.textContent = p.rank + ".";
     const star = document.createElement("span");
     star.className = "stand-star";
-    if (p.finished) { star.textContent = "★"; star.style.color = p.admin ? GOLD : colorForId(p.id); }
+    if (p.finished) { star.textContent = "★"; star.style.color = p.admin ? GOLD : (p.color || colorForId(p.id)); }
     const nm = document.createElement("span");
     nm.className = "stand-name";
-    nm.style.color = p.admin ? GOLD : colorForId(p.id);
+    nm.style.color = p.admin ? GOLD : (p.color || colorForId(p.id));
     nm.textContent = p.name;
     // 시간·랩은 "한 바퀴라도 기록했을 때"만 표시. 아직 기록 전이면 둘 다 비운다.
     //  예) 1랩 통과 후 → "00:31.05  1/3" (그 시간을 기록한 랩), 완주 시 → "완주".
@@ -3188,6 +3236,7 @@ function startGame(mode) {
   camera.zoom = camera.zoomT = zoomFor(1); // 인게임 기본 줌 × 시야각
   camera.ay = camera.ayT = 0.5;
   minimap.style.display = "block";
+  speedEl.style.display = showSpeed ? "block" : "none"; // 좌측 상단 현재 속력 (설정)
 
   // 상태 초기화
   remotePlayers.clear();
@@ -3416,6 +3465,7 @@ function enterProStage() {
   mapPopup.open = false;
   document.body.classList.remove("lobby");
   minimap.style.display = "block";
+  speedEl.style.display = showSpeed ? "block" : "none"; // 좌측 상단 현재 속력 (설정)
   updateTouchVisibility();
   updateFreeUI();
 }
@@ -3571,6 +3621,16 @@ function setupLobbyUI() {
       SFX.click();
     });
   }
+  // 속력 표시 켜기/끄기
+  document.getElementById("setSpeed").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-val]");
+    if (!b) return;
+    showSpeed = b.dataset.val === "on";
+    try { localStorage.setItem("showSpeed", showSpeed ? "1" : "0"); } catch {}
+    applySpeedVisibility();
+    syncSettingsUI();
+    SFX.click();
+  });
   document.getElementById("lobDash").addEventListener("click", showDashboard);
   document.getElementById("lobLogout").addEventListener("click", () => { sendLogout(); });
 
@@ -3755,6 +3815,9 @@ function syncSettingsUI() {
     for (const b of document.getElementById(segId).querySelectorAll("button[data-pos]")) {
       b.classList.toggle("on", b.dataset.pos === hudLayout[key]);
     }
+  }
+  for (const b of document.getElementById("setSpeed").querySelectorAll("button[data-val]")) {
+    b.classList.toggle("on", b.dataset.val === (showSpeed ? "on" : "off"));
   }
 }
 function showSettingsModal() {

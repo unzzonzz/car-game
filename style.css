@@ -48,7 +48,20 @@ html, body {
 }
 
 /* 좌측 하단 속도 (작은 일반 흰 텍스트, 그림자·볼드 없음) */
-#speed { display: none; } /* 속력 표시 제거 (요청) */
+/* 좌측 상단 현재 속력 : 인게임에서만 표시(그냥 흰 텍스트). JS 가 표시/숨김 제어. */
+#speed {
+  position: absolute;
+  left: 28px;
+  top: 22px;
+  display: none;
+  font-family: 'Quicksand', sans-serif;
+  font-weight: 600;
+  font-size: 15px;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 1px;
+  pointer-events: none;
+}
 
 /* 메인 화면 텍스트 링크 : 메뉴(다크 배경) 위 흰 텍스트 링크. 기본 숨김.
    #menu(10) 오버레이 위에서 눌리도록 z-index 를 올린다(모달 40/41 보다는 아래). */
@@ -883,7 +896,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 
   /* 나가기 / 속도 : 왼쪽 모서리 (속도는 조향 버튼 위) */
   #exitBtn { left: calc(12px + env(safe-area-inset-left)); top: 10px; }
-  #speed { left: calc(12px + env(safe-area-inset-left)); bottom: 92px; }
+  #speed { left: calc(12px + env(safe-area-inset-left)); top: auto; bottom: 92px; }
 
   /* 기록 HUD : 하단 가운데 유지(여백만 축소) / 프로 카운트다운 : 상단 */
   #recordHud { bottom: 12px; }

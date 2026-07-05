@@ -599,7 +599,7 @@ function rankedRoom(roomId) {
     return (B.prog || 0) - (A.prog || 0);
   });
   return list.map((e, i) => ({
-    id: e.id, name: e.p.name, ready: !!e.p.ready,
+    id: e.id, name: e.p.name, ready: !!e.p.ready, color: e.p.color, // 차 색(미설정 시 undefined → 클라 id색 폴백)
     lap: e.p.lap || 0, lapMs: e.p.lapMs || 0, finished: !!e.p.finished, rank: i + 1, admin: !!e.p.isAdmin,
   }));
 }
@@ -680,10 +680,13 @@ function endRoomRace(roomId) {
       persistUser(p.account.userId);
       sendStats(p); // 대시보드 통계 갱신(우승/플레이/접속시간/최고기록)
     }
-    send(p, { type: "toFreeRacing" }); // 자유 레이싱으로 이동
-    p.active = false; p.state = null; p.roomId = null;
+    // 다음 라운드 대비 초기화 (준비 해제, 랩/기록 리셋). 방·설정은 그대로 유지.
+    p.ready = false; p.lap = 0; p.lapMs = 0; p.prog = 0; p.finished = false; p.finishTime = 0;
   }
-  rooms.delete(roomId);
+  // 방을 처음 대기실 상태로 되돌린다 → 같은 설정으로 다시 준비하거나 나갈 수 있다
+  room.state = "lobby";
+  room.countdownAt = 0; room.raceEndAt = 0; room.raceStartAt = 0;
+  broadcastRoom(roomId);
   broadcastRoomList();
 }
 
