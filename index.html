@@ -19,8 +19,6 @@
   <!-- 좌측 하단 속도계 : 정수 km/h 숫자만 -->
   <div id="speed">0</div>
 
-  <!-- 우측 하단 시간 표시 : 00:23.06 (프로/타임어택 시에만) -->
-  <div id="time"></div>
 
   <!-- 가운데 하단 음소거 토스트 (m 키) : #time 과 동일 스타일, 잠깐 떴다 사라짐 -->
   <div id="muteToast"></div>
@@ -46,8 +44,10 @@
       <a id="lobDiscord" class="lob-btn" href="https://discord.gg/G8n88REdCe" target="_blank" rel="noopener" aria-label="디스코드">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5.2a13 13 0 0 1 6 0"/><path d="M6.3 5.6C4.6 6.2 3.4 7.2 3 8.4c-.9 2.9-1.1 5.8-.6 8.6 1.4 1.1 2.9 1.8 4.5 2.2l.9-1.8"/><path d="M17.7 5.6c1.7.6 2.9 1.6 3.3 2.8.9 2.9 1.1 5.8.6 8.6-1.4 1.1-2.9 1.8-4.5 2.2l-.9-1.8"/><path d="M8.6 17.7c2.2.5 4.6.5 6.8 0"/><circle cx="9.3" cy="12" r="0.8" fill="currentColor"/><circle cx="14.7" cy="12" r="0.8" fill="currentColor"/></svg>
       </a>
+      <button id="lobSettings" class="lob-btn" aria-label="설정">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
     </div>
-    <span id="lobWasd" class="lob-el">W A S D &middot; SPACE</span>
   </div>
   
   <!-- 우측 상단 미니맵 -->
@@ -74,10 +74,17 @@
     <div id="topRecordsList"></div>
   </div>
 
-  <!-- 자유 모드 타임어택 기록 시작 버튼 -->
-  <button id="attackBtn">기록 시작</button>
+  <!-- 다른 유저 표시 토글 (연습/타임어택) : 기록 HUD 위, 갭 두고 -->
+  <button id="othersToggle">다른 차 표시</button>
 
-  <!-- 프로 레이싱 상단 종료 카운트다운 (#attackBtn 과 동일 스타일) -->
+  <!-- 기록 HUD (하단 가운데) : 시간 표시 + 기록 시작 버튼 + (기록 중) 취소 버튼 -->
+  <div id="recordHud">
+    <span id="time"></span>
+    <button id="attackBtn">기록 시작</button>
+    <button id="attackCancel">취소</button>
+  </div>
+
+  <!-- 프로 레이싱 상단 종료 카운트다운 -->
   <div id="proTimer"></div>
 
   <!-- 사망 화면 (받혀서 죽은 플레이어에게 표시) -->
@@ -94,10 +101,6 @@
       <input id="nameInput" type="text" maxlength="12" placeholder="이름을 입력하세요"
              autocomplete="off" />
       <div class="mode-buttons">
-        <button id="btnSurvival" class="mode-btn survival">
-          <span class="mode-name">서바이벌</span>
-          <span class="mode-count" id="countSurvival">0명</span>
-        </button>
         <button id="btnRacing" class="mode-btn racing">
           <span class="mode-name">자유 레이싱</span>
           <span class="mode-count" id="countRacing">0명</span>
@@ -161,6 +164,41 @@
 
   <!-- 좌측 하단 대시보드 버튼 (로그인 시) -->
   <button id="dashBtn">대시보드</button>
+
+  <!-- 계정 정보 팝업 (로그인 시 계정 아이콘) -->
+  <div id="accountModal">
+    <div class="dash-card">
+      <h2>계정</h2>
+      <div class="dash-row"><span>아이디</span><span id="accId">-</span></div>
+      <div class="dash-row"><span>닉네임</span><span id="accName">-</span></div>
+      <button id="accClose" class="auth-btn auth-close">닫기</button>
+    </div>
+  </div>
+
+  <!-- 설정 팝업 (사운드 볼륨 + 미니맵/채팅 모서리 배치) -->
+  <div id="settingsModal">
+    <div class="dash-card">
+      <h2>설정</h2>
+      <div class="set-row">
+        <span class="set-label">사운드</span>
+        <input id="setVolume" type="range" min="0" max="100" step="1" value="100" />
+        <span id="setVolumeVal">100</span>
+      </div>
+      <div class="set-row">
+        <span class="set-label">미니맵 위치</span>
+        <div class="set-seg" id="setMmPos">
+          <button data-pos="tl">좌상</button><button data-pos="tr">우상</button><button data-pos="bl">좌하</button><button data-pos="br">우하</button>
+        </div>
+      </div>
+      <div class="set-row">
+        <span class="set-label">채팅 위치</span>
+        <div class="set-seg" id="setChatPos">
+          <button data-pos="tl">좌상</button><button data-pos="tr">우상</button><button data-pos="bl">좌하</button><button data-pos="br">우하</button>
+        </div>
+      </div>
+      <button id="setClose" class="auth-btn auth-close">닫기</button>
+    </div>
+  </div>
 
   <!-- 대시보드 패널 -->
   <div id="dashboard">
@@ -255,6 +293,12 @@
       <button class="touch-btn" data-key="s">후진</button>
       <button class="touch-btn gas" data-key="w">전진</button>
     </div>
+  </div>
+
+  <!-- 맵 전환 슬라이드 와이프 (JS 가 표시/애니메이션 제어) : 꽉 찬 동안 맵 제목/설명 표시 -->
+  <div id="wipe">
+    <div id="wipeTitle"></div>
+    <div id="wipeDesc"></div>
   </div>
 
   <script src="game.js"></script>

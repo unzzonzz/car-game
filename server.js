@@ -266,6 +266,7 @@ wss.on("connection", (ws) => {
       const mode = (msg.mode === "racing") ? "racing"
         : (msg.mode === "hard") ? "hard"
         : (msg.mode === "serp") ? "serp"
+        : (msg.mode === "test") ? "test"
         : (msg.mode === "pro") ? "pro" : "survival";
 
       if (mode === "pro") {
@@ -512,7 +513,7 @@ function broadcastConnected(obj) {
 
 // 모드별 참가 인원을 "모든 접속자"(메뉴 화면 포함)에게 알린다 → 모드 버튼에 표시
 function broadcastCounts() {
-  const counts = { survival: 0, racing: 0, hard: 0, serp: 0, pro: 0 };
+  const counts = { survival: 0, racing: 0, hard: 0, serp: 0, pro: 0, test: 0 };
   for (const [, p] of players) {
     if (p.active && counts[p.mode] !== undefined) counts[p.mode]++;
   }
@@ -769,7 +770,7 @@ setInterval(runCollisions, 1000 / COLLISION_HZ);
 //  (서바이벌/레이싱 플레이어는 서로 보이지 않도록 분리)
 setInterval(() => {
   const now = Date.now();
-  const byMode = { survival: [], racing: [], hard: [], serp: [] };
+  const byMode = { survival: [], racing: [], hard: [], serp: [], test: [] };
   const byRoom = new Map(); // roomId -> entries (프로는 같은 방끼리만 본다)
 
   for (const [id, p] of players) {

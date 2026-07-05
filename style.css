@@ -21,19 +21,10 @@ html, body {
 }
 
 /* 좌측 하단 속도 (작은 일반 흰 텍스트, 그림자·볼드 없음) */
-#speed {
-  position: absolute;
-  left: 28px;
-  bottom: 22px;
-  font-size: 14px;
-  color: #fff;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 1px;
-  pointer-events: none;
-}
+#speed { display: none; } /* 속력 표시 제거 (요청) */
 
-/* 우측 하단 시간 (속도와 동일 스타일). 기본 숨김 → JS 가 프로/타임어택 시 표시 */
-#time,
+/* 메인 화면 텍스트 링크 : 메뉴(다크 배경) 위 흰 텍스트 링크. 기본 숨김.
+   #menu(10) 오버레이 위에서 눌리도록 z-index 를 올린다(모달 40/41 보다는 아래). */
 #mainLink {
   position: absolute;
   right: 28px;
@@ -44,8 +35,6 @@ html, body {
   letter-spacing: 1px;
   pointer-events: none;
 }
-/* 메인 화면 텍스트 링크 : #time 과 동일한 모양 + 클릭 가능(밑줄 없음). 기본 숨김.
-   #menu(10) 오버레이 위에서 눌리도록 z-index 를 올린다(모달 40/41 보다는 아래). */
 #mainLink {
   display: none;
   text-decoration: none;
@@ -54,95 +43,146 @@ html, body {
   z-index: 20;
 }
 
-/* 음소거 토스트 — #time 과 완전히 동일한 텍스트 스타일, 위치만 가운데 하단 */
+/* 음소거 토스트 — 웜 화이트 알약 (채팅 입력줄과 같은 결). 하단 가운데에 떠올랐다 사라진다 */
 #muteToast {
   position: absolute;
   left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 14px;
-  color: #fff;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 1px;
+  bottom: 84px;
+  transform: translate(-50%, 0);
+  padding: 10px 20px;
+  font-family: 'Jua', sans-serif;
+  font-weight: 400;
+  font-size: 15px;
+  color: #3a3a3a;
+  background: #ffffff;
+  border: 1px solid #ece8df;
+  border-radius: 999px;
   pointer-events: none;
   opacity: 0;
-  text-shadow: 0 4px 24px rgba(0, 0, 0, 0.7);
+  z-index: 60;
 }
 #muteToast.show { animation: muteToast 1.3s ease forwards; }
 @keyframes muteToast {
-  0% { opacity: 0; }
-  12% { opacity: 1; }
-  70% { opacity: 1; }
-  100% { opacity: 0; }
+  0%   { opacity: 0; transform: translate(-50%, 8px); }
+  12%  { opacity: 1; transform: translate(-50%, 0); }
+  70%  { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, -6px); }
 }
 
-/* 미니맵 */
+/* 미니맵 — 우측 하단 */
 #minimap {
   position: absolute;
-  top: 18px;
-  right: 18px;
-  background: rgba(0, 0, 0, 0.45);
-  border: none;
-  border-radius: 6px;
+  bottom: 18px;
+  left: 18px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #ece8df;
+  border-radius: 14px;
 }
 
-/* 채팅창 (미니맵 하단) — 메뉴/로비 오버레이 위에 떠서 어디서나 채팅 가능 */
+/* 채팅창 (미니맵 바로 위) — 메뉴/로비 오버레이 위에 떠서 어디서나 채팅 가능 */
+/* 채팅 — 로비/인게임 공통 프레임리스 스타일.
+ *  로그는 배경 없이 월드 위에 떠 있는 텍스트, 입력줄만 흰 알약. */
 #chat {
   position: absolute;
-  top: calc(18px + var(--mm, 180px) + 8px);  /* 미니맵 아래 (미니맵 크기는 JS 가 --mm 으로 전달) */
+  bottom: 18px;  /* 미니맵 위 (미니맵 크기는 JS 가 --mm 으로 전달) */
   right: 18px;
   width: 240px;
   display: flex;
   flex-direction: column;
-  background: rgba(0, 0, 0, 0.55);
-  border-radius: 8px;
-  overflow: hidden;
+  background: transparent;
   z-index: 30;      /* #menu(10), #lobby(9) 보다 위 */
 }
+/* 로비 : 미니맵이 없으므로 기존대로 우측 상단 */
+/* body.lobby #chat {
+  top: calc(18px + var(--mm, 180px) + 8px);
+  bottom: auto;
+} */
 #chatLog {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
   height: 180px;
   overflow-y: auto;
-  padding: 8px 9px;
+  padding: 0 9px;
   font-size: 12px;
   line-height: 1.5;
-  color: #e8e8e8;
+  color: #6a655c;
+  font-family: 'Jua', sans-serif;
   word-break: break-word;
 }
+/* 인게임 : 잔디/아스팔트 등 유색 배경 위에서도 읽히게 옅은 웜 화이트 헤일로 */
+body:not(.lobby) #chatLog {
+  /* text-shadow: 0 0 6px rgba(253, 252, 248, 0.9), 0 0 2px rgba(253, 252, 248, 0.9); */
+}
+/* 인게임(하단 앵커) : 메시지가 입력줄 쪽(아래)부터 쌓이게 */
+body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 #chatLog::-webkit-scrollbar { width: 6px; }
-#chatLog::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
-.chat-msg { margin-bottom: 3px; }
-.chat-time { color: rgba(255,255,255,0.4); font-size: 10px; margin-right: 4px; }
-.chat-name { font-weight: 700; margin-right: 4px; }
-.chat-text { color: #f0f0f0; }
+#chatLog::-webkit-scrollbar-thumb { background: #e5e0d4; border-radius: 3px; }
+.chat-time { color: #cfc9bb; font-size: 10px; margin-right: 4px; }
+.chat-name { font-weight: 400; margin-right: 4px; }
+.chat-text { color: #5a564e; }
 
 #chatRow {
   display: flex;
-  border-top: 1px solid rgba(255,255,255,0.12);
+  background: #ffffff;
+  border: 1px solid #ece8df;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-top: 8px;
 }
+/* 인게임 : 입력줄 테두리 없이 흰 알약만 (로비에서만 테두리 표시) */
 #chatInput {
   flex: 1;
   min-width: 0;
-  padding: 8px 9px;
+  padding: 9px 6px 9px 16px;
   font-size: 13px;
-  color: #fff;
-  /* background: rgba(255,255,255,0.06); */
+  color: #3a3a3a;
+  font-family: 'Jua', sans-serif;
   background: none;
   border: none;
   outline: none;
-  border-right: 1px solid rgba(255,255,255,0.12);
 }
-#chatInput::placeholder { color: rgba(255,255,255,0.4); }
+#chatInput::placeholder { color: #c6c0b2; }
 #chatSend {
-  padding: 0 14px;
+  padding: 0 16px 0 10px;
   font-size: 13px;
-  font-weight: 700;
-  color: #fff;
-  /* background: rgba(255, 255, 255, 0.14); */
+  font-weight: 400;
+  color: #3a3a3a;
+  font-family: 'Jua', sans-serif;
   background: none;
   border: none;
   cursor: pointer;
 }
-/* #chatSend:hover { background: rgba(255, 255, 255, 0.22); } */
+
+/* 맵 전환 슬라이드 와이프 — 모든 UI 위를 덮는 웜 화이트 패널 (아래→위, JS 가 애니메이션 제어).
+ *  꽉 찬 동안 가운데에 맵 제목/설명을 세로로 보여준다. */
+#wipe {
+  position: absolute;
+  inset: 0;
+  display: none; /* JS 가 flex 로 켠다 */
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 19px; /* 게이트와 동일 : 제목/인원수 중심 간 44px (30/2 + 19 + 20/2) */
+  background: #fdfcf8;
+  z-index: 90;
+  transform: translateY(100%);
+}
+/* 게이트 라벨(30px)/인원수(20px)와 완전히 동일한 타이포 */
+#wipeTitle {
+  font-family: 'Jua', sans-serif;
+  font-weight: 400;
+  font-size: 30px;
+  line-height: 1;
+  color: #3a3a3a;
+}
+#wipeDesc {
+  font-family: 'Jua', sans-serif;
+  font-weight: 400;
+  font-size: 20px;
+  line-height: 1;
+  color: #8a857b;
+}
 
 /* 조작 안내 */
 #help {
@@ -163,7 +203,7 @@ html, body {
   background: rgba(255, 255, 255, 0.14);
   border: 1px solid rgba(255, 255, 255, 0.3);
   border-radius: 4px;
-  font-weight: 600;
+  font-weight: 400;
 }
 
 /* 사망 화면 — 기본 숨김, .show 일 때만 표시 */
@@ -183,7 +223,7 @@ html, body {
 }
 .death-title {
   font-size: 92px;
-  font-weight: 800;
+  font-weight: 400;
   color: #ff3b30;
   letter-spacing: 3px;
   text-shadow: 0 4px 24px rgba(0, 0, 0, 0.7);
@@ -243,7 +283,7 @@ html, body {
 }
 .menu-card h1 {
   font-size: 26px;
-  font-weight: 800;
+  font-weight: 400;
   color: #fff;
   letter-spacing: 1px;
   margin-bottom: 26px;
@@ -294,12 +334,12 @@ html, body {
 .mode-btn.serp:hover { border-color: #2ee59d; }
 .mode-btn.pro:hover { border-color: #f1c40f; }
 .mode-name {
-  font-weight: 700;
+  font-weight: 400;
   color: #fff;
 }
 .mode-count {
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 400;
   color: #fff;
   background: rgba(255, 255, 255, 0.16);
   border-radius: 999px;
@@ -315,19 +355,21 @@ html, body {
 /* 순위판 (채팅 아래) */
 #standings {
   position: absolute;
-  top: 438px;        /* 채팅(top206 + 약 218) 아래 */
+  top: 18px;         /* 우측 상단 (미니맵/채팅이 하단으로 이동해 비는 자리) */
   right: 18px;
   width: 240px;
   display: none;
-  background: rgba(0, 0, 0, 0.42);
-  border-radius: 8px;
-  padding: 8px 10px;
-  color: #eee;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #ece8df;
+  border-radius: 16px;
+  padding: 10px 12px;
+  color: #5a564e;
+  font-family: 'Jua', sans-serif;
   font-size: 12px;
 }
 .stand-title {
-  font-weight: 700;
-  color: rgba(255, 255, 255, 0.85);
+  font-weight: 400;
+  color: #8a857b;
   margin-bottom: 5px;
   letter-spacing: 1px;
 }
@@ -337,11 +379,11 @@ html, body {
   gap: 6px;
   padding: 2px 0;
 }
-.stand-rank { width: 18px; color: rgba(255,255,255,0.6); text-align: right; }
-.stand-star { width: 14px; text-align: center; }
-.stand-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stand-time { color: rgba(255,255,255,0.7); font-variant-numeric: tabular-nums; }
-.stand-lap { color: rgba(255,255,255,0.8); font-variant-numeric: tabular-nums; min-width: 30px; text-align: right; }
+.stand-rank { width: 18px; color: #b6b0a4; text-align: right; font-family: 'Quicksand', sans-serif; font-weight: 600; }
+.stand-star { width: 14px; text-align: center; color: #e8a13a; }
+.stand-name { flex: 1; color: #5a564e; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stand-time { color: #3a3a3a; font-family: 'Quicksand', sans-serif; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stand-lap { color: #8a857b; font-family: 'Quicksand', sans-serif; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 30px; text-align: right; }
 
 /* =============================================================================
  *  커스텀 (방 목록 / 방 생성 / 대기실) — 게이트·계정 팝업과 동일한 웜 화이트 스타일
@@ -438,9 +480,9 @@ html, body {
   border-radius: 16px;
   cursor: pointer;
   font-family: 'Jua', sans-serif;
-  transition: transform 0.15s ease, border-color 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
-.room-card:hover:not(:disabled) { border-color: #d8d2c4; }
+.room-card:hover:not(:disabled) { border-color: #d8d2c4; background: #f3f0e8; }
 .room-card:disabled { opacity: 0.45; cursor: not-allowed; }
 .room-top { display: flex; justify-content: space-between; align-items: center; }
 .room-name { font-size: 16px; color: #3a3a3a; }
@@ -646,7 +688,7 @@ html, body {
   background: rgba(255, 255, 255, 0.14);
   color: #fff;
   font-size: 15px;
-  font-weight: 700;
+  font-weight: 400;
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
@@ -658,41 +700,107 @@ html, body {
 /* 자유 모드 TOP10 기록 (채팅 아래, 순위판과 같은 위치/스타일) */
 #topRecords {
   position: absolute;
-  top: 438px;
+  top: 18px;
   right: 18px;
   width: 240px;
   display: none;
-  background: rgba(0, 0, 0, 0.42);
-  border-radius: 8px;
-  padding: 8px 10px;
-  color: #eee;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #ece8df;
+  border-radius: 16px;
+  padding: 10px 12px;
+  color: #5a564e;
+  font-family: 'Jua', sans-serif;
   font-size: 12px;
 }
-#topRecordsList { display: flex; flex-direction: column; }
-.rec-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
-.rec-rank { width: 16px; color: rgba(255,255,255,0.6); text-align: right; }
-.rec-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rec-time { color: rgba(255,255,255,0.85); font-variant-numeric: tabular-nums; }
-.rec-empty { color: rgba(255,255,255,0.45); padding: 6px 0; text-align: center; }
+#topRecordsList { display: flex; flex-direction: column; gap: 1px; }
+.rec-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.rec-rank { width: 16px; color: #b6b0a4; text-align: right; font-family: 'Quicksand', sans-serif; font-weight: 600; }
+.rec-name { flex: 1; color: #5a564e; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rec-time { color: #3a3a3a; font-family: 'Quicksand', sans-serif; font-weight: 600; font-variant-numeric: tabular-nums; }
+.rec-empty { color: #b6b0a4; padding: 8px 0; text-align: center; }
 
-/* 기록 시작 버튼 (자유 모드, 가운데 상단) — #time 과 동일한 스타일, 위치만 다름 */
-#attackBtn,
+/* 기록 HUD : 하단 가운데(미니맵/채팅과 같은 18px 여백). 인게임 전용이라 테두리 없이 배경+그림자만.
+ *  [시간] [기록 시작] [취소] 를 가로로 묶는다 — 상태에 따라 각 요소가 나타났다 사라진다. */
+#recordHud {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 22;
+}
+/* 공통 알약 (메인화면과 같은 테두리) */
+#recordHud > *,
+#proTimer {
+  padding: 9px 18px;
+  font-family: 'Jua', sans-serif;
+  font-weight: 400;
+  font-size: 14px;
+  color: #3a3a3a;
+  background: #ffffff;
+  border: 1px solid #ece8df;
+  border-radius: 999px;
+  box-shadow: 0 6px 18px rgba(58, 54, 46, 0.14);
+  white-space: nowrap;
+  outline: none;
+}
+#attackBtn { display: none; cursor: pointer; transition: background 0.15s ease; }
+#attackBtn:hover { background: #f6f4ee; }
+/* 취소 : 붉은 톤, 기록 중일 때만 JS 가 표시 */
+#attackCancel { display: none; cursor: pointer; color: #c75b4a; transition: background 0.15s ease; }
+#attackCancel:hover { background: #f6ece9; }
+/* 시간 : 숫자용 Quicksand. 고정폭(mm:ss.cs) — Quicksand 는 tabular 숫자가 없어 자릿수마다
+ *  폭이 달라지므로, 폭을 고정하고 가운데 정렬해 매 프레임 흔들리지 않게 한다. 내용 있을 때만. */
+#time {
+  font-family: 'Quicksand', sans-serif;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
+  flex: none;
+  width: 98px;
+  text-align: center;
+  pointer-events: none;
+}
+#time:empty { display: none; }
+/* 다른 유저 표시 토글 : 기록 HUD 위에 갭을 두고 (하단 가운데), 같은 알약 스타일 */
+#othersToggle {
+  position: absolute;
+  left: 50%;
+  bottom: 74px;
+  transform: translateX(-50%);
+  display: none;
+  padding: 8px 16px;
+  font-family: 'Jua', sans-serif;
+  font-weight: 400;
+  font-size: 13px;
+  color: #3a3a3a;
+  background: #ffffff;
+  border: 1px solid #ece8df;
+  border-radius: 999px;
+  box-shadow: 0 6px 18px rgba(58, 54, 46, 0.14);
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+  z-index: 22;
+  transition: background 0.15s ease;
+}
+#othersToggle:hover { background: #f6f4ee; }
+/* 프로 종료 카운트다운 : 상단 가운데, 같은 알약 */
 #proTimer {
   position: absolute;
   top: 22px;
   left: 50%;
   transform: translateX(-50%);
-  outline: none;
   display: none;
-  font-size: 14px;
-  color: #fff;
+  font-family: 'Quicksand', sans-serif;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
-  letter-spacing: 1px;
-  background: none;
-  border: none;
-  cursor: pointer;
+  letter-spacing: 0.5px;
+  width: 98px;
+  text-align: center;
   z-index: 22;
-  text-shadow: 0 4px 24px rgba(0, 0, 0, 0.7);
 }
 /* 대시보드 버튼 */
 #dashBtn {
@@ -726,16 +834,18 @@ html, body {
  *  - 노치 대응 : env(safe-area-inset-*) 로 가장자리 여백.
  * ========================================================================== */
 @media (max-height: 540px) {
-  #minimap { top: 10px; right: calc(10px + env(safe-area-inset-right)); }
+  /* 모바일 가로모드 : 하단은 터치 버튼 영역이라 기존 우측 상단 배치 유지 */
+  #minimap { top: 10px; bottom: auto; right: calc(10px + env(safe-area-inset-right)); }
 
   #chat {
     top: calc(10px + var(--mm, 104px) + 6px);
+    bottom: auto;
     right: calc(10px + env(safe-area-inset-right));
     width: 176px;
   }
   #chatLog { height: 54px; font-size: 11px; padding: 6px 8px; }
-  #chatInput { padding: 6px 8px; font-size: 12px; }
-  #chatSend { padding: 0 10px; font-size: 12px; }
+  #chatInput { padding: 6px 6px 6px 13px; font-size: 12px; }
+  #chatSend { padding: 0 13px 0 8px; font-size: 12px; }
 
   /* 순위판 / TOP10 : 채팅 아래, 낮게 제한 + 스크롤 (주행 버튼과 안 겹치게) */
   #standings, #topRecords {
@@ -752,11 +862,9 @@ html, body {
   #exitBtn { left: calc(12px + env(safe-area-inset-left)); top: 10px; }
   #speed { left: calc(12px + env(safe-area-inset-left)); bottom: 92px; }
 
-  /* 상단 중앙 기록 버튼 / 카운트다운 */
-  #attackBtn, #proTimer { top: 10px; }
-
-  /* 현재 시간 : 하단 중앙 (우하단 주행 버튼과 겹치지 않게) */
-  #time { right: auto; left: 50%; transform: translateX(-50%); bottom: 12px; }
+  /* 기록 HUD : 하단 가운데 유지(여백만 축소) / 프로 카운트다운 : 상단 */
+  #recordHud { bottom: 12px; }
+  #proTimer { top: 10px; }
 
   /* 터치 컨트롤 : 하단 양 모서리, 작게. 주행은 가로 한 줄. */
   #touchSteer {
@@ -850,54 +958,10 @@ html, body {
 }
 .lob-btn:hover { transform: scale(1.08); }
 .lob-btn svg { width: 22px; height: 22px; }
-#lobWasd {
-  position: absolute;
-  left: 28px;
-  bottom: 22px;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 3px;
-  color: #d8d2c6;
-}
 /* 주행 중 : 전부 걷힘 (복귀는 정지 1.5초 또는 ESC — 둘 다 전체 UI 페이드인) */
 #lobbyUI.s-hidden .lob-el { opacity: 0; pointer-events: none; }
 
-/* =============================================================================
- *  로비 채팅 라이트 스킨 — 프레임 없는 플로팅 (body.lobby 일 때만)
- *  로그는 배경 없이 흰 월드 위에 떠 있는 텍스트, 입력은 원형 버튼과 같은 결의 알약.
- * ========================================================================== */
-body.lobby #chat {
-  background: transparent;
-  overflow: visible;
-  border-radius: 0;
-}
-body.lobby #chatLog {
-  font-family: 'Jua', sans-serif;
-  color: #6a655c;
-}
-body.lobby #chatLog::-webkit-scrollbar-thumb { background: #e5e0d4; }
-body.lobby .chat-time { color: #cfc9bb; }
-body.lobby .chat-text { color: #5a564e; }
-body.lobby #chatRow {
-  margin-top: 8px;
-  background: #ffffff;
-  border: 1px solid #ece8df;
-  border-radius: 999px;
-  overflow: hidden;
-}
-body.lobby #chatInput {
-  font-family: 'Jua', sans-serif;
-  color: #3a3a3a;
-  border-right: none;
-  padding: 9px 6px 9px 16px;
-}
-body.lobby #chatInput::placeholder { color: #c6c0b2; }
-body.lobby #chatSend {
-  font-family: 'Jua', sans-serif;
-  font-weight: 400;
-  color: #3a3a3a;
-  padding: 0 16px 0 10px;
-}
+/* 로비/인게임 채팅 스타일은 상단 #chat 기본 규칙으로 통합됨 */
 
 /* 커스텀(색상 선택) 열림 중 : 링을 가릴 수 있는 채팅을 잠시 걷는다 */
 #chat { transition: opacity 0.25s ease; }
@@ -957,9 +1021,9 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
   padding: 10px 12px;
   cursor: pointer;
   font-family: 'Jua', sans-serif;
-  transition: transform 0.15s ease, border-color 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
-.map-card:hover:not(:disabled) { transform: translateY(-3px); border-color: #d8d2c4; }
+.map-card:hover:not(:disabled) { border-color: #d8d2c4; background: #f3f0e8; }
 .map-card-name { font-size: 16px; color: #3a3a3a; }
 .map-card-desc { font-size: 11.5px; color: #b6b0a4; line-height: 1.4; text-align: center; }
 .map-card.soon { cursor: default; }
@@ -999,3 +1063,111 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
 #shareRoomBtn .icon-check { display: none; }
 #shareRoomBtn.copied .icon-link { display: none; }
 #shareRoomBtn.copied .icon-check { display: block; color: #57b868; }
+
+/* 계정 정보 팝업 — 대시보드와 동일한 오버레이/카드 스타일 재사용 */
+#accountModal {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(58, 54, 46, 0.28);
+  z-index: 40;
+}
+#accountModal.show { display: flex; }
+#accountModal .dash-card { width: min(340px, 90vw); }
+
+/* 설정 팝업 — 계정 팝업과 동일한 오버레이/카드 스타일 */
+#settingsModal {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(58, 54, 46, 0.28);
+  z-index: 40;
+}
+#settingsModal.show { display: flex; }
+#settingsModal .dash-card { width: min(400px, 92vw); }
+.set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 16px;
+  margin-bottom: 10px;
+  background: #f6f4ee;
+  border-radius: 14px;
+}
+.set-label {
+  font-family: 'Jua', sans-serif;
+  font-size: 14px;
+  color: #8a857b;
+  white-space: nowrap;
+}
+/* 볼륨 슬라이더 : 커스텀 렌더링 — 아웃라인 없음, 호버/클릭/포커스에도 색 변화 없음 */
+#setVolume {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  background: #e5e0d4;
+  border: none;
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+}
+#setVolume:hover, #setVolume:focus, #setVolume:focus-visible, #setVolume:active { outline: none; background: #e5e0d4; }
+#setVolume::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: #e8604c;
+}
+#setVolume::-webkit-slider-thumb:hover,
+#setVolume::-webkit-slider-thumb:active { background: #e8604c; }
+#setVolume::-moz-range-track { height: 6px; background: #e5e0d4; border: none; border-radius: 999px; }
+#setVolume::-moz-range-thumb { width: 18px; height: 18px; border: none; border-radius: 50%; background: #e8604c; }
+#setVolume::-moz-focus-outer { border: 0; }
+#setVolumeVal {
+  width: 32px;
+  text-align: right;
+  font-family: 'Quicksand', sans-serif;
+  font-weight: 600;
+  color: #3a3a3a;
+  font-variant-numeric: tabular-nums;
+}
+.set-seg { display: flex; gap: 4px; }
+.set-seg button {
+  padding: 6px 10px;
+  font-family: 'Jua', sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  color: #8a857b;
+  background: #ffffff;
+  border: 1px solid #ece8df;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.set-seg button:hover { background: #f3f0e8; border-color: #d8d2c4; }
+.set-seg button.on { color: #ffffff; background: #3a3a3a; border-color: #3a3a3a; }
+
+/* HUD 위치 설정 : 미니맵/채팅을 네 모서리 중 하나에 (인게임 전용, 모바일 가로 레이아웃 제외).
+ *  같은 모서리를 고르면 채팅이 미니맵을 비켜 위/아래로 쌓인다. */
+@media (min-height: 541px) {
+  body:not(.lobby).mm-tl #minimap { top: 18px; left: 18px; bottom: auto; right: auto; }
+  body:not(.lobby).mm-tr #minimap { top: 18px; right: 18px; bottom: auto; left: auto; }
+  body:not(.lobby).mm-bl #minimap { bottom: 18px; left: 18px; top: auto; right: auto; }
+  body:not(.lobby).mm-br #minimap { bottom: 18px; right: 18px; top: auto; left: auto; }
+  body:not(.lobby).chat-tl #chat { top: 18px; left: 18px; bottom: auto; right: auto; }
+  body:not(.lobby).chat-tr #chat { top: 18px; right: 18px; bottom: auto; left: auto; }
+  body:not(.lobby).chat-bl #chat { bottom: 18px; left: 18px; top: auto; right: auto; }
+  body:not(.lobby).chat-br #chat { bottom: 18px; right: 18px; top: auto; left: auto; }
+  body:not(.lobby).mm-tl.chat-tl #chat { top: calc(18px + var(--mm, 180px) + 8px); }
+  body:not(.lobby).mm-tr.chat-tr #chat { top: calc(18px + var(--mm, 180px) + 8px); }
+  body:not(.lobby).mm-bl.chat-bl #chat { bottom: calc(18px + var(--mm, 180px) + 8px); }
+  body:not(.lobby).mm-br.chat-br #chat { bottom: calc(18px + var(--mm, 180px) + 8px); }
+}
