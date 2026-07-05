@@ -746,15 +746,26 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   white-space: nowrap;
   outline: none;
 }
-/* 기록 시작 : 아이콘만 (텍스트 없음). 대기=타이머 / 기록 중(.recording)=다시(회전 화살표) */
-#attackBtn { display: none; cursor: pointer; padding: 9px 12px; transition: background 0.15s ease; }
+/* 아이콘 버튼(기록 시작 / 취소) : 원 모양. 아이콘만, 정사각 원형 */
+#attackBtn, #attackCancel {
+  display: none;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 50%;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+#attackBtn svg, #attackCancel svg { display: block; width: 18px; height: 18px; }
+/* 기록 시작 : 대기=타이머 / 기록 중(.recording)=다시(회전 화살표) */
 #attackBtn:hover { background: #f6f4ee; }
-#attackBtn svg { display: block; width: 18px; height: 18px; }
 #attackBtn .ic-restart { display: none; }
 #attackBtn.recording .ic-timer { display: none; }
 #attackBtn.recording .ic-restart { display: block; }
-/* 취소 : 붉은 톤, 기록 중일 때만 JS 가 표시 */
-#attackCancel { display: none; cursor: pointer; color: #c75b4a; transition: background 0.15s ease; }
+/* 취소 : 붉은 톤 X 아이콘, 기록 중일 때만 JS 가 표시 */
+#attackCancel { color: #c75b4a; }
 #attackCancel:hover { background: #f6ece9; }
 /* 시간 : 숫자용 Quicksand. 고정폭(mm:ss.cs) — Quicksand 는 tabular 숫자가 없어 자릿수마다
  *  폭이 달라지므로, 폭을 고정하고 가운데 정렬해 매 프레임 흔들리지 않게 한다. 내용 있을 때만. */
@@ -1090,8 +1101,8 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
   color: #8a857b;
   white-space: nowrap;
 }
-/* 볼륨 슬라이더 : 커스텀 렌더링 — 아웃라인 없음, 호버/클릭/포커스에도 색 변화 없음 */
-#setVolume {
+/* 슬라이더(볼륨/시야각) : 커스텀 렌더링 — 아웃라인 없음, 호버/클릭/포커스에도 색 변화 없음 */
+#setVolume, #setFov {
   flex: 1;
   -webkit-appearance: none;
   appearance: none;
@@ -1102,8 +1113,9 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
   outline: none;
   cursor: pointer;
 }
-#setVolume:hover, #setVolume:focus, #setVolume:focus-visible, #setVolume:active { outline: none; background: #e5e0d4; }
-#setVolume::-webkit-slider-thumb {
+#setVolume:hover, #setVolume:focus, #setVolume:focus-visible, #setVolume:active,
+#setFov:hover, #setFov:focus, #setFov:focus-visible, #setFov:active { outline: none; background: #e5e0d4; }
+#setVolume::-webkit-slider-thumb, #setFov::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 18px;
@@ -1112,12 +1124,12 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
   border-radius: 50%;
   background: #e8604c;
 }
-#setVolume::-webkit-slider-thumb:hover,
-#setVolume::-webkit-slider-thumb:active { background: #e8604c; }
-#setVolume::-moz-range-track { height: 6px; background: #e5e0d4; border: none; border-radius: 999px; }
-#setVolume::-moz-range-thumb { width: 18px; height: 18px; border: none; border-radius: 50%; background: #e8604c; }
-#setVolume::-moz-focus-outer { border: 0; }
-#setVolumeVal {
+#setVolume::-webkit-slider-thumb:hover, #setVolume::-webkit-slider-thumb:active,
+#setFov::-webkit-slider-thumb:hover, #setFov::-webkit-slider-thumb:active { background: #e8604c; }
+#setVolume::-moz-range-track, #setFov::-moz-range-track { height: 6px; background: #e5e0d4; border: none; border-radius: 999px; }
+#setVolume::-moz-range-thumb, #setFov::-moz-range-thumb { width: 18px; height: 18px; border: none; border-radius: 50%; background: #e8604c; }
+#setVolume::-moz-focus-outer, #setFov::-moz-focus-outer { border: 0; }
+#setVolumeVal, #setFovVal {
   width: 32px;
   text-align: right;
   font-family: 'Quicksand', sans-serif;

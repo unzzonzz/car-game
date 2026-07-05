@@ -512,6 +512,14 @@ function applyOthersToggle() {
   if (btn) btn.textContent = showOthers ? "다른 차 표시" : "다른 차 숨김";
 }
 
+/* 시야각(FOV) : "기본 줌에 곱하는 배율". 값이 클수록 넓게 보인다(줌아웃). 기본 50 = ×1.0(원래 그대로).
+ *  선형(등분) 매핑 : fov 50 → ×1.0, fov 100 → ×0.8333(= 예전 60값). 각 스텝마다 배율이 균등하게 변한다.
+ *  인게임/로비 모든 줌(주행·줌아웃·줌인)에 똑같이 곱해진다. 설정 슬라이더로 조절(40~100), localStorage 영속. */
+let fov = 50;
+try { const v = parseInt(localStorage.getItem("fov"), 10); if (!Number.isNaN(v)) fov = Math.min(Math.max(v, 40), 100); } catch {}
+function fovMult() { return 1 - (fov - 50) / 300; } // 50→1.0, 100→0.8333, 등분(선형)
+function zoomFor(base) { return base * fovMult(); }
+
 /* 레이싱 트랙(카트 서킷) ------------------------------------------------------
  *  중심선을 "별모양 보장(자기교차 없음)" 극좌표식 폐곡선으로 생성한다.
  *      point(θ) = center + ( R(θ)·cosθ , R(θ)·sinθ ),  R(θ) > 0
@@ -1683,7 +1691,7 @@ function updateTimeHud() {
   // 타임어택 계측 중(armed/running) : 취소 버튼 표시 + 기록 버튼 아이콘을 "다시"로 전환
   const recording = isTimeAttackMode() && attack.state !== "idle";
   const cancelBtn = document.getElementById("attackCancel");
-  if (cancelBtn) cancelBtn.style.display = recording ? "block" : "none";
+  if (cancelBtn) cancelBtn.style.display = recording ? "flex" : "none";
   const attackBtn = document.getElementById("attackBtn");
   if (attackBtn) attackBtn.classList.toggle("recording", recording);
 }
@@ -3150,7 +3158,7 @@ function startGame(mode) {
   document.getElementById("mapModal").classList.remove("show");
   mapPopup.open = false;
   document.body.classList.remove("lobby"); // 인게임은 다크 스킨 유지
-  camera.zoom = camera.zoomT = 1;
+  camera.zoom = camera.zoomT = zoomFor(1); // 인게임 기본 줌 × 시야각
   camera.ay = camera.ayT = 0.5;
   minimap.style.display = "block";
 
@@ -3214,8 +3222,8 @@ function enterLobby() {
   CAR.vx = CAR.vy = CAR.lf = CAR.ll = CAR.steerInput = 0;
   keys.w = keys.a = keys.s = keys.d = keys.space = false;
 
-  // 카메라 : 대기 상태 = 확대 + 차가 화면 36% 지점
-  camera.zoom = camera.zoomT = 1.15;
+  // 카메라 : 대기 상태 = 확대 + 차가 화면 36% 지점 (시야각 배율 적용)
+  camera.zoom = camera.zoomT = zoomFor(1.15);
   camera.ay = camera.ayT = 0.36;
   updateCamera(CAR, 0);
 
@@ -3247,7 +3255,7 @@ function lobbyIdle() {
   CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0; // 메뉴 보는 동안 차 정지
   const ui = document.getElementById("lobbyUI");
   ui.classList.remove("s-hidden");
-  camera.zoomT = 1.15; // 다시 줌인
+  camera.zoomT = zoomFor(1.15); // 다시 줌인 (시야각 배율)
   camera.ayT = 0.36;   // 차를 위쪽(36%)으로
 }
 
@@ -3290,7 +3298,7 @@ function updateLobby(dt) {
     if (inputHeld || speed > 30) {
       lobby.ui = "hidden";
       ui.classList.add("s-hidden");
-      camera.zoomT = 0.95; // 시야 살짝 넓게 (과하지 않게)
+      camera.zoomT = zoomFor(0.95); // 주행 시 줌아웃 (원래 0.95 × 시야각)
       camera.ayT = 0.5;    // 차 중앙
     }
   } else {
@@ -3374,7 +3382,7 @@ function enterProStage() {
   skidMarks.length = 0;
   explosions.length = 0;
   camera.shake = 0;
-  camera.zoom = camera.zoomT = 1;
+  camera.zoom = camera.zoomT = zoomFor(1); // 인게임 기본 줌 × 시야각
   camera.ay = camera.ayT = 0.5;
   document.getElementById("lobbyUI").style.display = "none";
   document.getElementById("mapModal").classList.remove("show");
@@ -3441,7 +3449,7 @@ function openCustom() {
   lobby.stopMs = 0;
   document.getElementById("lobbyUI").classList.add("s-hidden");
   document.body.classList.add("customizing"); // 채팅 등 DOM 이 링을 가리지 않게 페이드아웃
-  camera.zoomT = 1.2;
+  camera.zoomT = zoomFor(1.2); // 색상 선택 줌인 (시야각 배율)
   camera.ayT = 0.5;
 }
 
@@ -3452,7 +3460,7 @@ function closeCustom() {
   lobby.holdGate = LOBBY_GATES.find((g) => g.group === "garage") || null;
   document.body.classList.remove("customizing");
   canvas.style.cursor = "";
-  camera.zoomT = 0.95; // 주행 뷰로 복귀
+  camera.zoomT = zoomFor(0.95); // 주행 뷰로 복귀 (원래 0.95 × 시야각)
   camera.ayT = 0.5;
 }
 
@@ -3514,6 +3522,17 @@ function setupLobbyUI() {
     SFX.setVolume(volInput.value / 100);
   });
   volInput.addEventListener("change", () => SFX.click()); // 놓았을 때 현재 볼륨으로 미리듣기
+  const fovInput = document.getElementById("setFov");
+  fovInput.addEventListener("input", () => {
+    const oldMult = fovMult();
+    fov = parseInt(fovInput.value, 10);
+    document.getElementById("setFovVal").textContent = fovInput.value;
+    try { localStorage.setItem("fov", String(fov)); } catch {}
+    // 현재 줌을 배율 변화만큼 재조정 → 인게임/로비 어느 상태든 동일하게 즉시 반영
+    const ratio = fovMult() / oldMult;
+    camera.zoomT *= ratio;
+    camera.zoom *= ratio;
+  });
   for (const [segId, key] of [["setMmPos", "mm"], ["setChatPos", "chat"]]) {
     document.getElementById(segId).addEventListener("click", (e) => {
       const b = e.target.closest("button[data-pos]");
@@ -3702,6 +3721,9 @@ function syncSettingsUI() {
   const vol = document.getElementById("setVolume");
   vol.value = Math.round(SFX.getVolume() * 100);
   document.getElementById("setVolumeVal").textContent = vol.value;
+  const fovEl = document.getElementById("setFov");
+  fovEl.value = fov;
+  document.getElementById("setFovVal").textContent = fov;
   for (const [segId, key] of [["setMmPos", "mm"], ["setChatPos", "chat"]]) {
     for (const b of document.getElementById(segId).querySelectorAll("button[data-pos]")) {
       b.classList.toggle("on", b.dataset.pos === hudLayout[key]);
@@ -3779,7 +3801,7 @@ function updateTouchVisibility() {
 // 자유 모드 UI (기록 시작 버튼 + TOP10 + 다른 차 토글) 표시/숨김
 function updateFreeUI() {
   const show = isTimeAttackMode() && gameState === "playing"; // 자유/하드 둘 다 기록 UI 표시
-  document.getElementById("attackBtn").style.display = show ? "block" : "none";
+  document.getElementById("attackBtn").style.display = show ? "flex" : "none";
   document.getElementById("topRecords").style.display = show ? "block" : "none";
   document.getElementById("othersToggle").style.display = show ? "block" : "none";
   if (show) { updateTopRecords(); applyOthersToggle(); }
