@@ -55,16 +55,42 @@ const WORLD = {
 /* 로비 : 접속하자마자 차를 몰 수 있는 웜 화이트 월드. 게이트에 들어가면 모드 입장.
  *  게이트 = 플랫 컬러 패치(아치형 배치), 0.8초 머무르면 확정. 클릭/탭으로도 입장 가능. */
 const LOBBY_SPAWN = { x: 1800, y: 2150 };
+
+/* =============================================================================
+ *  색상 팔레트 (디자인 시스템) — 캔버스로 그리는 주요 색을 한 곳에 모은다.
+ *  DOM 쪽은 style.css 의 :root 토큰과 값이 짝을 이룬다. (문자열 그대로도 몇 군데 남아있음)
+ * ========================================================================== */
+const PALETTE = {
+  // 메인화면(로비) : 웜 화이트 바닥 + 은은한 격자 + 플랫 그림자
+  bg:          "#fdfcf8", // 월드 바닥 / 화면 밖
+  grid:        "#f2efe8", // 로비 격자선
+  gateShadow:  "#e9e4d8", // 게이트 플랫 그림자
+  carShadowLobby: "#e6e0d2", // 차 그림자(로비, 흰 바닥용)
+  carShadowTrack: "#cfc9ba", // 차 그림자(트랙, 회색 바닥용)
+  // 플랫 트랙 : 잔디 / 아스팔트 / 흰 라인
+  grass:       "#84b53d",
+  asphalt:     "#6e7276",
+  line:        "#ffffff",
+  // 주 색상(액센트) — 게이트/포인트
+  coral:       "#e8604c", // 아케이드
+  blue:        "#4f8ee8", // 레이싱
+  green:       "#57b868", // 광장
+  yellow:      "#f2c94c", // 커스텀
+  purple:      "#7a55d6", // 연습
+  terracotta:  "#c75b4a", // 주행 테스트
+  ink:         "#3a3a3a", // 차고 / 진한 텍스트
+};
+
 // 게이트 : 가로 한 줄의 "그룹 메뉴". 통과하면 그룹별 맵 카드 팝업이 열린다.
 //  차고 게이트는 팝업 대신 차 색상 커스텀(32색 링 픽커)을 연다.
 const LOBBY_GATES = [
-  { group: "arcade",   label: "아케이드", color: "#e8604c", x: 1160, y: 1560, w: 250, h: 150 },
-  { group: "racing",   label: "레이싱",  color: "#4f8ee8", x: 1480, y: 1560, w: 250, h: 150 },
-  { group: "plaza",    label: "광장",    color: "#57b868", x: 1800, y: 1560, w: 250, h: 150 },
-  { group: "custom",   label: "커스텀",  color: "#f2c94c", x: 2120, y: 1560, w: 250, h: 150 },
-  { group: "practice", label: "연습",    color: "#7a55d6", x: 2440, y: 1560, w: 250, h: 150 },
-  { group: "test",     label: "주행 테스트",  color: "#c75b4a", x: 2760, y: 1560, w: 250, h: 150 },
-  { group: "garage",   label: "차고",    color: "#3a3a3a", x: 2600, y: 2150, w: 220, h: 140 },
+  { group: "arcade",   label: "아케이드", color: PALETTE.coral,      x: 1160, y: 1560, w: 250, h: 150 },
+  { group: "racing",   label: "레이싱",  color: PALETTE.blue,       x: 1480, y: 1560, w: 250, h: 150 },
+  { group: "plaza",    label: "광장",    color: PALETTE.green,      x: 1800, y: 1560, w: 250, h: 150 },
+  { group: "custom",   label: "커스텀",  color: PALETTE.yellow,     x: 2120, y: 1560, w: 250, h: 150 },
+  { group: "practice", label: "연습",    color: PALETTE.purple,     x: 2440, y: 1560, w: 250, h: 150 },
+  { group: "test",     label: "주행 테스트",  color: PALETTE.terracotta, x: 2760, y: 1560, w: 250, h: 150 },
+  { group: "garage",   label: "차고",    color: PALETTE.ink,        x: 2600, y: 2150, w: 220, h: 140 },
 ];
 
 /* 그룹별 맵 목록 (팝업 카드). mode 가 null 이면 아직 개발 전 → "준비 중" 비활성 카드.
@@ -83,8 +109,9 @@ const MAP_GROUPS = {
     title: "레이싱",
     desc: "다른 플레이어들과 경쟁하는 레이싱",
     maps: [
-      { name: "일반전", desc: "부담 없이 즐기는 캐주얼 레이스", mode: null },
+      { name: "일반전", desc: "표준 규칙으로 달리는 기본 레이스", mode: null },
       { name: "경쟁전", desc: "실력을 겨루는 랭크 레이스", mode: null },
+      { name: "캐주얼", desc: "폭풍·바람 등 판마다 색다른 기믹이 있는 이색 레이스", mode: null },
     ],
   },
   plaza: {
@@ -1555,7 +1582,7 @@ resize();
 
 function render(car) {
   // 화면 클리어 : 월드 밖은 메인화면(로비)과 같은 웜 화이트로 이어지게 (검정 대신)
-  ctx.fillStyle = "#fdfcf8";
+  ctx.fillStyle = PALETTE.bg;
   ctx.fillRect(0, 0, viewW, viewH);
 
   // 흔들림 오프셋 (킬 시 화면 진동)
@@ -1711,20 +1738,20 @@ function drawFlatTrackGround() {
   const p = t.path;
   const tw = t.halfWidth * 2;
   // 잔디 (바깥/인필드 동일한 밝은 톤)
-  ctx.fillStyle = "#84B53D";
+  ctx.fillStyle = PALETTE.grass;
   ctx.fillRect(0, 0, world.w, world.h);
   ctx.lineJoin = "round";
   ctx.lineCap = "butt";
   // 가장자리 : 모든 맵 공통 — 테스트 맵과 동일한 6px 흰 테두리 (중앙선과 같은 색·두께)
-  ctx.strokeStyle = "#FFFFFF";
+  ctx.strokeStyle = PALETTE.line;
   ctx.lineWidth = tw + 12;            // 양쪽 6px 씩 흰 테두리
   ctx.stroke(p);
   // 아스팔트
-  ctx.strokeStyle = "#6E7276";
+  ctx.strokeStyle = PALETTE.asphalt;
   ctx.lineWidth = tw;
   ctx.stroke(p);
   // 중앙 흰 실선 (6px)
-  ctx.strokeStyle = "#FFFFFF";
+  ctx.strokeStyle = PALETTE.line;
   ctx.lineWidth = 6;
   ctx.stroke(p);
   // 스타트 라인 : 중앙선과 같은 6px 흰 "일자" 선. 트랙에 수직으로 흰 테두리 바깥(halfWidth+6)까지 쭉 긋는다.
@@ -1736,7 +1763,7 @@ function drawFlatTrackGround() {
   const tang = Math.atan2(cl[1].y - cl[n - 1].y, cl[1].x - cl[n - 1].x); // 그 지점의 접선
   const nx = Math.cos(tang + Math.PI / 2), ny = Math.sin(tang + Math.PI / 2);
   const half = t.halfWidth + 6;
-  ctx.strokeStyle = "#FFFFFF";
+  ctx.strokeStyle = PALETTE.line;
   ctx.lineWidth = 6;
   ctx.beginPath();
   ctx.moveTo(cx0 - nx * half, cy0 - ny * half);
@@ -1748,14 +1775,14 @@ function drawFlatTrackGround() {
  *  광원 좌상단 고정 → 게이트 그림자는 우하단 플랫 오프셋(#E9E4D8, 블러 0). */
 function drawLobbyGround() {
   const W = world.w, H = world.h;
-  ctx.fillStyle = "#fdfcf8";
+  ctx.fillStyle = PALETTE.bg;
   ctx.fillRect(0, 0, W, H);
 
   // 격자 : 맵을 정확히 나눠떨어지게 칸 크기를 스냅 (경계에서 칸이 잘리지 않도록).
   //  목표 56px 기준으로 가장 가까운 "정수 칸수"를 구해 셀 크기를 역산 → 마지막 선이 경계에 딱 맞음.
   const gx = W / Math.round(W / 56);
   const gy = H / Math.round(H / 56);
-  ctx.strokeStyle = "#f2efe8";
+  ctx.strokeStyle = PALETTE.grid;
   ctx.lineWidth = 1;
   ctx.beginPath();
   const vx0 = camera.x, vx1 = camera.x + viewW / camera.zoom;
@@ -2176,7 +2203,7 @@ function drawCar(car, color = "#e8604c") {
   ctx.scale(s * 1.16, s * 1.1);
   ctx.translate(-95, -132);
   ctx.globalCompositeOperation = "multiply"; // 아래 색을 곱해 어둡게 — 검정 없이 부드러운 그림자
-  ctx.fillStyle = gameMode === "lobby" ? "#e6e0d2" : "#cfc9ba";
+  ctx.fillStyle = gameMode === "lobby" ? PALETTE.carShadowLobby : PALETTE.carShadowTrack;
   ctx.fill(CARP.shadow); // 바디 + 사이드미러 실루엣
   ctx.restore();
 
@@ -2292,7 +2319,7 @@ function drawMinimap(car) {
 
   // 월드 영역 바닥 (플랫 트랙은 밝은 잔디색)
   const flat = isFlatTrackMode();
-  mctx.fillStyle = flat ? "#84B53D" : "rgba(40,45,42,0.9)";
+  mctx.fillStyle = flat ? PALETTE.grass : "rgba(40,45,42,0.9)";
   mctx.fillRect(ox, oy, world.w * scale, world.h * scale);
 
   // 레이싱 트랙 (중심선을 굵게 stroke → 미니맵 트랙 모양) + 시작선
@@ -2303,10 +2330,10 @@ function drawMinimap(car) {
     mctx.scale(scale, scale);
     mctx.lineJoin = "round";
     mctx.lineCap = "round";
-    mctx.strokeStyle = flat ? "#ffffff" : "#7a8a76";
+    mctx.strokeStyle = flat ? PALETTE.line : "#7a8a76";
     mctx.lineWidth = track.halfWidth * 2 + (flat ? 40 : Math.max(2 * track.kerb, 40));
     mctx.stroke(track.path);
-    mctx.strokeStyle = flat ? "#6E7276" : "#566";
+    mctx.strokeStyle = flat ? PALETTE.asphalt : "#566";
     mctx.lineWidth = track.halfWidth * 2;
     mctx.stroke(track.path);
     // 시작선 (흰색, 트랙 폭을 가로지름) — 플랫 트랙은 가장자리 링과 같은 두께

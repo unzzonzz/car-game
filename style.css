@@ -1,3 +1,30 @@
+/* =============================================================================
+ *  색상 팔레트 (디자인 시스템 토큰) — 메인화면/UI 주 색상을 한 곳에 모은다.
+ *  game.js 의 PALETTE(캔버스 색)와 값이 짝을 이룬다.
+ * ========================================================================== */
+:root {
+  /* 웜 화이트 시스템 (바닥/카드/테두리) */
+  --bg:        #fdfcf8;  /* 메인화면 바닥 / 화면 밖 */
+  --grid:      #f2efe8;  /* 로비 격자선 */
+  --white:     #ffffff;  /* 카드/알약 면 */
+  --line:      #ece8df;  /* 카드/알약 테두리 */
+  --hover:     #f6f4ee;  /* 버튼 호버 */
+  --track:     #e5e0d4;  /* 슬라이더 트랙 / 스크롤바 */
+  /* 텍스트 계조 (진함 → 옅음) */
+  --ink:       #3a3a3a;  /* 진한 텍스트 / 차고 */
+  --text:      #5a564e;  /* 본문 텍스트 */
+  --muted:     #8a857b;  /* 보조 텍스트 */
+  --muted-2:   #b6b0a4;  /* 흐린 텍스트 / 순위 */
+  /* 주 색상 (액센트) */
+  --coral:     #e8604c;  /* 아케이드 / 강조 */
+  --blue:      #4f8ee8;  /* 레이싱 */
+  --green:     #57b868;  /* 광장 / 준비 완료 */
+  --yellow:    #f2c94c;  /* 커스텀 */
+  --purple:    #7a55d6;  /* 연습 */
+  --terracotta:#c75b4a;  /* 주행 테스트 / 취소 */
+  --gold:      #e8a13a;  /* 1등 별 */
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -30,7 +57,7 @@ html, body {
   right: 28px;
   bottom: 22px;
   font-size: 14px;
-  color: #fff;
+  color: var(--white);
   font-variant-numeric: tabular-nums;
   letter-spacing: 1px;
   pointer-events: none;
@@ -53,9 +80,9 @@ html, body {
   font-family: 'Jua', sans-serif;
   font-weight: 400;
   font-size: 15px;
-  color: #3a3a3a;
-  background: #ffffff;
-  border: 1px solid #ece8df;
+  color: var(--ink);
+  background: var(--white);
+  border: 1px solid var(--line);
   border-radius: 999px;
   pointer-events: none;
   opacity: 0;
@@ -75,7 +102,7 @@ html, body {
   bottom: 18px;
   left: 18px;
   background: rgba(255, 255, 255, 0.92);
-  border: 1px solid #ece8df;
+  border: 1px solid var(--line);
   border-radius: 14px;
 }
 
@@ -117,15 +144,15 @@ body:not(.lobby) #chatLog {
 /* 인게임(하단 앵커) : 메시지가 입력줄 쪽(아래)부터 쌓이게 */
 body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 #chatLog::-webkit-scrollbar { width: 6px; }
-#chatLog::-webkit-scrollbar-thumb { background: #e5e0d4; border-radius: 3px; }
+#chatLog::-webkit-scrollbar-thumb { background: var(--track); border-radius: 3px; }
 .chat-time { color: #cfc9bb; font-size: 10px; margin-right: 4px; }
 .chat-name { font-weight: 400; margin-right: 4px; }
-.chat-text { color: #5a564e; }
+.chat-text { color: var(--text); }
 
 #chatRow {
   display: flex;
-  background: #ffffff;
-  border: 1px solid #ece8df;
+  background: var(--white);
+  border: 1px solid var(--line);
   border-radius: 999px;
   overflow: hidden;
   margin-top: 8px;
@@ -136,7 +163,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   min-width: 0;
   padding: 9px 6px 9px 16px;
   font-size: 13px;
-  color: #3a3a3a;
+  color: var(--ink);
   font-family: 'Jua', sans-serif;
   background: none;
   border: none;
@@ -147,7 +174,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   padding: 0 16px 0 10px;
   font-size: 13px;
   font-weight: 400;
-  color: #3a3a3a;
+  color: var(--ink);
   font-family: 'Jua', sans-serif;
   background: none;
   border: none;
@@ -164,7 +191,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   align-items: center;
   justify-content: center;
   gap: 19px; /* 게이트와 동일 : 제목/인원수 중심 간 44px (30/2 + 19 + 20/2) */
-  background: #fdfcf8;
+  background: var(--bg);
   z-index: 90;
   transform: translateY(100%);
 }
@@ -174,14 +201,14 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   font-weight: 400;
   font-size: 30px;
   line-height: 1;
-  color: #3a3a3a;
+  color: var(--ink);
 }
 #wipeDesc {
   font-family: 'Jua', sans-serif;
   font-weight: 400;
   font-size: 20px;
   line-height: 1;
-  color: #8a857b;
+  color: var(--muted);
 }
 
 /* 조작 안내 */
@@ -248,7 +275,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   /* padding: 9px 18px; */
   font-size: 14px;
   /* font-weight: 700; */
-  color: #fff;
+  color: var(--white);
   /* background: rgba(0s, 0, 0, 0.5); */
   background: transparent;
   /* border-radius: 100px; */
@@ -284,7 +311,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 .menu-card h1 {
   font-size: 26px;
   font-weight: 400;
-  color: #fff;
+  color: var(--white);
   letter-spacing: 1px;
   margin-bottom: 26px;
 }
@@ -299,7 +326,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   width: 100%;
   padding: 12px 14px;
   font-size: 18px;
-  color: #fff;
+  color: var(--white);
   background: rgba(255, 255, 255, 0.08);
   border: none;
   outline: none;
@@ -335,12 +362,12 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 .mode-btn.pro:hover { border-color: #f1c40f; }
 .mode-name {
   font-weight: 400;
-  color: #fff;
+  color: var(--white);
 }
 .mode-count {
   font-size: 12px;
   font-weight: 400;
-  color: #fff;
+  color: var(--white);
   background: rgba(255, 255, 255, 0.16);
   border-radius: 999px;
   padding: 2px 9px;
@@ -360,16 +387,16 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   width: 240px;
   display: none;
   background: rgba(255, 255, 255, 0.92);
-  border: 1px solid #ece8df;
+  border: 1px solid var(--line);
   border-radius: 16px;
   padding: 10px 12px;
-  color: #5a564e;
+  color: var(--text);
   font-family: 'Jua', sans-serif;
   font-size: 12px;
 }
 .stand-title {
   font-weight: 400;
-  color: #8a857b;
+  color: var(--muted);
   margin-bottom: 5px;
   letter-spacing: 1px;
 }
@@ -379,11 +406,11 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   gap: 6px;
   padding: 2px 0;
 }
-.stand-rank { width: 18px; color: #b6b0a4; text-align: right; font-family: 'Quicksand', sans-serif; font-weight: 600; }
-.stand-star { width: 14px; text-align: center; color: #e8a13a; }
-.stand-name { flex: 1; color: #5a564e; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stand-time { color: #3a3a3a; font-family: 'Quicksand', sans-serif; font-weight: 600; font-variant-numeric: tabular-nums; }
-.stand-lap { color: #8a857b; font-family: 'Quicksand', sans-serif; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 30px; text-align: right; }
+.stand-rank { width: 18px; color: var(--muted-2); text-align: right; font-family: 'Quicksand', sans-serif; font-weight: 600; }
+.stand-star { width: 14px; text-align: center; color: var(--gold); }
+.stand-name { flex: 1; color: var(--text); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stand-time { color: var(--ink); font-family: 'Quicksand', sans-serif; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stand-lap { color: var(--muted); font-family: 'Quicksand', sans-serif; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 30px; text-align: right; }
 
 /* =============================================================================
  *  커스텀 (방 목록 / 방 생성 / 대기실) — 게이트·계정 팝업과 동일한 웜 화이트 스타일
@@ -406,8 +433,8 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 .browser-card, .cr-card, .lobby-card {
   width: min(560px, 92vw);
   padding: 40px 34px 34px;
-  background: #ffffff;
-  border: 1px solid #ece8df;
+  background: var(--white);
+  border: 1px solid var(--line);
   border-radius: 24px;
   box-shadow: 0 24px 60px rgba(58, 54, 46, 0.14);
   text-align: center;
@@ -417,23 +444,23 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 
 /* 버튼 : 주요 = 다크 알약 (계정 팝업과 동일) */
 #createRoomBtn, .browser-leave, #crCreate, #crCancel, #readyBtn, #lobbyLeave {
-  border: 1px solid #3a3a3a;
+  border: 1px solid var(--ink);
   border-radius: 999px;
-  color: #ffffff;
+  color: var(--white);
   cursor: pointer;
   font-family: 'Jua', sans-serif;
   font-weight: 400;
-  background: #3a3a3a;
+  background: var(--ink);
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 #createRoomBtn:hover, #crCreate:hover, #readyBtn:hover:not(:disabled) { background: #1c1c1c; border-color: #1c1c1c; }
 /* 보조(취소/나가기) : 고스트 */
 #crCancel, #lobbyLeave, .browser-leave {
-  color: #8a857b;
+  color: var(--muted);
   background: transparent;
-  border-color: #ece8df;
+  border-color: var(--line);
 }
-#crCancel:hover, #lobbyLeave:hover, .browser-leave:hover { background: #f6f4ee; color: #3a3a3a; border-color: #e5e0d4; }
+#crCancel:hover, #lobbyLeave:hover, .browser-leave:hover { background: var(--hover); color: var(--ink); border-color: var(--track); }
 
 /* 입력/셀렉트 : 알약 (계정 팝업과 동일) */
 .cr-card input, .cr-card select {
@@ -441,16 +468,16 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   padding: 13px 18px;
   font-family: 'Jua', sans-serif;
   font-size: 14px;
-  color: #3a3a3a;
-  background: #ffffff;
-  border: 1px solid #ece8df;
+  color: var(--ink);
+  background: var(--white);
+  border: 1px solid var(--line);
   border-radius: 999px;
   outline: none;
   transition: border-color 0.15s ease;
 }
-.cr-card input:focus, .cr-card select:focus { border-color: #b6b0a4; }
+.cr-card input:focus, .cr-card select:focus { border-color: var(--muted-2); }
 .cr-card input::placeholder { color: #c6c0b2; }
-.cr-card select option { color: #3a3a3a; }
+.cr-card select option { color: var(--ink); }
 
 /* ----- 방 브라우저 ----- */
 .browser-head {
@@ -459,7 +486,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   justify-content: space-between;
   margin-bottom: 22px;
 }
-.browser-head h2 { font-family: 'Jua', sans-serif; font-size: 22px; font-weight: 400; color: #3a3a3a; }
+.browser-head h2 { font-family: 'Jua', sans-serif; font-size: 22px; font-weight: 400; color: var(--ink); }
 #createRoomBtn { padding: 11px 20px; font-size: 14px; }
 #roomList {
   display: flex;
@@ -470,13 +497,13 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   margin-bottom: 20px;
 }
 #roomList::-webkit-scrollbar { width: 6px; }
-#roomList::-webkit-scrollbar-thumb { background: #e5e0d4; border-radius: 3px; }
+#roomList::-webkit-scrollbar-thumb { background: var(--track); border-radius: 3px; }
 .room-empty { text-align: center; color: #c6c0b2; padding: 36px 0; font-size: 14px; font-family: 'Jua', sans-serif; }
 .room-card {
   text-align: left;
   padding: 15px 20px;
   background: #faf8f3;
-  border: 1px solid #ece8df;
+  border: 1px solid var(--line);
   border-radius: 16px;
   cursor: pointer;
   font-family: 'Jua', sans-serif;
@@ -485,21 +512,21 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 .room-card:hover:not(:disabled) { border-color: #d8d2c4; background: #f3f0e8; }
 .room-card:disabled { opacity: 0.45; cursor: not-allowed; }
 .room-top { display: flex; justify-content: space-between; align-items: center; }
-.room-name { font-size: 16px; color: #3a3a3a; }
+.room-name { font-size: 16px; color: var(--ink); }
 .room-count {
-  font-size: 12px; color: #8a857b;
+  font-size: 12px; color: var(--muted);
   background: #f1eee6; border-radius: 999px; padding: 3px 10px;
   font-family: 'Quicksand', sans-serif; font-weight: 600;
 }
-.room-meta { font-size: 12px; color: #b6b0a4; margin-top: 5px; }
+.room-meta { font-size: 12px; color: var(--muted-2); margin-top: 5px; }
 .browser-leave { padding: 12px 22px; font-size: 14px; }
 
 /* ----- 방 만들기 ----- */
-.cr-card h2 { font-family: 'Jua', sans-serif; font-size: 22px; font-weight: 400; color: #3a3a3a; margin-bottom: 22px; }
+.cr-card h2 { font-family: 'Jua', sans-serif; font-size: 22px; font-weight: 400; color: var(--ink); margin-bottom: 22px; }
 .cr-card label {
   display: block; text-align: left;
   font-family: 'Jua', sans-serif;
-  font-size: 12px; color: #b6b0a4;
+  font-size: 12px; color: var(--muted-2);
   margin: 14px 0 6px;
 }
 .cr-row { display: flex; gap: 12px; }
@@ -509,8 +536,8 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 #crCancel { flex: 1; padding: 14px; font-size: 14px; }
 
 /* ----- 대기실 ----- */
-.lobby-card h2 { font-family: 'Jua', sans-serif; font-size: 22px; font-weight: 400; color: #3a3a3a; margin-bottom: 6px; }
-.lobby-info { text-align: center; font-family: 'Jua', sans-serif; font-size: 13px; color: #b6b0a4; margin-bottom: 22px; }
+.lobby-card h2 { font-family: 'Jua', sans-serif; font-size: 22px; font-weight: 400; color: var(--ink); margin-bottom: 6px; }
+.lobby-info { text-align: center; font-family: 'Jua', sans-serif; font-size: 13px; color: var(--muted-2); margin-bottom: 22px; }
 #lobbyList {
   display: flex;
   flex-direction: column;
@@ -524,18 +551,18 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   align-items: center;
   gap: 10px;
   padding: 12px 18px;
-  background: #f6f4ee;
+  background: var(--hover);
   border-radius: 999px;
 }
 .lobby-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
-.lobby-name { flex: 1; text-align: left; color: #3a3a3a; font-family: 'Jua', sans-serif; }
+.lobby-name { flex: 1; text-align: left; color: var(--ink); font-family: 'Jua', sans-serif; }
 .lobby-ready { font-size: 12px; font-family: 'Jua', sans-serif; }
-.lobby-ready.on { color: #57b868; }
+.lobby-ready.on { color: var(--green); }
 .lobby-ready.off { color: #c6c0b2; }
-.lobby-hint { text-align: center; font-size: 12px; font-family: 'Jua', sans-serif; color: #b6b0a4; margin-bottom: 20px; }
+.lobby-hint { text-align: center; font-size: 12px; font-family: 'Jua', sans-serif; color: var(--muted-2); margin-bottom: 20px; }
 .lobby-buttons { display: flex; gap: 10px; }
 #readyBtn { flex: 2; padding: 15px; font-size: 15px; }
-#readyBtn.ready { background: #57b868; border-color: #57b868; }
+#readyBtn.ready { background: var(--green); border-color: var(--green); }
 #readyBtn:disabled { background: #f1eee6; border-color: #f1eee6; color: #c6c0b2; cursor: not-allowed; }
 #lobbyLeave { flex: 1; padding: 15px; font-size: 14px; }
 
@@ -558,23 +585,23 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   margin-bottom: 14px;           /* 인풋 위아래 사이 간격 */
   font-family: 'Jua', sans-serif;
   font-size: 15px;
-  color: #3a3a3a;
-  background: #ffffff;
-  border: 1px solid #ece8df;
+  color: var(--ink);
+  background: var(--white);
+  border: 1px solid var(--line);
   border-radius: 999px;
   outline: none;
   transition: border-color 0.15s ease;
 }
-.auth-form input:focus { border-color: #b6b0a4; }
+.auth-form input:focus { border-color: var(--muted-2); }
 .auth-form input::placeholder { color: #c6c0b2; }
 .auth-btn {
   width: 100%;
   padding: 15px;
   font-family: 'Jua', sans-serif;
   font-size: 15px;
-  color: #ffffff;
-  background: #3a3a3a;
-  border: 1px solid #3a3a3a;
+  color: var(--white);
+  background: var(--ink);
+  border: 1px solid var(--ink);
   border-radius: 999px;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
@@ -583,17 +610,17 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 /* 보조 버튼(닫기) : 고스트 */
 .auth-close {
   width: 100%;
-  color: #8a857b;
+  color: var(--muted);
   background: transparent;
-  border-color: #ece8df;
+  border-color: var(--line);
 }
-.auth-close:hover { background: #f6f4ee; color: #3a3a3a; border-color: #e5e0d4; }
+.auth-close:hover { background: var(--hover); color: var(--ink); border-color: var(--track); }
 /* 인풋 그룹과 기본 버튼 사이 간격 (인풋 하단 margin 14 + 이 값) */
 .auth-form .auth-btn { margin-top: 6px; }
-.auth-switch { font-family: 'Jua', sans-serif; font-size: 13px; color: #b6b0a4; text-align: center; margin-top: 20px; }
-.auth-link { color: #e8604c; cursor: pointer; }
+.auth-switch { font-family: 'Jua', sans-serif; font-size: 13px; color: var(--muted-2); text-align: center; margin-top: 20px; }
+.auth-link { color: var(--coral); cursor: pointer; }
 .auth-link:hover { text-decoration: underline; text-underline-offset: 3px; }
-#welcomeMsg { display: block; text-align: center; font-family: 'Jua', sans-serif; color: #3a3a3a; margin-bottom: 10px; }
+#welcomeMsg { display: block; text-align: center; font-family: 'Jua', sans-serif; color: var(--ink); margin-bottom: 10px; }
 
 /* 대시보드 패널 */
 #dashboard {
@@ -609,25 +636,25 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 .dash-card {
   width: min(400px, 90vw);
   padding: 40px 34px 34px;
-  background: #ffffff;
-  border: 1px solid #ece8df;
+  background: var(--white);
+  border: 1px solid var(--line);
   border-radius: 24px;
   text-align: center;
   box-shadow: 0 24px 60px rgba(58, 54, 46, 0.14);
 }
-.dash-card h2 { font-family: 'Jua', sans-serif; font-size: 22px; font-weight: 400; color: #3a3a3a; margin-bottom: 26px; }
+.dash-card h2 { font-family: 'Jua', sans-serif; font-size: 22px; font-weight: 400; color: var(--ink); margin-bottom: 26px; }
 .dash-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 15px 18px;
   margin-bottom: 10px;
-  background: #f6f4ee;
+  background: var(--hover);
   border-radius: 14px;
   font-size: 15px;
 }
-.dash-row span:first-child { font-family: 'Jua', sans-serif; color: #8a857b; }
-.dash-row span:last-child { font-family: 'Quicksand', sans-serif; font-weight: 600; color: #3a3a3a; font-variant-numeric: tabular-nums; }
+.dash-row span:first-child { font-family: 'Jua', sans-serif; color: var(--muted); }
+.dash-row span:last-child { font-family: 'Quicksand', sans-serif; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
 .dash-card .auth-btn { width: 100%; margin-top: 22px; }
 
 /* 로그인/회원가입 팝업 */
@@ -645,12 +672,12 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 .auth-card {
   width: min(380px, 90vw);
   padding: 40px 34px 34px;
-  background: #ffffff;
-  border: 1px solid #ece8df;
+  background: var(--white);
+  border: 1px solid var(--line);
   border-radius: 24px;
   box-shadow: 0 24px 60px rgba(58, 54, 46, 0.14);
 }
-.auth-card h2 { font-family: 'Jua', sans-serif; font-size: 22px; font-weight: 400; color: #3a3a3a; text-align: center; margin-bottom: 26px; }
+.auth-card h2 { font-family: 'Jua', sans-serif; font-size: 22px; font-weight: 400; color: var(--ink); text-align: center; margin-bottom: 26px; }
 /* 닫기 버튼은 폼(회원가입 안내) 아래로 넉넉히 떨어뜨림 */
 .auth-card > .auth-close { margin-top: 24px; }
 
@@ -686,7 +713,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   border-radius: 50%;
   border: none;
   background: rgba(255, 255, 255, 0.14);
-  color: #fff;
+  color: var(--white);
   font-size: 15px;
   font-weight: 400;
   cursor: pointer;
@@ -705,19 +732,19 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   width: 240px;
   display: none;
   background: rgba(255, 255, 255, 0.92);
-  border: 1px solid #ece8df;
+  border: 1px solid var(--line);
   border-radius: 16px;
   padding: 10px 12px;
-  color: #5a564e;
+  color: var(--text);
   font-family: 'Jua', sans-serif;
   font-size: 12px;
 }
 #topRecordsList { display: flex; flex-direction: column; gap: 1px; }
 .rec-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
-.rec-rank { width: 16px; color: #b6b0a4; text-align: right; font-family: 'Quicksand', sans-serif; font-weight: 600; }
-.rec-name { flex: 1; color: #5a564e; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rec-time { color: #3a3a3a; font-family: 'Quicksand', sans-serif; font-weight: 600; font-variant-numeric: tabular-nums; }
-.rec-empty { color: #b6b0a4; padding: 8px 0; text-align: center; }
+.rec-rank { width: 16px; color: var(--muted-2); text-align: right; font-family: 'Quicksand', sans-serif; font-weight: 600; }
+.rec-name { flex: 1; color: var(--text); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rec-time { color: var(--ink); font-family: 'Quicksand', sans-serif; font-weight: 600; font-variant-numeric: tabular-nums; }
+.rec-empty { color: var(--muted-2); padding: 8px 0; text-align: center; }
 
 /* 기록 HUD : 하단 가운데(미니맵/채팅과 같은 18px 여백). 인게임 전용이라 테두리 없이 배경+그림자만.
  *  [시간] [기록 시작] [취소] 를 가로로 묶는다 — 상태에 따라 각 요소가 나타났다 사라진다. */
@@ -738,9 +765,9 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   font-family: 'Jua', sans-serif;
   font-weight: 400;
   font-size: 14px;
-  color: #3a3a3a;
-  background: #ffffff;
-  border: 1px solid #ece8df;
+  color: var(--ink);
+  background: var(--white);
+  border: 1px solid var(--line);
   border-radius: 999px;
   box-shadow: 0 6px 18px rgba(58, 54, 46, 0.14);
   white-space: nowrap;
@@ -760,12 +787,12 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 }
 #attackBtn svg, #attackCancel svg { display: block; width: 18px; height: 18px; }
 /* 기록 시작 : 대기=타이머 / 기록 중(.recording)=다시(회전 화살표) */
-#attackBtn:hover { background: #f6f4ee; }
+#attackBtn:hover { background: var(--hover); }
 #attackBtn .ic-restart { display: none; }
 #attackBtn.recording .ic-timer { display: none; }
 #attackBtn.recording .ic-restart { display: block; }
 /* 취소 : 붉은 톤 X 아이콘, 기록 중일 때만 JS 가 표시 */
-#attackCancel { color: #c75b4a; }
+#attackCancel { color: var(--terracotta); }
 #attackCancel:hover { background: #f6ece9; }
 /* 시간 : 숫자용 Quicksand. 고정폭(mm:ss.cs) — Quicksand 는 tabular 숫자가 없어 자릿수마다
  *  폭이 달라지므로, 폭을 고정하고 가운데 정렬해 매 프레임 흔들리지 않게 한다. 내용 있을 때만. */
@@ -782,7 +809,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 #time:empty { display: none; }
 /* 다른 유저 표시 토글 : 기록 시작 버튼 오른쪽, 완전히 같은 알약 스타일 (#recordHud > * 상속) */
 #othersToggle { display: none; cursor: pointer; transition: background 0.15s ease; }
-#othersToggle:hover { background: #f6f4ee; }
+#othersToggle:hover { background: var(--hover); }
 /* 프로 종료 카운트다운 : 상단 가운데, 같은 알약 */
 #proTimer {
   position: absolute;
@@ -807,7 +834,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   outline: none;
   display: none;
   font-size: 14px;
-  color: #fff;
+  color: var(--white);
   font-variant-numeric: tabular-nums;
   letter-spacing: 1px;
   background: none;
@@ -901,7 +928,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   font-weight: 600;
   font-size: 17px;
   letter-spacing: -0.2px;
-  color: #3a3a3a;
+  color: var(--ink);
 }
 #lobOnline {
   position: absolute;
@@ -909,7 +936,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   top: 24px;
   font-family: 'Jua', sans-serif;
   font-size: 14px;
-  color: #b6b0a4;
+  color: var(--muted-2);
 }
 #lobHint {
   position: absolute;
@@ -922,7 +949,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   font-size: 17px;
   letter-spacing: 9px;
   text-indent: 9px; /* letter-spacing 으로 인한 중앙 쏠림 보정 */
-  color: #b6b0a4;
+  color: var(--muted-2);
 }
 /* 펄스는 안쪽 span 에 — 바깥(.lob-el)의 페이드인/아웃과 독립적으로 동작 */
 #lobHint span { display: inline-block; animation: lobPulse 2.6s ease-in-out infinite; }
@@ -942,12 +969,12 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   width: 52px;
   height: 52px;
   border-radius: 50%;
-  background: #ffffff;
-  border: 1px solid #ece8df;
+  background: var(--white);
+  border: 1px solid var(--line);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #3a3a3a;
+  color: var(--ink);
   cursor: pointer;
   padding: 0;
   transition: transform 0.15s ease;
@@ -979,8 +1006,8 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
 .map-panel {
   width: min(640px, 92vw);
   padding: 40px 34px 34px;
-  background: #ffffff;
-  border: 1px solid #ece8df;
+  background: var(--white);
+  border: 1px solid var(--line);
   border-radius: 24px;
   box-shadow: 0 24px 60px rgba(58, 54, 46, 0.14);
 }
@@ -988,13 +1015,13 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
   font-family: 'Jua', sans-serif;
   font-size: 22px;
   font-weight: 400;
-  color: #3a3a3a;
+  color: var(--ink);
   text-align: center;
 }
 #mapModalDesc {
   font-family: 'Jua', sans-serif;
   font-size: 13px;
-  color: #b6b0a4;
+  color: var(--muted-2);
   text-align: center;
   margin: 8px 0 24px;
 }
@@ -1006,7 +1033,7 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
 .map-card {
   position: relative;
   aspect-ratio: 16 / 9; /* 카드 비율 */
-  border: 1px solid #ece8df;
+  border: 1px solid var(--line);
   border-radius: 16px;
   background: #faf8f3;
   display: flex;
@@ -1020,8 +1047,8 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 .map-card:hover:not(:disabled) { border-color: #d8d2c4; background: #f3f0e8; }
-.map-card-name { font-size: 16px; color: #3a3a3a; }
-.map-card-desc { font-size: 11.5px; color: #b6b0a4; line-height: 1.4; text-align: center; }
+.map-card-name { font-size: 16px; color: var(--ink); }
+.map-card-desc { font-size: 11.5px; color: var(--muted-2); line-height: 1.4; text-align: center; }
 .map-card.soon { cursor: default; }
 .map-card.soon .map-card-name,
 .map-card.soon .map-card-desc { color: #d3cec2; }
@@ -1030,7 +1057,7 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
   top: 8px;
   right: 8px;
   font-size: 10px;
-  color: #b6b0a4;
+  color: var(--muted-2);
   background: #f1eee6;
   padding: 3px 8px;
   border-radius: 999px;
@@ -1044,9 +1071,9 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
   width: 50px;
   height: 50px;
   border-radius: 50%;
-  background: #ffffff;
-  border: 1px solid #ece8df;
-  color: #3a3a3a;
+  background: var(--white);
+  border: 1px solid var(--line);
+  color: var(--ink);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1058,7 +1085,7 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
 #shareRoomBtn svg { width: 20px; height: 20px; }
 #shareRoomBtn .icon-check { display: none; }
 #shareRoomBtn.copied .icon-link { display: none; }
-#shareRoomBtn.copied .icon-check { display: block; color: #57b868; }
+#shareRoomBtn.copied .icon-check { display: block; color: var(--green); }
 
 /* 계정 정보 팝업 — 대시보드와 동일한 오버레이/카드 스타일 재사용 */
 #accountModal {
@@ -1092,13 +1119,13 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
   gap: 12px;
   padding: 13px 16px;
   margin-bottom: 10px;
-  background: #f6f4ee;
+  background: var(--hover);
   border-radius: 14px;
 }
 .set-label {
   font-family: 'Jua', sans-serif;
   font-size: 14px;
-  color: #8a857b;
+  color: var(--muted);
   white-space: nowrap;
 }
 /* 슬라이더(볼륨/시야각) : 커스텀 렌더링 — 아웃라인 없음, 호버/클릭/포커스에도 색 변화 없음 */
@@ -1107,14 +1134,14 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
   -webkit-appearance: none;
   appearance: none;
   height: 6px;
-  background: #e5e0d4;
+  background: var(--track);
   border: none;
   border-radius: 999px;
   outline: none;
   cursor: pointer;
 }
 #setVolume:hover, #setVolume:focus, #setVolume:focus-visible, #setVolume:active,
-#setFov:hover, #setFov:focus, #setFov:focus-visible, #setFov:active { outline: none; background: #e5e0d4; }
+#setFov:hover, #setFov:focus, #setFov:focus-visible, #setFov:active { outline: none; background: var(--track); }
 #setVolume::-webkit-slider-thumb, #setFov::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
@@ -1122,19 +1149,19 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
   height: 18px;
   border: none;
   border-radius: 50%;
-  background: #e8604c;
+  background: var(--coral);
 }
 #setVolume::-webkit-slider-thumb:hover, #setVolume::-webkit-slider-thumb:active,
-#setFov::-webkit-slider-thumb:hover, #setFov::-webkit-slider-thumb:active { background: #e8604c; }
-#setVolume::-moz-range-track, #setFov::-moz-range-track { height: 6px; background: #e5e0d4; border: none; border-radius: 999px; }
-#setVolume::-moz-range-thumb, #setFov::-moz-range-thumb { width: 18px; height: 18px; border: none; border-radius: 50%; background: #e8604c; }
+#setFov::-webkit-slider-thumb:hover, #setFov::-webkit-slider-thumb:active { background: var(--coral); }
+#setVolume::-moz-range-track, #setFov::-moz-range-track { height: 6px; background: var(--track); border: none; border-radius: 999px; }
+#setVolume::-moz-range-thumb, #setFov::-moz-range-thumb { width: 18px; height: 18px; border: none; border-radius: 50%; background: var(--coral); }
 #setVolume::-moz-focus-outer, #setFov::-moz-focus-outer { border: 0; }
 #setVolumeVal, #setFovVal {
   width: 32px;
   text-align: right;
   font-family: 'Quicksand', sans-serif;
   font-weight: 600;
-  color: #3a3a3a;
+  color: var(--ink);
   font-variant-numeric: tabular-nums;
 }
 .set-seg { display: flex; gap: 4px; }
@@ -1143,14 +1170,14 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
   font-family: 'Jua', sans-serif;
   font-size: 12px;
   font-weight: 400;
-  color: #8a857b;
-  background: #ffffff;
-  border: 1px solid #ece8df;
+  color: var(--muted);
+  background: var(--white);
+  border: 1px solid var(--line);
   border-radius: 999px;
   cursor: pointer;
 }
 .set-seg button:hover { background: #f3f0e8; border-color: #d8d2c4; }
-.set-seg button.on { color: #ffffff; background: #3a3a3a; border-color: #3a3a3a; }
+.set-seg button.on { color: var(--white); background: var(--ink); border-color: var(--ink); }
 
 /* HUD 위치 설정 : 미니맵/채팅을 네 모서리 중 하나에 (인게임 전용, 모바일 가로 레이아웃 제외).
  *  같은 모서리를 고르면 채팅이 미니맵을 비켜 위/아래로 쌓인다. */
