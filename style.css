@@ -746,8 +746,13 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   white-space: nowrap;
   outline: none;
 }
-#attackBtn { display: none; cursor: pointer; transition: background 0.15s ease; }
+/* 기록 시작 : 아이콘만 (텍스트 없음). 대기=타이머 / 기록 중(.recording)=다시(회전 화살표) */
+#attackBtn { display: none; cursor: pointer; padding: 9px 12px; transition: background 0.15s ease; }
 #attackBtn:hover { background: #f6f4ee; }
+#attackBtn svg { display: block; width: 18px; height: 18px; }
+#attackBtn .ic-restart { display: none; }
+#attackBtn.recording .ic-timer { display: none; }
+#attackBtn.recording .ic-restart { display: block; }
 /* 취소 : 붉은 톤, 기록 중일 때만 JS 가 표시 */
 #attackCancel { display: none; cursor: pointer; color: #c75b4a; transition: background 0.15s ease; }
 #attackCancel:hover { background: #f6ece9; }
@@ -764,28 +769,8 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   pointer-events: none;
 }
 #time:empty { display: none; }
-/* 다른 유저 표시 토글 : 기록 HUD 위에 갭을 두고 (하단 가운데), 같은 알약 스타일 */
-#othersToggle {
-  position: absolute;
-  left: 50%;
-  bottom: 74px;
-  transform: translateX(-50%);
-  display: none;
-  padding: 8px 16px;
-  font-family: 'Jua', sans-serif;
-  font-weight: 400;
-  font-size: 13px;
-  color: #3a3a3a;
-  background: #ffffff;
-  border: 1px solid #ece8df;
-  border-radius: 999px;
-  box-shadow: 0 6px 18px rgba(58, 54, 46, 0.14);
-  white-space: nowrap;
-  cursor: pointer;
-  outline: none;
-  z-index: 22;
-  transition: background 0.15s ease;
-}
+/* 다른 유저 표시 토글 : 기록 시작 버튼 오른쪽, 완전히 같은 알약 스타일 (#recordHud > * 상속) */
+#othersToggle { display: none; cursor: pointer; transition: background 0.15s ease; }
 #othersToggle:hover { background: #f6f4ee; }
 /* 프로 종료 카운트다운 : 상단 가운데, 같은 알약 */
 #proTimer {

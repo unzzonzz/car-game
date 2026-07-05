@@ -75,6 +75,8 @@ const MAP_GROUPS = {
     desc: "다른 플레이어들과 경쟁하는 버라이어티 맵",
     maps: [
       { name: "서바이벌", desc: "머리로 들이받아 상대를 터뜨리기", mode: null },
+      { name: "술래잡기", desc: "술래를 피해 도망치는 추격전", mode: null },
+      { name: "스모", desc: "링 밖으로 상대를 밀어내는 몸싸움", mode: null },
     ],
   },
   racing: {
@@ -1257,8 +1259,6 @@ function resetAttack() {
   attack.hasRun = false;
   attack.ms = 0;
   attack.checkpoint = false;
-  const btn = document.getElementById("attackBtn");
-  if (btn) btn.textContent = "기록 시작";
 }
 
 /* 차를 출발선 바로 뒤에 세운다 (모든 트랙 공용) : 차 머리(비주얼 1.15배)가 출발선(6px)을
@@ -1281,8 +1281,6 @@ function startAttack() {
   attack.ms = 0;
   attack.checkpoint = false;
   attack.lastPhase = trackPhase(CAR.x, CAR.y, world.track);
-  const btn = document.getElementById("attackBtn");
-  if (btn) btn.textContent = "기록 시작됨";
 }
 
 // 기록 중 취소 : 계측을 멈추고 idle 로 되돌린다 (기록 저장 안 함, 결과 표시도 지움)
@@ -1291,8 +1289,6 @@ function cancelAttack() {
   attack.ms = 0;
   attack.checkpoint = false;
   attack.hasRun = false; // 결과 표시(#time)도 숨김
-  const btn = document.getElementById("attackBtn");
-  if (btn) btn.textContent = "기록 시작";
 }
 
 function updateAttack(car) {
@@ -1304,8 +1300,6 @@ function updateAttack(car) {
       attack.state = "running";
       attack.startTime = now;
       attack.checkpoint = false;
-      const btn = document.getElementById("attackBtn");
-      if (btn) btn.textContent = "다시 시작";
     }
     attack.lastPhase = ph;
     return;
@@ -1320,8 +1314,6 @@ function updateAttack(car) {
     attack.ms = finalMs;          // 결과 유지(초기화 안 함)
     sendTimeAttack(finalMs);
     blinkTime();                  // 우측 하단 숫자 3번 깜빡
-    const btn = document.getElementById("attackBtn");
-    if (btn) btn.textContent = "기록 시작";
   }
   attack.lastPhase = ph;
 }
@@ -1337,7 +1329,9 @@ function proGridPosition(slot) {
   const fwd = { x: Math.cos(s.angle), y: Math.sin(s.angle) };
   const right = { x: Math.cos(s.angle + Math.PI / 2), y: Math.sin(s.angle + Math.PI / 2) };
   const row = Math.floor(slot / 2), col = slot % 2;
-  const back = 70 + row * 75;
+  // 맨 앞 줄은 다른 코스와 동일하게 출발선 바로 뒤(차 머리가 라인을 안 넘게), 뒷줄은 75px 씩 뒤로
+  const front = 3 + 4 + (CAR.length * 1.15) / 2;
+  const back = front + row * 75;
   const lateral = (col === 0 ? -1 : 1) * 70;
   return {
     x: s.x - fwd.x * back + right.x * lateral,
@@ -1602,46 +1596,64 @@ function render(car) {
   updateProTimer(); // 상단 종료 카운트다운 (#proTimer DOM)
 }
 
-/* 프로 레이싱 HUD : 화면 가운데 F1 신호등(5초) + 상단 종료 카운트다운(10초) */
+/* 프로 레이싱 HUD (플랫 디자인) : 웜 화이트 카드 위 5개 플랫 신호등 → 소등 시 플랫 그린 "출발!" 알약.
+ *  글로우/검정 패널 없이 HUD 카드와 같은 결(흰 배경 + #ece8df 테두리 + 소프트 카드 섀도)로 통일. */
 function drawRaceHud() {
   if (gameMode !== "pro") return;
   const now = performance.now();
-  const cx = viewW / 2;
+  const cx = viewW / 2, cy = viewH * 0.30;
 
-  // 카운트다운 : 빨간 신호등 5개가 1초마다 하나씩 켜진다
+  // ---- 카운트다운 : 흰 카드 위 5개 라이트가 코랄로 하나씩 점등 (소등 = 출발) ----
   if (race.state === "countdown" && race.countdownEnd > now) {
     const remain = race.countdownEnd - now;
-    const lit = clamp(5 - Math.floor(remain / 1000), 0, 5); // 1초마다 하나씩 차올라 5개 → 소등=출발
-    if (lit > sfxCountLit) { sfxCountLit = lit; if (lit > 0) SFX.beep(); } // 새 불이 켜질 때마다 비프
-    const r = 26, gap = 70, y = viewH * 0.32;
-    const startX = cx - (gap * 4) / 2;
-    // 신호등 패널 배경
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    roundRect(startX - 40, y - r - 22, gap * 4 + 80, r * 2 + 44, 16);
+    const lit = clamp(5 - Math.floor(remain / 1000), 0, 5);
+    if (lit > sfxCountLit) { sfxCountLit = lit; if (lit > 0) SFX.beep(); } // 새 불 점등마다 비프
+    const r = 13, gap = 42, n = 5, padX = 24, padY = 18;
+    const rowW = gap * (n - 1) + r * 2;
+    const cardW = rowW + padX * 2, cardH = r * 2 + padY * 2;
+    const cardX = cx - cardW / 2, cardY = cy - cardH / 2;
+    // 카드 : 소프트 섀도 → 흰 면 → 얇은 테두리 (다른 HUD 카드와 동일한 결)
+    ctx.save();
+    ctx.shadowColor = "rgba(58,54,46,0.16)"; ctx.shadowBlur = 18; ctx.shadowOffsetY = 6;
+    ctx.fillStyle = "#ffffff";
+    roundRect(cardX, cardY, cardW, cardH, 18);
     ctx.fill();
-    for (let i = 0; i < 5; i++) {
-      const x = startX + i * gap;
+    ctx.restore();
+    ctx.strokeStyle = "#ece8df"; ctx.lineWidth = 1;
+    roundRect(cardX, cardY, cardW, cardH, 18);
+    ctx.stroke();
+    // 플랫 라이트 (점등=코랄 / 소등=웜 그레이, 글로우 없음)
+    for (let i = 0; i < n; i++) {
+      const x = cx - rowW / 2 + r + i * gap;
       ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      if (i < lit) {
-        ctx.fillStyle = "#ff2b2b";
-        ctx.shadowColor = "#ff2b2b"; ctx.shadowBlur = 24;
-      } else {
-        ctx.fillStyle = "#3a0d0d"; ctx.shadowBlur = 0;
-      }
+      ctx.arc(x, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = i < lit ? "#e8604c" : "#eeeae0";
       ctx.fill();
-      ctx.shadowBlur = 0;
     }
   }
 
-  // 신호 꺼짐 직후 GO!
+  // ---- 소등 직후 "출발!" : 플랫 그린 알약, 살짝 팝인 후 페이드아웃 ----
   if (race.goFlashUntil > now) {
-    ctx.fillStyle = "#3be066";
-    ctx.font = "400 90px Jua, sans-serif";
+    const t = clamp(1 - (race.goFlashUntil - now) / 1200, 0, 1); // 0→1 진행
+    const pop = t < 0.2 ? 1 - Math.pow(1 - t / 0.2, 3) : 1;      // 초반 ease-out 팝인
+    const scale = 0.72 + 0.28 * pop;
+    const alpha = t > 0.75 ? (1 - t) / 0.25 : 1;                 // 끝 25% 페이드아웃
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(cx, cy);
+    ctx.scale(scale, scale);
+    ctx.font = "400 40px Jua, sans-serif";
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.shadowColor = "rgba(0,0,0,0.6)"; ctx.shadowBlur = 18;
-    ctx.fillText("GO!", cx, viewH * 0.32);
-    ctx.shadowBlur = 0;
+    const label = "출발!";
+    const w = ctx.measureText(label).width + 60, h = 66;
+    ctx.shadowColor = "rgba(58,54,46,0.18)"; ctx.shadowBlur = 20; ctx.shadowOffsetY = 6;
+    ctx.fillStyle = "#57B868";
+    roundRect(-w / 2, -h / 2, w, h, h / 2);
+    ctx.fill();
+    ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(label, 0, 2);
+    ctx.restore();
   }
 }
 
@@ -1668,10 +1680,12 @@ function updateTimeHud() {
   } else {
     setTimeHud("");
   }
-  // 취소 버튼 : 타임어택 계측 중(armed/running)에만 보인다
+  // 타임어택 계측 중(armed/running) : 취소 버튼 표시 + 기록 버튼 아이콘을 "다시"로 전환
+  const recording = isTimeAttackMode() && attack.state !== "idle";
   const cancelBtn = document.getElementById("attackCancel");
-  if (cancelBtn) cancelBtn.style.display =
-    (isTimeAttackMode() && attack.state !== "idle") ? "block" : "none";
+  if (cancelBtn) cancelBtn.style.display = recording ? "block" : "none";
+  const attackBtn = document.getElementById("attackBtn");
+  if (attackBtn) attackBtn.classList.toggle("recording", recording);
 }
 
 // 바닥 : 모드에 따라 로비 / 오픈 맵(그리드) / 레이싱 트랙
@@ -1693,26 +1707,32 @@ function drawFlatTrackGround() {
   ctx.fillRect(0, 0, world.w, world.h);
   ctx.lineJoin = "round";
   ctx.lineCap = "butt";
-  // 가장자리 : 트랙보다 12px 넓은 흰 스트로크를 깔아 양쪽에 6px 씩 남긴다 (중앙선과 같은 굵기)
+  // 가장자리 : 모든 맵 공통 — 테스트 맵과 동일한 6px 흰 테두리 (중앙선과 같은 색·두께)
   ctx.strokeStyle = "#FFFFFF";
-  ctx.lineWidth = tw + 12;
+  ctx.lineWidth = tw + 12;            // 양쪽 6px 씩 흰 테두리
   ctx.stroke(p);
   // 아스팔트
   ctx.strokeStyle = "#6E7276";
   ctx.lineWidth = tw;
   ctx.stroke(p);
-  // 중앙 흰 실선
+  // 중앙 흰 실선 (6px)
   ctx.strokeStyle = "#FFFFFF";
   ctx.lineWidth = 6;
   ctx.stroke(p);
-  // 스타트 라인 (가장자리/중앙선과 같은 6px 흰 라인)
-  const s = t.start;
-  const nx = Math.cos(s.angle + Math.PI / 2), ny = Math.sin(s.angle + Math.PI / 2);
+  // 스타트 라인 : 중앙선과 같은 6px 흰 "일자" 선. 트랙에 수직으로 흰 테두리 바깥(halfWidth+6)까지 쭉 긋는다.
+  //  중심은 정점(centerline[0])이 아니라 "실제 스무딩 경로 위 점"으로 잡아야 양끝이 좌우 테두리에 정확히 닿는다
+  //  (스무딩 경로는 정점이 아니라 변의 중점을 지나므로 정점은 시각 트랙 중심에서 살짝 벗어나 있다).
+  const cl = t.centerline, n = cl.length;
+  const cx0 = 0.75 * cl[0].x + 0.125 * (cl[n - 1].x + cl[1].x); // 경로상 점 (정점 부근)
+  const cy0 = 0.75 * cl[0].y + 0.125 * (cl[n - 1].y + cl[1].y);
+  const tang = Math.atan2(cl[1].y - cl[n - 1].y, cl[1].x - cl[n - 1].x); // 그 지점의 접선
+  const nx = Math.cos(tang + Math.PI / 2), ny = Math.sin(tang + Math.PI / 2);
+  const half = t.halfWidth + 6;
   ctx.strokeStyle = "#FFFFFF";
   ctx.lineWidth = 6;
   ctx.beginPath();
-  ctx.moveTo(s.x - nx * t.halfWidth, s.y - ny * t.halfWidth);
-  ctx.lineTo(s.x + nx * t.halfWidth, s.y + ny * t.halfWidth);
+  ctx.moveTo(cx0 - nx * half, cy0 - ny * half);
+  ctx.lineTo(cx0 + nx * half, cy0 + ny * half);
   ctx.stroke();
 }
 

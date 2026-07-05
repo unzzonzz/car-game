@@ -74,14 +74,15 @@
     <div id="topRecordsList"></div>
   </div>
 
-  <!-- 다른 유저 표시 토글 (연습/타임어택) : 기록 HUD 위, 갭 두고 -->
-  <button id="othersToggle">다른 차 표시</button>
-
-  <!-- 기록 HUD (하단 가운데) : 시간 표시 + 기록 시작 버튼 + (기록 중) 취소 버튼 -->
+  <!-- 기록 HUD (하단 가운데) : 시간 + 기록 시작(대기=타이머 / 기록 중=다시) + (기록 중) 취소 + 다른 차 표시 -->
   <div id="recordHud">
     <span id="time"></span>
-    <button id="attackBtn">기록 시작</button>
+    <button id="attackBtn" aria-label="기록 시작">
+      <svg class="ic-timer" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="10" y1="2" x2="14" y2="2"/><line x1="12" y1="14" x2="12" y2="9"/><circle cx="12" cy="14" r="8"/></svg>
+      <svg class="ic-restart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+    </button>
     <button id="attackCancel">취소</button>
+    <button id="othersToggle">다른 차 표시</button>
   </div>
 
   <!-- 프로 레이싱 상단 종료 카운트다운 -->
