@@ -74,8 +74,7 @@ const MAP_GROUPS = {
     title: "아케이드",
     desc: "다른 플레이어들과 경쟁하는 버라이어티 맵",
     maps: [
-      { name: "술래잡기", desc: "술래를 피해 도망치는 추격전", mode: null },
-      { name: "스모", desc: "링 밖으로 상대를 밀어내는 몸싸움", mode: null },
+      { name: "서바이벌", desc: "머리로 들이받아 상대를 터뜨리기", mode: null },
     ],
   },
   racing: {
