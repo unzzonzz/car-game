@@ -951,22 +951,71 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   font-size: 14px;
   color: var(--muted-2);
 }
+/* 대기 화면 가운데 : "움직여서 시작" 텍스트 대신 입체 키캡 조작 안내 (WASD + 스페이스) */
 #lobHint {
   position: absolute;
   left: 0;
   right: 0;
   top: 50%;
   transform: translateY(-50%);
-  text-align: center;
-  font-family: 'Jua', sans-serif;
-  font-size: 17px;
-  letter-spacing: 9px;
-  text-indent: 9px; /* letter-spacing 으로 인한 중앙 쏠림 보정 */
-  color: var(--muted-2);
+  display: flex;
+  justify-content: center;
 }
-/* 펄스는 안쪽 span 에 — 바깥(.lob-el)의 페이드인/아웃과 독립적으로 동작 */
-#lobHint span { display: inline-block; animation: lobPulse 2.6s ease-in-out infinite; }
-@keyframes lobPulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+.kb {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;                 /* WASD 키 간 여백 (작게) */
+}
+/* 키캡 : 흰 면 + 1px 테두리 + 아래쪽 솔리드 섀도로 입체감. 라벨만 있음. */
+.keycap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 5px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 2px 0 var(--track); /* 아래쪽 입체감 (키캡) */
+  font-family: 'Quicksand', sans-serif;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0;
+  color: var(--ink);
+}
+/* 스페이스바 : 진짜 스페이스바처럼 가로로 길게, WASD 와는 한 줄로 나란히, 조금 더 띄운다 */
+.keycap-space {
+  margin-left: 4px;
+  width: 68px;
+}
+/* 스페이스바 기호 (⎵) : 테두리로 그린 바텀 브래킷 */
+.spc {
+  width: 22px;
+  height: 5px;
+  border: 2px solid var(--muted);
+  border-top: 0;
+  border-radius: 0 0 3px 3px;
+}
+/* W 키 눌리는 데모 애니메이션 : 배경이 아주 약간 진해지고, 아래 입체 섀도가 눌려 사라지며 내려앉는다 */
+.keycap-w { animation: wpress 1.6s ease-in-out infinite; }
+@keyframes wpress {
+  0%, 50% {
+    transform: translateY(0);
+    background: var(--white);
+    box-shadow: 0 2px 0 var(--track);
+  }
+  60%, 80% {
+    transform: translateY(2px);
+    background: var(--hover);
+    box-shadow: 0 0 0 var(--track), inset 0 1px 2px rgba(58, 58, 58, 0.12);
+  }
+  90%, 100% {
+    transform: translateY(0);
+    background: var(--white);
+    box-shadow: 0 2px 0 var(--track);
+  }
+}
 #lobBtns {
   position: absolute;
   left: 0;
@@ -1207,4 +1256,8 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
   body:not(.lobby).mm-tr.chat-tr #chat { top: calc(18px + var(--mm, 180px) + 8px); }
   body:not(.lobby).mm-bl.chat-bl #chat { bottom: calc(18px + var(--mm, 180px) + 8px); }
   body:not(.lobby).mm-br.chat-br #chat { bottom: calc(18px + var(--mm, 180px) + 8px); }
+  /* 좌상단에 미니맵/채팅이 있으면 속력을 그 요소 오른쪽으로 (겹침 방지).
+     둘 다 좌상단이면 위쪽(속력 높이)에 있는 미니맵 기준 — mm-tl 규칙이 뒤에 와서 우선. */
+  body:not(.lobby).chat-tl #speed { left: calc(18px + 240px + 14px); }
+  body:not(.lobby).mm-tl #speed { left: calc(18px + var(--mm, 180px) + 12px); }
 }
