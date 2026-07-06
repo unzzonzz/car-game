@@ -2571,6 +2571,7 @@ function connect() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   try {
     net.ws = new WebSocket(`${proto}//${location.host}`);
+    net.ws.binaryType = "arraybuffer"; // 바이너리 스냅샷을 ArrayBuffer 로 수신
   } catch {
     return; // file:// 등으로 열면 접속 실패 → 1인 모드
   }
@@ -2587,6 +2588,14 @@ function connect() {
   };
 
   net.ws.onmessage = (ev) => {
+    // 바이너리 프레임 = 고빈도 스냅샷 (JSON 파싱 없이 바로 디코딩)
+    if (ev.data instanceof ArrayBuffer) {
+      if (new Uint8Array(ev.data, 0, 1)[0] === MSG_SNAPSHOT) {
+        const dec = decodeSnapshot(ev.data);
+        applySnapshot(dec.st, dec.players);
+      }
+      return;
+    }
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
 
@@ -2730,55 +2739,7 @@ function connect() {
       race.state = "none";
       enterFreeRacingFromPro();
     } else if (msg.type === "snapshot") {
-      // 서버가 송신 시각(st)을 주면 그걸로 보간한다. 안 주면(재배포 전) 기존
-      // 지수 스무딩으로 폴백하므로 손해는 없다.
-      const hasSt = typeof msg.st === "number";
-      if (hasSt) {
-        net.hasServerTime = true;
-        if (msg.st > net.serverNewest) net.serverNewest = msg.st;
-      }
-      // 적응형 지연 : 스냅샷 도착 간격의 "최근 최대값"을 지터로 보고 목표 지연을 잡아
-      //  부드럽게 수렴시킨다 (매끈하면 ~40ms, 랙 심하면 최대 220ms 까지 자동 상승).
-      const nowA = performance.now();
-      if (lastSnapAt) {
-        const gap = nowA - lastSnapAt;
-        snapGapMax = Math.max(gap, snapGapMax * 0.95);          // 스파이크엔 즉시↑, 평소엔 천천히↓
-        const target = clamp(snapGapMax * 1.5 + 10, INTERP_BASE, INTERP_MAX);
-        interpDelay += (target - interpDelay) * 0.08;           // 급변 방지, 천천히 조절
-      }
-      lastSnapAt = nowA;
-      const st = hasSt ? msg.st : performance.now();
-      const seen = new Set();
-      for (const p of msg.players) {
-        if (p.id === net.id) continue; // 내 차는 로컬 물리로 그린다
-        seen.add(p.id);
-        let r = remotePlayers.get(p.id);
-        if (!r) {
-          // 처음 본 플레이어 → 즉시 그 자리에 스냅
-          r = { x: p.x, y: p.y, angle: p.angle, snap: true, buf: [] };
-          remotePlayers.set(p.id, r);
-        }
-        r.invuln = p.invuln;
-        r.name = p.name;
-        r.admin = p.admin;
-        r.color = p.color;    // 상대의 커스텀 차 색 (없으면 렌더에서 id 색 폴백)
-        r.drifting = p.drifting;
-        const vx = p.vx || 0, vy = p.vy || 0;
-        r.evx = vx; r.evy = vy; // 버퍼 고갈 시 외삽용 최신 속도(px/s)
-        // 스냅샷을 "서버 송신 시각(st) + 속도"와 함께 버퍼에 쌓는다 → 사이를 에르밋 스플라인 보간
-        if (p.teleport) {
-          r.buf = [{ t: st, x: p.x, y: p.y, angle: p.angle, vx, vy }]; // 텔레포트/부활 → 리셋 + 스냅
-          r.snap = true;
-        } else {
-          const last = r.buf[r.buf.length - 1];
-          if (!last || st > last.t) r.buf.push({ t: st, x: p.x, y: p.y, angle: p.angle, vx, vy });
-          while (r.buf.length > 30) r.buf.shift(); // 버퍼 상한(최근 ~0.5s @60Hz)
-        }
-      }
-      // 스냅샷에 없는 = 떠난 플레이어 제거
-      for (const id of remotePlayers.keys()) {
-        if (!seen.has(id)) remotePlayers.delete(id);
-      }
+      applySnapshot(msg.st, msg.players); // (구버전/폴백) JSON 스냅샷 — 신규 서버는 바이너리로 보냄
     }
   };
 
@@ -3141,6 +3102,91 @@ function setupChat() {
   });
 }
 
+/* =============================================================================
+ *  바이너리 프로토콜 (클라) — state 인코딩 송신 / snapshot 디코딩 수신 (빅엔디안). 나머지 JSON.
+ * ========================================================================== */
+const MSG_STATE = 1, MSG_SNAPSHOT = 2;
+const A2I = 32767 / Math.PI; // 각도 ↔ int16 스케일
+const clampI16 = (v) => (v < -32768 ? -32768 : v > 32767 ? 32767 : v);
+const normAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+function hexToRgb(hex) { if (typeof hex !== "string" || hex[0] !== "#" || hex.length < 7) return [232, 96, 76]; const n = parseInt(hex.slice(1, 7), 16); if (!Number.isFinite(n)) return [232, 96, 76]; return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+function rgbToHex(r, g, b) { return "#" + (((1 << 24) | ((r & 255) << 16) | ((g & 255) << 8) | (b & 255)).toString(16)).slice(1); }
+const _td = new TextDecoder();
+
+// state 인코딩 (car + 부가정보 → ArrayBuffer). extra:{drifting,teleport,collide,color,pro:{lap,prog,lapMs}|null}
+function encodeState(car, extra) {
+  const hasPro = !!extra.pro;
+  const buf = new ArrayBuffer(hasPro ? 22 : 15);
+  const dv = new DataView(buf); let o = 0;
+  dv.setUint8(o, MSG_STATE); o += 1;
+  dv.setInt16(o, clampI16(Math.round(car.x))); o += 2;
+  dv.setInt16(o, clampI16(Math.round(car.y))); o += 2;
+  dv.setInt16(o, Math.round(normAngle(car.angle) * A2I)); o += 2;
+  dv.setInt16(o, clampI16(Math.round(car.vx))); o += 2;
+  dv.setInt16(o, clampI16(Math.round(car.vy))); o += 2;
+  dv.setUint8(o, (extra.drifting ? 1 : 0) | (extra.teleport ? 2 : 0) | (extra.collide ? 4 : 0) | (hasPro ? 8 : 0)); o += 1;
+  const [r, g, b] = hexToRgb(extra.color); dv.setUint8(o, r); dv.setUint8(o + 1, g); dv.setUint8(o + 2, b); o += 3;
+  if (hasPro) {
+    dv.setUint8(o, clamp(extra.pro.lap, 0, 255)); o += 1;
+    dv.setUint16(o, clamp(Math.round(extra.pro.prog * 1000), 0, 65535)); o += 2;
+    dv.setUint32(o, clamp(Math.round(extra.pro.lapMs), 0, 4294967295)); o += 4;
+  }
+  return buf;
+}
+// snapshot 디코딩 (ArrayBuffer → {st, players})
+function decodeSnapshot(ab) {
+  const dv = new DataView(ab), u8 = new Uint8Array(ab); let o = 1;
+  const st = dv.getFloat64(o); o += 8;
+  const count = dv.getUint16(o); o += 2;
+  const players = [];
+  for (let i = 0; i < count; i++) {
+    const id = dv.getUint32(o); o += 4;
+    const x = dv.getInt16(o); o += 2;
+    const y = dv.getInt16(o); o += 2;
+    const angle = dv.getInt16(o) / A2I; o += 2;
+    const vx = dv.getInt16(o); o += 2;
+    const vy = dv.getInt16(o); o += 2;
+    const f = dv.getUint8(o); o += 1;
+    const r = dv.getUint8(o), g = dv.getUint8(o + 1), b = dv.getUint8(o + 2); o += 3;
+    const nl = dv.getUint8(o); o += 1;
+    let name = ""; if (nl > 0) { name = _td.decode(u8.subarray(o, o + nl)); o += nl; }
+    players.push({ id, x, y, angle, vx, vy, drifting: !!(f & 1), teleport: !!(f & 2), invuln: !!(f & 4), admin: !!(f & 8), color: rgbToHex(r, g, b), name });
+  }
+  return { st, players };
+}
+
+// 스냅샷 적용 (JSON/바이너리 공통) — 적응형 지연 + 원격 버퍼(에르밋 보간용) 갱신
+function applySnapshot(st, players) {
+  if (typeof st !== "number") return;
+  net.hasServerTime = true;
+  if (st > net.serverNewest) net.serverNewest = st;
+  const nowA = performance.now();
+  if (lastSnapAt) {
+    const gap = nowA - lastSnapAt;
+    snapGapMax = Math.max(gap, snapGapMax * 0.95);
+    const target = clamp(snapGapMax * 1.5 + 10, INTERP_BASE, INTERP_MAX);
+    interpDelay += (target - interpDelay) * 0.08;
+  }
+  lastSnapAt = nowA;
+  const seen = new Set();
+  for (const p of players) {
+    if (p.id === net.id) continue; // 내 차는 로컬 물리로 그린다
+    seen.add(p.id);
+    let r = remotePlayers.get(p.id);
+    if (!r) { r = { x: p.x, y: p.y, angle: p.angle, snap: true, buf: [] }; remotePlayers.set(p.id, r); }
+    r.invuln = p.invuln; r.name = p.name; r.admin = p.admin; r.color = p.color; r.drifting = p.drifting;
+    const vx = p.vx || 0, vy = p.vy || 0;
+    r.evx = vx; r.evy = vy;
+    if (p.teleport) { r.buf = [{ t: st, x: p.x, y: p.y, angle: p.angle, vx, vy }]; r.snap = true; }
+    else {
+      const last = r.buf[r.buf.length - 1];
+      if (!last || st > last.t) r.buf.push({ t: st, x: p.x, y: p.y, angle: p.angle, vx, vy });
+      while (r.buf.length > 30) r.buf.shift();
+    }
+  }
+  for (const id of remotePlayers.keys()) { if (!seen.has(id)) remotePlayers.delete(id); }
+}
+
 // 내 차 상태를 서버에 전송 — 모니터 주사율대로(매 프레임). 안전 상한 ~165Hz(6ms)만 둔다.
 //  → 서버가 항상 최신 위치를 갖고, 남들 화면에선 수신측 보간이 각자 모니터 Hz로 렌더한다.
 function netSend(car, now) {
@@ -3149,24 +3195,19 @@ function netSend(car, now) {
   if (now - net.lastSend < 6) return; // 매 프레임 전송(60·120·144Hz 그대로), 6ms 미만만 차단
   net.lastSend = now;
 
-  const msg = {
-    type: "state",
-    x: Math.round(car.x), y: Math.round(car.y),
-    angle: +car.angle.toFixed(3),
-    drifting: car.drifting, // 드리프트 중일 때만 → 남들 화면에도 그때만 자국
-    color: myColor(),       // 커스텀 차 색 → 서버가 스냅샷으로 릴레이
-    vx: Math.round(car.vx), vy: Math.round(car.vy), // 서버 권위 충돌 임펄스 계산용
-    collide: COLLISION_ENABLED && othersVisible(), // 충돌 대상 여부(다른 차 보일 때만 밀치기)
+  const extra = {
+    drifting: car.drifting,                         // 드리프트 중일 때만 → 남들 화면에도 그때만 자국
+    color: myColor(),                               // 커스텀 차 색 → 서버가 스냅샷으로 릴레이
+    collide: COLLISION_ENABLED && othersVisible(),  // 충돌 대상 여부(다른 차 보일 때만 밀치기)
+    teleport: false, pro: null,
   };
   // 막 텔레포트(벽/플레이어 리스폰)했으면 서버·남들에게 스냅하라고 알린다
-  if (net.pendingTeleport) { msg.teleport = true; net.pendingTeleport = false; }
+  if (net.pendingTeleport) { extra.teleport = true; net.pendingTeleport = false; }
   // 프로 레이싱 중이면 바퀴수/진행도/현재랩시간 보고 (서버가 순위·완주 판정)
   if (gameMode === "pro" && race.state === "racing") {
-    msg.lap = race.lap;
-    msg.prog = +race.prog.toFixed(3);
-    msg.lapMs = Math.round(race.lapMark); // 순위판: 랩 넘긴 순간의 기록(라이브 아님)
+    extra.pro = { lap: race.lap, prog: race.prog, lapMs: Math.round(race.lapMark) };
   }
-  net.ws.send(JSON.stringify(msg));
+  net.ws.send(encodeState(car, extra));
 }
 
 // 렌더를 서버 시각보다 이만큼 과거로 늦춰(재생 시계), 그 사이 도착한 스냅샷을

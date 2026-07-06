@@ -306,6 +306,105 @@ const server = http.createServer((req, res) => {
   });
 });
 
+/* =============================================================================
+ *  바이너리 프로토콜 — 고빈도 메시지(클라→서버 state / 서버→클라 snapshot)만 바이너리(빅엔디안).
+ *   나머지(chat/auth/room/race 등)는 JSON. state≈22B(JSON ~110), snapshot≈27B/명(JSON ~140) → ~5배↓.
+ * ========================================================================== */
+const MSG_STATE = 1, MSG_SNAPSHOT = 2;
+const A2I = 32767 / Math.PI; // 각도 ↔ int16 스케일
+const clampI16 = (v) => (v < -32768 ? -32768 : v > 32767 ? 32767 : v);
+const normAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+function hexToRgb(hex) { if (typeof hex !== "string" || hex[0] !== "#" || hex.length < 7) return [232, 96, 76]; const n = parseInt(hex.slice(1, 7), 16); if (!Number.isFinite(n)) return [232, 96, 76]; return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+function rgbToHex(r, g, b) { return "#" + (((1 << 24) | ((r & 255) << 16) | ((g & 255) << 8) | (b & 255)).toString(16)).slice(1); }
+function sendBin(p, buf) { if (p.ws.readyState === p.ws.OPEN) p.ws.send(buf); }
+
+// 클라 → 서버 state 디코딩 (Buffer → 필드 객체)
+function decodeState(buf) {
+  let o = 1;
+  const x = buf.readInt16BE(o); o += 2;
+  const y = buf.readInt16BE(o); o += 2;
+  const angle = buf.readInt16BE(o) / A2I; o += 2;
+  const vx = buf.readInt16BE(o); o += 2;
+  const vy = buf.readInt16BE(o); o += 2;
+  const f = buf.readUInt8(o); o += 1;
+  const r = buf.readUInt8(o), g = buf.readUInt8(o + 1), b = buf.readUInt8(o + 2); o += 3;
+  const s = { x, y, angle, vx, vy, drifting: !!(f & 1), teleport: !!(f & 2), collide: !!(f & 4), color: rgbToHex(r, g, b) };
+  if (f & 8) { s.lap = buf.readUInt8(o); o += 1; s.prog = buf.readUInt16BE(o) / 1000; o += 2; s.lapMs = buf.readUInt32BE(o); o += 4; }
+  return s;
+}
+// 서버 → 클라 snapshot 인코딩 (entries → Buffer). per player 19B + 이름 UTF-8.
+function encodeSnapshot(st, entries) {
+  const nbs = entries.map((e) => Buffer.from(e.name || "", "utf8").subarray(0, 60));
+  let size = 11; for (const nb of nbs) size += 19 + nb.length;
+  const buf = Buffer.allocUnsafe(size); let o = 0;
+  buf.writeUInt8(MSG_SNAPSHOT, o); o += 1;
+  buf.writeDoubleBE(st, o); o += 8;
+  buf.writeUInt16BE(entries.length, o); o += 2;
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i], nb = nbs[i];
+    buf.writeUInt32BE(e.id >>> 0, o); o += 4;
+    buf.writeInt16BE(clampI16(Math.round(e.x)), o); o += 2;
+    buf.writeInt16BE(clampI16(Math.round(e.y)), o); o += 2;
+    buf.writeInt16BE(Math.round(normAngle(e.angle) * A2I), o); o += 2;
+    buf.writeInt16BE(clampI16(Math.round(e.vx || 0)), o); o += 2;
+    buf.writeInt16BE(clampI16(Math.round(e.vy || 0)), o); o += 2;
+    buf.writeUInt8((e.drifting ? 1 : 0) | (e.teleport ? 2 : 0) | (e.invuln ? 4 : 0) | (e.admin ? 8 : 0), o); o += 1;
+    const [r, g, b] = hexToRgb(e.color); buf.writeUInt8(r, o); buf.writeUInt8(g, o + 1); buf.writeUInt8(b, o + 2); o += 3;
+    buf.writeUInt8(nb.length, o); o += 1; nb.copy(buf, o); o += nb.length;
+  }
+  return buf;
+}
+
+// state 처리 (JSON/바이너리 공통) — 이동 정합성 감시 + 상태 저장 + 프로 랩 게이팅.
+function applyState(p, m) {
+  if (!p.active) return;
+  if (Date.now() < (p.graceUntil || 0)) return;
+  const x = Number(m.x), y = Number(m.y), ang = Number(m.angle);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(ang)) return; // NaN 주입 차단
+
+  // --- 이동 정합성 감시 : 순간이동/초고속이면 플래그(랩·기록 인정 보류) ---
+  const now = Date.now();
+  if (p.lastPos) {
+    const seg = Math.hypot(x - p.lastPos.x, y - p.lastPos.y);
+    if (seg > JUMP_CAP) flagCheat(p, now, "jump"); // 단발 순간이동
+    if (p.spdT0 === 0) p.spdT0 = p.lastPos.t;
+    p.spdAcc += seg;
+    const winMs = now - p.spdT0;
+    if (winMs >= SPEED_WINDOW_MS) {              // 창이 차면 평균속도 평가
+      if (p.spdAcc / (winMs / 1000) > SPEED_LIMIT) flagCheat(p, now, "speed");
+      p.spdAcc = 0; p.spdT0 = now;
+    }
+  }
+  p.lastPos = { x, y, t: now };
+  const flagged = now < (p.flagUntil || 0);
+
+  // 커스텀 차 색 (형식 검증 후 저장 → 스냅샷으로 릴레이)
+  if (typeof m.color === "string" && /^#[0-9a-fA-F]{6}$/.test(m.color)) p.color = m.color;
+  // 속도(vx,vy) — 서버 권위 충돌 임펄스 계산용. 최고속 초과분은 클램프(과충격 치트 방어).
+  let vx = Number(m.vx) || 0, vy = Number(m.vy) || 0;
+  const sp = Math.hypot(vx, vy);
+  if (sp > MAX_LEGIT_PXS) { const k = MAX_LEGIT_PXS / sp; vx *= k; vy *= k; }
+  p.state = { x, y, angle: ang, drifting: !!m.drifting, teleport: !!m.teleport, vx, vy };
+  p.collide = !!m.collide && !flagged; // 충돌 대상 여부(플래그된 차는 충돌 제외)
+
+  // 프로 레이싱 : 랩/완주는 서버가 게이팅 (클라가 보낸 lap 을 그대로 믿지 않는다)
+  if (p.mode === "pro" && p.roomId != null && typeof m.lap === "number") {
+    const room = rooms.get(p.roomId);
+    if (room && room.state === "racing") {
+      const claimed = Math.floor(m.lap);
+      if (claimed >= p.lap + 1 && !flagged && (now - (p.lastLapT || 0)) >= MIN_LAP_MS) { p.lap += 1; p.lastLapT = now; }
+      if (typeof m.prog === "number") p.prog = Math.max(p.lap, Math.min(p.lap + 1, m.prog));
+      if (typeof m.lapMs === "number" && m.lapMs >= 0) p.lapMs = m.lapMs;
+      if (!p.finished && p.lap >= room.laps) {
+        p.finished = true; p.finishTime = Date.now();
+        const cand = Date.now() + END_TIMER_MS;
+        room.raceEndAt = room.raceEndAt > 0 ? Math.min(room.raceEndAt, cand) : cand;
+        broadcastRoom(p.roomId);
+      }
+    }
+  }
+}
+
 // --- WebSocket 서버 ---------------------------------------------------------
 const wss = new WebSocketServer({ server });
 
@@ -331,7 +430,13 @@ wss.on("connection", (ws) => {
   if (chatHistory.length) ws.send(JSON.stringify({ type: "chatHistory", messages: chatHistory }));
   console.log(`[+] player ${id} connected (total ${players.size})`);
 
-  ws.on("message", (raw) => {
+  ws.on("message", (raw, isBinary) => {
+    // 바이너리 프레임 = 고빈도 state (JSON 파싱 없이 바로 디코딩)
+    if (isBinary) {
+      const pb = players.get(id);
+      if (pb && raw.length && raw[0] === MSG_STATE) applyState(pb, decodeState(raw));
+      return;
+    }
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
 
@@ -510,57 +615,7 @@ wss.on("connection", (ws) => {
       }
 
     } else if (msg.type === "state") {
-      if (!p.active) return;
-      if (Date.now() < (p.graceUntil || 0)) return;
-      const x = Number(msg.x), y = Number(msg.y), ang = Number(msg.angle);
-      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(ang)) return; // NaN 주입 차단
-
-      // --- 이동 정합성 감시 : 순간이동/초고속이면 플래그(랩·기록 인정 보류) ---
-      const now = Date.now();
-      if (p.lastPos) {
-        const seg = Math.hypot(x - p.lastPos.x, y - p.lastPos.y);
-        if (seg > JUMP_CAP) flagCheat(p, now, "jump"); // 단발 순간이동
-        if (p.spdT0 === 0) p.spdT0 = p.lastPos.t;
-        p.spdAcc += seg;
-        const winMs = now - p.spdT0;
-        if (winMs >= SPEED_WINDOW_MS) {              // 창이 차면 평균속도 평가
-          if (p.spdAcc / (winMs / 1000) > SPEED_LIMIT) flagCheat(p, now, "speed");
-          p.spdAcc = 0; p.spdT0 = now;
-        }
-      }
-      p.lastPos = { x, y, t: now };
-      const flagged = now < (p.flagUntil || 0);
-
-      // 커스텀 차 색 (형식 검증 후 저장 → 스냅샷으로 릴레이)
-      if (typeof msg.color === "string" && /^#[0-9a-fA-F]{6}$/.test(msg.color)) p.color = msg.color;
-      // 속도(vx,vy) — 서버 권위 충돌 임펄스 계산용. 최고속 초과분은 클램프(과충격 치트 방어).
-      let vx = Number(msg.vx) || 0, vy = Number(msg.vy) || 0;
-      const sp = Math.hypot(vx, vy);
-      if (sp > MAX_LEGIT_PXS) { const k = MAX_LEGIT_PXS / sp; vx *= k; vy *= k; }
-      p.state = { x, y, angle: ang, drifting: !!msg.drifting, teleport: !!msg.teleport, vx, vy };
-      p.collide = !!msg.collide && !flagged; // 충돌 대상 여부(플래그된 차는 충돌 제외)
-
-      // 프로 레이싱 : 랩/완주는 서버가 게이팅 (클라가 보낸 lap 을 그대로 믿지 않는다)
-      if (p.mode === "pro" && p.roomId != null && typeof msg.lap === "number") {
-        const room = rooms.get(p.roomId);
-        if (room && room.state === "racing") {
-          const claimed = Math.floor(msg.lap);
-          // 다음 바퀴로 넘어갈 때만, 그것도 "미플래그 + 최소 랩 시간 경과" 일 때 1씩만 인정
-          if (claimed >= p.lap + 1 && !flagged && (now - (p.lastLapT || 0)) >= MIN_LAP_MS) {
-            p.lap += 1;
-            p.lastLapT = now;
-          }
-          // prog 는 현재 랩 범위로 클램프(999 같은 조작으로 선두 위장 방지)
-          if (typeof msg.prog === "number") p.prog = Math.max(p.lap, Math.min(p.lap + 1, msg.prog));
-          if (typeof msg.lapMs === "number" && msg.lapMs >= 0) p.lapMs = msg.lapMs;
-          if (!p.finished && p.lap >= room.laps) {
-            p.finished = true; p.finishTime = Date.now();
-            const cand = Date.now() + END_TIMER_MS;
-            room.raceEndAt = room.raceEndAt > 0 ? Math.min(room.raceEndAt, cand) : cand;
-            broadcastRoom(p.roomId);
-          }
-        }
-      }
+      applyState(p, msg); // (구버전/폴백) JSON state — 신규 클라는 바이너리로 보냄
     }
   });
 
@@ -995,7 +1050,7 @@ setInterval(() => {
     let arr;
     if (p.mode === "pro") arr = (p.roomId != null) ? (byRoom.get(p.roomId) || []) : [];
     else arr = byMode[p.mode];
-    send(p, { type: "snapshot", st: now, players: arr });
+    sendBin(p, encodeSnapshot(now, arr)); // 바이너리 스냅샷 (JSON 대비 ~5배↓)
   }
 
   for (const [, p] of players) {
