@@ -3299,6 +3299,14 @@ function toMenu() {
   enterLobby();
 }
 
+/* 방향키 안내(키캡) : 새로고침 후 "첫" 로비 대기화면에서만 보인다.
+   한 번 움직여서 오버레이를 걷으면 그 뒤로는 ESC/자동복귀로 떠도 숨긴다. */
+let lobHintFirst = true;
+function applyLobHint() {
+  const el = document.getElementById("lobHint");
+  if (el) el.style.display = lobHintFirst ? "" : "none";
+}
+
 /* 로비 진입 : 웜 화이트 월드에 차 스폰, 대기 오버레이 표시. 서버엔 미입장(로컬 전용). */
 function enterLobby() {
   sendLeave();
@@ -3327,6 +3335,7 @@ function enterLobby() {
   const ui = document.getElementById("lobbyUI");
   ui.style.display = "block";
   ui.classList.remove("s-hidden");
+  applyLobHint(); // 첫 진입에만 방향키 키캡 표시
   document.body.classList.add("lobby"); // 채팅 등 DOM 라이트 스킨
 
   // 로비에서 안 쓰는 HUD 숨김
@@ -3350,6 +3359,7 @@ function lobbyIdle() {
   CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0; // 메뉴 보는 동안 차 정지
   const ui = document.getElementById("lobbyUI");
   ui.classList.remove("s-hidden");
+  applyLobHint(); // ESC/자동복귀로 다시 뜰 땐 방향키 키캡 숨김 (flag=false)
   camera.zoomT = zoomFor(1.15); // 다시 줌인 (시야각 배율)
   camera.ayT = 0.36;   // 차를 위쪽(36%)으로
 }
@@ -3392,6 +3402,7 @@ function updateLobby(dt) {
     // 첫 입력 → UI 걷힘 + 줌아웃 + 차 중앙으로
     if (inputHeld || speed > 30) {
       lobby.ui = "hidden";
+      lobHintFirst = false; // 첫 오버레이를 걷은 순간부터 방향키 안내는 다신 안 뜬다
       ui.classList.add("s-hidden");
       camera.zoomT = zoomFor(0.95); // 주행 시 줌아웃 (원래 0.95 × 시야각)
       camera.ayT = 0.5;    // 차 중앙
