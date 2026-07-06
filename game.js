@@ -1263,10 +1263,17 @@ function obbMTV(a, b) {
  *  자동차 실제 사각형(OBB)으로 겹치면 상대 밖으로 밀어내 시각적 파고듦을 없앤다.
  *  ※ 속도/운동량 변화(밀치기)는 "서버 권위" 로 처리한다 → 서버가 두 차의 실제 속도로
  *    2체 충돌 임펄스를 계산해 양쪽에 "bump" 로 통지(handleNet 의 bump 처리). */
-const CAR_HIT_INSET = 1;     // 히트박스를 차체보다 살짝 작게(px) — 시각 겹침 방지 여유
+// 히트박스 = "시각 차체" 크기와 정확히 일치시킨다.
+//  drawCar 는 s=((L+10)/232)*1.15 로 그려 실제 화면상 차체는 반길이 116·s, 반폭 55.5·s(px).
+//  → 반길이=(L+10)*0.575, 반폭=(L+10)*0.2751 (L=38 이면 27.6 × 13.2 = 55×26px)
+//  예전엔 히트박스가 38×18 로 시각(55×26)보다 작아 눈에 띄게 겹쳐 보였다 → 이제 일치.
+function carHalfExtents(car) {
+  const k = (car.length || CAR.length) + 10;
+  return { hl: k * 0.575, hw: k * 0.2751 };
+}
 function updatePlayerCollision(car) {
   if (gameMode === "lobby" || !othersVisible()) return; // 로비/고스트 숨김 시 충돌 없음
-  const hl = car.length / 2 - CAR_HIT_INSET, hw = car.width / 2 - CAR_HIT_INSET;
+  const { hl, hw } = carHalfExtents(car);
   const me = { x: car.x, y: car.y, ang: car.angle, hl, hw };
   for (const [, r] of remotePlayers) {
     const mtv = obbMTV(me, { x: r.x, y: r.y, ang: r.angle, hl, hw }); // 같은 차종 → 같은 치수
@@ -2702,24 +2709,18 @@ function connect() {
         seen.add(p.id);
         let r = remotePlayers.get(p.id);
         if (!r) {
-          // 처음 본 플레이어
-          r = { buffer: [], x: p.x, y: p.y, angle: p.angle, drifting: false };
+          // 처음 본 플레이어 → 즉시 그 자리에 스냅
+          r = { x: p.x, y: p.y, angle: p.angle, snap: true };
           remotePlayers.set(p.id, r);
         }
         r.invuln = p.invuln;
         r.name = p.name;
         r.admin = p.admin;
-        r.color = p.color; // 상대의 커스텀 차 색 (없으면 렌더에서 id 색 폴백)
-
-        // 스냅샷을 "서버 송신 시각(st)"과 함께 버퍼에 쌓는다 (엔티티 보간용)
-        if (p.teleport) {
-          // 텔레포트(부활 등) → 버퍼 리셋 + 즉시 스냅 (보간으로 맵 가로지르는 것 방지)
-          r.buffer = [{ t: st, x: p.x, y: p.y, angle: p.angle, drifting: p.drifting }];
-          r.x = p.x; r.y = p.y; r.angle = p.angle; r.drifting = p.drifting;
-        } else {
-          r.buffer.push({ t: st, x: p.x, y: p.y, angle: p.angle, drifting: p.drifting });
-          if (r.buffer.length > 40) r.buffer.shift(); // 버퍼 상한
-        }
+        r.color = p.color;    // 상대의 커스텀 차 색 (없으면 렌더에서 id 색 폴백)
+        r.drifting = p.drifting;
+        // 권위 타깃(위치+속도+각도+서버시각) 갱신 → 데드레커닝으로 이 사이를 매끈하게 채운다
+        r.tx = p.x; r.ty = p.y; r.tvx = p.vx || 0; r.tvy = p.vy || 0; r.ta = p.angle; r.tst = st;
+        if (p.teleport) r.snap = true; // 텔레포트/부활 → 즉시 스냅(보간으로 맵 가로지르는 것 방지)
       }
       // 스냅샷에 없는 = 떠난 플레이어 제거
       for (const id of remotePlayers.keys()) {
@@ -3124,84 +3125,59 @@ let lastSnapAt = 0;       // 직전 스냅샷 도착 시각(클라 시계)
 let snapGapMax = 33;      // 최근 최대 도착 간격(감쇠) — 지터 추정치
 const MAX_EXTRAP = 180;   // ms : 패킷이 늦으면 마지막 속도로 이 시간까지 외삽(지터 흡수 → 안 끊김)
 
-// 원격 차량 : 서버 타임스탬프 기반 엔티티 보간 (Source 엔진식).
-//  서버가 st 를 주지 않으면(재배포 전) 기존 지수 스무딩으로 폴백한다.
+// 원격 차량 : 데드레커닝(속도 외삽) + 지수 오차보정.
+//  핵심 — 매 프레임 "권위 타깃을 그 차의 속도로 재생시각까지 투영" 한 목표로 부드럽게 수렴한다.
+//  스냅샷이 늦거나 빠져도 속도로 계속 나아가므로 "절대 멈추거나 끊기지 않는다". 새 스냅샷이
+//  오면 목표만 살짝 바뀌고 차는 이징으로 스르륵 따라가 스냅(튐)이 안 보인다.
+const SMOOTH_K = 16; // 오차 수렴 속도(클수록 빨리 따라붙고, 작을수록 더 부드럽지만 지연↑)
 function updateRemotes(dt) {
-  if (!net.hasServerTime) { updateRemotesFallback(); return; }
-  if (net.serverNewest === 0) return; // 아직 스냅샷 없음
-
-  // 재생 시계 : 실시간으로 전진시키되(등속 보장), (서버최신 - interpDelay)로 부드럽게 수렴
+  if (net.serverNewest === 0 && !net.hasServerTime) { return; }
+  // 재생 시계 : 실시간으로 계속 전진(끊겨도 진행) + (서버최신 - interpDelay)로 부드럽게 수렴
   const target = net.serverNewest - interpDelay;
   if (net.playT === null) net.playT = target;
   else {
     net.playT += dt * 1000;
-    net.playT += (target - net.playT) * clamp(dt * 2.5, 0, 1); // 드리프트 보정
-    // 데이터보다 조금 앞서는 것은 허용(짧은 외삽으로 끊김 방지) — 단 상한을 둔다
+    net.playT += (target - net.playT) * clamp(dt * 2.5, 0, 1);
     if (net.playT > net.serverNewest + MAX_EXTRAP) net.playT = net.serverNewest + MAX_EXTRAP;
     if (net.serverNewest - net.playT > interpDelay + 500) net.playT = target; // 너무 뒤처지면 리싱크
   }
   const renderT = net.playT;
+  const a = 1 - Math.exp(-SMOOTH_K * dt); // 지수 이징 계수(프레임레이트 독립)
 
   for (const [id, r] of remotePlayers) {
-    const buf = r.buffer;
-
-    // 이미 지나간(소비된) 오래된 샘플 정리 — renderT 이전 샘플은 1개만 남긴다
-    while (buf.length >= 2 && buf[1].t <= renderT) buf.shift();
-
-    if (buf.length === 0) continue;
-
-    if (buf.length >= 2 && renderT >= buf[0].t) {
-      // buf[0].t <= renderT < buf[1].t 사이를 선형 보간
-      const a = buf[0], b = buf[1];
-      const span = b.t - a.t;
-      const t = clamp(span > 0 ? (renderT - a.t) / span : 1, 0, 1);
-      r.x = lerp(a.x, b.x, t);
-      r.y = lerp(a.y, b.y, t);
-      let d = b.angle - a.angle;
+    if (r.tst == null) continue;
+    // 타깃(권위 상태)을 그 차의 속도로 재생시각까지 투영 → 목표 위치(끊김 없이 이어짐)
+    let ageS = (renderT - r.tst) / 1000;
+    ageS = clamp(ageS, -0.3, MAX_EXTRAP / 1000); // 과도 외삽 방지(방향전환 오버슛 억제)
+    const px = r.tx + r.tvx * ageS;
+    const py = r.ty + r.tvy * ageS;
+    if (r.snap) {                    // 첫 등장/텔레포트 → 즉시 스냅
+      r.x = px; r.y = py; r.angle = r.ta; r.snap = false;
+    } else {
+      r.x += (px - r.x) * a;         // 부드럽게 수렴(스냅/튐 없음)
+      r.y += (py - r.y) * a;
+      let d = r.ta - r.angle;
       while (d > Math.PI) d -= Math.PI * 2;
       while (d < -Math.PI) d += Math.PI * 2;
-      r.angle = a.angle + d * t;
-      r.drifting = a.drifting; // 진행 중인 구간의 드리프트 상태
-      // 이 구간의 속도를 저장 → 버퍼가 마르면(패킷 손실) 이 속도로 짧게 외삽
-      if (span > 0) { r.vx = (b.x - a.x) / span; r.vy = (b.y - a.y) / span; r.va = d / span; r.vOk = true; }
-    } else if (buf.length >= 2) {
-      // renderT 가 가장 이른 샘플보다도 과거(막 입장 등) → 첫 샘플 그대로
-      const s = buf[0];
-      r.x = s.x; r.y = s.y; r.angle = s.angle; r.drifting = s.drifting;
-    } else {
-      // 샘플이 1개뿐(버퍼 고갈/패킷 손실) → 마지막 속도로 짧게 외삽(최대 MAX_EXTRAP), 그 뒤 정지
-      const s = buf[0];
-      const ahead = clamp(renderT - s.t, 0, MAX_EXTRAP);
-      if (r.vOk && ahead > 0) {
-        r.x = s.x + r.vx * ahead;
-        r.y = s.y + r.vy * ahead;
-        r.angle = s.angle + r.va * ahead;
-      } else {
-        r.x = s.x; r.y = s.y; r.angle = s.angle;
-      }
-      r.drifting = s.drifting;
+      r.angle += d * a;
     }
-
     // 드리프트 중인 원격 차량의 타이어 자국
     if (r.drifting) pushSkid(r, r.x, r.y, r.angle, SKID_COLOR);
     else r._skid = null;
   }
 }
 
-// 폴백(서버가 st 미제공 = 재배포 전) : 기존 지수 스무딩. 최신 스냅샷으로 수렴.
+// (구버전 서버 폴백은 데드레커닝으로 통합 — st/속도 없으면 tvx/tvy=0 이라 자연히 최근 위치로 수렴)
 function updateRemotesFallback() {
   for (const [id, r] of remotePlayers) {
-    const buf = r.buffer;
-    if (!buf.length) continue;
-    const tgt = buf[buf.length - 1]; // 가장 최근 스냅샷
-    r.x = lerp(r.x, tgt.x, 0.25);
-    r.y = lerp(r.y, tgt.y, 0.25);
-    let d = tgt.angle - r.angle;
+    if (r.tx == null) continue;
+    r.x = lerp(r.x, r.tx, 0.25);
+    r.y = lerp(r.y, r.ty, 0.25);
+    let d = r.ta - r.angle;
     while (d > Math.PI) d -= Math.PI * 2;
     while (d < -Math.PI) d += Math.PI * 2;
     r.angle += d * 0.25;
-    r.drifting = tgt.drifting;
-    if (r.drifting) pushSkid(r, r.x, r.y, r.angle, SKID_COLOR);
+    if (r.drifting) pushSkid(r, r.x, r.y, r.angle, SKID_COLOR); // drifting 은 스냅샷 핸들러에서 갱신
     else r._skid = null;
   }
 }

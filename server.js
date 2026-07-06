@@ -71,7 +71,7 @@ function flagCheat(p, now, reason) {
  *   → 두 클라가 같은 임펄스를 받으므로, 들이받으면 상대가 실제로 밀려나고 일관된다.
  *   (위치 겹침 방지는 클라가 즉시 처리, 속도/운동량 변화는 서버가 권위)
  * ========================================================================== */
-const CAR_HL = 18, CAR_HW = 8;   // 히트박스 반길이/반폭 (game.js 차체와 일치)
+const CAR_HL = 27.6, CAR_HW = 13.2; // 히트박스 반길이/반폭 = 시각 차체 크기(game.js drawCar 1.15배 반영, L=38)
 const BUMP_RESTITUTION = 0.3;    // 반발계수(0=완전 비탄성, 1=완전 탄성)
 const BUMP_COOLDOWN_MS = 110;    // 같은 쌍 재충돌 최소 간격(임펄스 스팸 방지)
 const BUMP_MIN_J = 12;           // 이보다 작은 임펄스는 무시(미세 접촉)
@@ -945,6 +945,7 @@ setInterval(() => {
     const entry = {
       id, name: p.name,
       x: p.state.x, y: p.state.y, angle: p.state.angle,
+      vx: Math.round(p.state.vx || 0), vy: Math.round(p.state.vy || 0), // 데드레커닝용 속도
       drifting: p.state.drifting,
       teleport: !!p.state.teleport,
       invuln: now < (p.invulnUntil || 0),
