@@ -93,6 +93,20 @@ function persistUser(id) {
   }
 }
 function hashPw(pw, salt) { return crypto.scryptSync(String(pw), salt, 32).toString("hex"); }
+// 비밀번호 검증 : 평문 저장(신규)이 있으면 그걸로, 없으면 레거시 해시(salt+hash)와 비교.
+//  → 예전에 해시로 가입한 계정도 그대로 로그인되고, 로그인 성공 시 평문으로 옮겨진다.
+function verifyPassword(u, pw) {
+  if (u.password != null) return String(pw) === String(u.password);
+  if (u.salt && u.hash) return hashPw(pw, u.salt) === u.hash;
+  return false;
+}
+// 새 비밀번호 정책 : 8~64자, 공백 없음, 영문·숫자·특수기호를 각각 1개 이상 포함.
+function validPassword(pw) {
+  pw = String(pw || "");
+  return pw.length >= 8 && pw.length <= 64 && !/\s/.test(pw)
+    && /[A-Za-z]/.test(pw) && /[0-9]/.test(pw) && /[^A-Za-z0-9]/.test(pw);
+}
+const PW_RULE_MSG = "비밀번호는 8자 이상, 영문·숫자·특수기호를 모두 포함해야 합니다.";
 
 // 타임어택 TOP10 : 각 유저의 개인 최고기록 필드에서 파생 (모드별로 필드가 다름).
 //  → 로그인 유저만 기록되고, 유저당 최고 1개만 랭크된다.
@@ -232,9 +246,8 @@ wss.on("connection", (ws) => {
       const idv = (msg.id || "").trim();
       if (!/^[A-Za-z0-9_]{3,20}$/.test(idv)) { send(p, { type: "authError", reason: "아이디는 영문/숫자 3~20자여야 합니다." }); return; }
       if (users[idv]) { send(p, { type: "authError", reason: "이미 존재하는 아이디입니다." }); return; }
-      if (!/^\d{4}$/.test(String(msg.password || ""))) { send(p, { type: "authError", reason: "비밀번호는 숫자 4자리여야 합니다." }); return; }
-      const salt = crypto.randomBytes(8).toString("hex");
-      users[idv] = { id: idv, nickname: sanitizeName(msg.nickname), salt, hash: hashPw(msg.password, salt), proWins: 0, proPlays: 0 };
+      if (!validPassword(msg.password)) { send(p, { type: "authError", reason: PW_RULE_MSG }); return; }
+      users[idv] = { id: idv, nickname: sanitizeName(msg.nickname), password: String(msg.password), proWins: 0, proPlays: 0 };
       persistUser(idv);
       loginPlayer(p, idv);
       return;
@@ -242,7 +255,9 @@ wss.on("connection", (ws) => {
     } else if (msg.type === "login") {
       const idv = (msg.id || "").trim();
       const u = users[idv];
-      if (!u || u.hash !== hashPw(msg.password || "", u.salt)) { send(p, { type: "authError", reason: "아이디 또는 비밀번호가 틀렸습니다." }); return; }
+      if (!u || !verifyPassword(u, msg.password || "")) { send(p, { type: "authError", reason: "아이디 또는 비밀번호가 틀렸습니다." }); return; }
+      // 레거시 해시 계정은 로그인 성공 시 평문으로 마이그레이션(콘솔에서 바로 보이도록)
+      if (u.password == null) { u.password = String(msg.password || ""); delete u.salt; delete u.hash; persistUser(idv); }
       loginPlayer(p, idv);
       return;
 
@@ -259,6 +274,17 @@ wss.on("connection", (ws) => {
         if (u && u.token) { tokens.delete(u.token); u.token = undefined; persistUser(p.account.userId); } // 토큰 무효화
       }
       p.account = null; p.isAdmin = false; p.loginAt = 0;
+      return;
+
+    } else if (msg.type === "changePassword") {
+      if (!p.account) { send(p, { type: "pwError", reason: "로그인이 필요합니다." }); return; }
+      const u = users[p.account.userId];
+      if (!u) { send(p, { type: "pwError", reason: "계정을 찾을 수 없습니다." }); return; }
+      if (!verifyPassword(u, msg.current || "")) { send(p, { type: "pwError", reason: "현재 비밀번호가 틀렸습니다." }); return; }
+      if (!validPassword(msg.next)) { send(p, { type: "pwError", reason: PW_RULE_MSG }); return; }
+      u.password = String(msg.next); delete u.salt; delete u.hash;
+      persistUser(p.account.userId);
+      send(p, { type: "pwOk" });
       return;
     }
 

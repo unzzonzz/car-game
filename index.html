@@ -145,7 +145,7 @@
       <div id="loginForm" class="auth-form">
         <h2>로그인</h2>
         <input id="loginId" type="text" maxlength="20" placeholder="아이디" autocomplete="off" />
-        <input id="loginPw" type="password" maxlength="4" inputmode="numeric" placeholder="비밀번호 (숫자 4자리)" autocomplete="off" />
+        <input id="loginPw" type="password" maxlength="64" placeholder="비밀번호" autocomplete="off" />
         <button id="loginBtn" class="auth-btn">로그인</button>
         <div class="auth-switch">계정이 없나요? <span id="toSignup" class="auth-link">회원가입</span></div>
       </div>
@@ -153,7 +153,7 @@
         <h2>회원가입</h2>
         <input id="signupId" type="text" maxlength="20" placeholder="아이디 (영문/숫자 3~20자)" autocomplete="off" />
         <input id="signupNick" type="text" maxlength="12" placeholder="닉네임" autocomplete="off" />
-        <input id="signupPw" type="password" maxlength="4" inputmode="numeric" placeholder="비밀번호 (숫자 4자리)" autocomplete="off" />
+        <input id="signupPw" type="password" maxlength="64" placeholder="비밀번호 (8자 이상, 영문·숫자·특수기호)" autocomplete="off" />
         <button id="signupBtn" class="auth-btn">회원가입</button>
         <div class="auth-switch">이미 계정이 있나요? <span id="toLogin" class="auth-link">로그인</span></div>
       </div>
@@ -180,6 +180,13 @@
       <h2>계정</h2>
       <div class="dash-row"><span>아이디</span><span id="accId">-</span></div>
       <div class="dash-row"><span>닉네임</span><span id="accName">-</span></div>
+      <div class="acc-pw">
+        <div class="acc-pw-title">비밀번호 변경</div>
+        <input id="accCurPw" type="password" maxlength="64" placeholder="현재 비밀번호" autocomplete="off" />
+        <input id="accNewPw" type="password" maxlength="64" placeholder="새 비밀번호 (8자 이상, 영문·숫자·특수기호)" autocomplete="off" />
+        <button id="accPwBtn" class="auth-btn">변경하기</button>
+        <div id="accPwMsg" class="acc-pw-msg"></div>
+      </div>
       <button id="accClose" class="auth-btn auth-close">닫기</button>
     </div>
   </div>

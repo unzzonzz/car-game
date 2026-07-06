@@ -2515,6 +2515,12 @@ function connect() {
     } else if (msg.type === "authError") {
       if (!msg.silent) alert(msg.reason || "인증 실패");
       else { try { localStorage.removeItem("carGameToken"); } catch {} } // 만료 토큰 정리
+    } else if (msg.type === "pwOk") {
+      const cur = document.getElementById("accCurPw"); if (cur) cur.value = "";
+      const nw = document.getElementById("accNewPw"); if (nw) nw.value = "";
+      setAccPwMsg("비밀번호가 변경되었습니다.", true);
+    } else if (msg.type === "pwError") {
+      setAccPwMsg(msg.reason || "변경 실패", false);
     } else if (msg.type === "stats") {
       account.proWins = msg.proWins || 0;
       account.proPlays = msg.proPlays || 0;
@@ -3730,10 +3736,18 @@ function sendAuth(obj) {
   if (!net.connected || net.ws.readyState !== WebSocket.OPEN) { alert("서버 연결 중입니다. 잠시 후 다시 시도하세요."); return; }
   net.ws.send(JSON.stringify(obj));
 }
+// 비밀번호 정책 : 8~64자, 공백 없음, 영문·숫자·특수기호 각 1개 이상 (서버와 동일)
+const PW_RULE_MSG = "비밀번호는 8자 이상, 영문·숫자·특수기호를 모두 포함해야 합니다.";
+function validPassword(pw) {
+  pw = String(pw || "");
+  return pw.length >= 8 && pw.length <= 64 && !/\s/.test(pw)
+    && /[A-Za-z]/.test(pw) && /[0-9]/.test(pw) && /[^A-Za-z0-9]/.test(pw);
+}
 function sendLogin() {
   const id = document.getElementById("loginId").value.trim();
   const pw = document.getElementById("loginPw").value;
-  if (!id || !/^\d{4}$/.test(pw)) { alert("아이디와 숫자 4자리 비밀번호를 입력하세요."); return; }
+  // 로그인은 정책을 강제하지 않는다(기존 계정의 옛 비번도 통과해야 하므로) — 서버가 검증
+  if (!id || !pw) { alert("아이디와 비밀번호를 입력하세요."); return; }
   sendAuth({ type: "login", id, password: pw });
 }
 function sendSignup() {
@@ -3742,7 +3756,7 @@ function sendSignup() {
   const pw = document.getElementById("signupPw").value;
   if (!/^[A-Za-z0-9_]{3,20}$/.test(id)) { alert("아이디는 영문/숫자 3~20자입니다."); return; }
   if (!nickname) { alert("닉네임을 입력하세요."); return; }
-  if (!/^\d{4}$/.test(pw)) { alert("비밀번호는 숫자 4자리입니다."); return; }
+  if (!validPassword(pw)) { alert(PW_RULE_MSG); return; }
   sendAuth({ type: "signup", id, nickname, password: pw });
 }
 function sendLogout() {
@@ -3810,10 +3824,30 @@ function updateDashboard() {
 function showAccountModal() {
   document.getElementById("accId").textContent = account.userId || "-";
   document.getElementById("accName").textContent = account.nickname || "-";
+  // 비밀번호 변경 폼 초기화
+  const cur = document.getElementById("accCurPw"); if (cur) cur.value = "";
+  const nw = document.getElementById("accNewPw"); if (nw) nw.value = "";
+  setAccPwMsg("", true);
   document.getElementById("accountModal").classList.add("show");
 }
 function hideAccountModal() {
   document.getElementById("accountModal").classList.remove("show");
+}
+// 계정 팝업의 비밀번호 변경 안내문 (성공=초록, 실패=코랄)
+function setAccPwMsg(text, ok) {
+  const el = document.getElementById("accPwMsg");
+  if (!el) return;
+  el.textContent = text || "";
+  el.style.color = ok ? "var(--green)" : "var(--coral)";
+}
+// 현재 비번 + 새 비번 검증 후 서버로 변경 요청
+function sendChangePassword() {
+  const cur = document.getElementById("accCurPw").value;
+  const next = document.getElementById("accNewPw").value;
+  if (!cur) { setAccPwMsg("현재 비밀번호를 입력하세요.", false); return; }
+  if (!validPassword(next)) { setAccPwMsg(PW_RULE_MSG, false); return; }
+  if (cur === next) { setAccPwMsg("새 비밀번호가 현재와 같습니다.", false); return; }
+  sendAuth({ type: "changePassword", current: cur, next });
 }
 
 /* 설정 팝업 : 열 때마다 현재 값(볼륨/배치)을 UI 에 동기화 */
@@ -3868,12 +3902,7 @@ function setupAuth() {
   });
   document.getElementById("dashBtn").addEventListener("click", showDashboard);
   document.getElementById("dashClose").addEventListener("click", hideDashboard);
-  // 비밀번호 입력은 숫자만
-  ["loginPw", "signupPw"].forEach((id) => {
-    document.getElementById(id).addEventListener("input", (e) => {
-      e.target.value = e.target.value.replace(/\D/g, "").slice(0, 4);
-    });
-  });
+  document.getElementById("accPwBtn").addEventListener("click", sendChangePassword);
   updateAuthUI();
 }
 
