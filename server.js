@@ -71,6 +71,7 @@ function flagCheat(p, now, reason) {
  *   → 두 클라가 같은 임펄스를 받으므로, 들이받으면 상대가 실제로 밀려나고 일관된다.
  *   (위치 겹침 방지는 클라가 즉시 처리, 속도/운동량 변화는 서버가 권위)
  * ========================================================================== */
+const COLLISION_ENABLED = false; // ★ 물리 충돌/밀치기 임시 OFF — true 로 바꾸면 다시 켜짐
 const CAR_HL = 27.6, CAR_HW = 13.2; // 히트박스 반길이/반폭 = 시각 차체 크기(game.js drawCar 1.15배 반영, L=38)
 const BUMP_RESTITUTION = 0.3;    // 반발계수(0=완전 비탄성, 1=완전 탄성)
 const BUMP_COOLDOWN_MS = 110;    // 같은 쌍 재충돌 최소 간격(임펄스 스팸 방지)
@@ -919,6 +920,7 @@ setInterval(runCollisions, 1000 / COLLISION_HZ);
 
 // 서버 권위 차량 충돌(밀치기) 틱 : 같은 방(프로)/같은 모드에서 충돌 대상 차들을 모아 판정.
 setInterval(() => {
+  if (!COLLISION_ENABLED) return; // 물리 충돌 임시 OFF
   const now = Date.now();
   const groups = new Map(); // 그룹키 -> [{id,p}]
   for (const [id, p] of players) {

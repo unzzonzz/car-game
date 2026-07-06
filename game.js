@@ -1271,7 +1271,9 @@ function carHalfExtents(car) {
   const k = (car.length || CAR.length) + 10;
   return { hl: k * 0.575, hw: k * 0.2751 };
 }
+const COLLISION_ENABLED = false; // ★ 물리 충돌/밀치기 임시 OFF — true 로 바꾸면 다시 켜짐(서버 플래그도 같이)
 function updatePlayerCollision(car) {
+  if (!COLLISION_ENABLED) return;                        // 물리 충돌 임시 OFF
   if (gameMode === "lobby" || !othersVisible()) return; // 로비/고스트 숨김 시 충돌 없음
   const { hl, hw } = carHalfExtents(car);
   const me = { x: car.x, y: car.y, ang: car.angle, hl, hw };
@@ -2629,7 +2631,7 @@ function connect() {
       net.pendingTeleport = true; // 남들 화면에서 슬라이드 없이 스냅되도록
     } else if (msg.type === "bump") {
       // 서버 권위 충돌 임펄스 → 내 차 속도에 반영(진짜 밀치기/밀려남)
-      if (gameState === "playing" && gameMode !== "lobby") applyBump(Number(msg.vx) || 0, Number(msg.vy) || 0);
+      if (COLLISION_ENABLED && gameState === "playing" && gameMode !== "lobby") applyBump(Number(msg.vx) || 0, Number(msg.vy) || 0);
     } else if (msg.type === "death") {
       // 서버 판정: 내가 죽었다 → 모드 선택 화면으로 복귀
       handleDeath();
@@ -3100,7 +3102,7 @@ function netSend(car, now) {
     drifting: car.drifting, // 드리프트 중일 때만 → 남들 화면에도 그때만 자국
     color: myColor(),       // 커스텀 차 색 → 서버가 스냅샷으로 릴레이
     vx: Math.round(car.vx), vy: Math.round(car.vy), // 서버 권위 충돌 임펄스 계산용
-    collide: othersVisible(), // 충돌 대상 여부(다른 차 보일 때만 밀치기)
+    collide: COLLISION_ENABLED && othersVisible(), // 충돌 대상 여부(다른 차 보일 때만 밀치기)
   };
   // 막 텔레포트(벽/플레이어 리스폰)했으면 서버·남들에게 스냅하라고 알린다
   if (net.pendingTeleport) { msg.teleport = true; net.pendingTeleport = false; }
