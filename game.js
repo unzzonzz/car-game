@@ -4005,10 +4005,10 @@ function updateAuthUI() {
 }
 
 let dashTimer = null;
-// ms epoch → "YYYY-MM-DD HH:MM" (마지막 접속 표시용)
+// ms epoch → "YYYY-MM-DD HH:MM" (한국시간 KST 고정 — 기기 시간대와 무관하게 일관)
 function fmtDateTime(ms) {
-  const d = new Date(ms), p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  const d = new Date(ms + 9 * 3600 * 1000), p = (n) => String(n).padStart(2, "0"); // UTC+9(한국, DST 없음)
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
 function updateDashboard() {
   // 접속 상태 : 현재 서버 연결 여부 (본인 대시보드는 접속 중이면 초록)

@@ -27,10 +27,11 @@ const fmtDur = (ms) => {                          // ms → "N시간 M분"
   const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
   return h ? `${h}시간 ${m}분` : `${m}분`;
 };
-const fmtDate = (ms) => {                          // ms epoch → "YYYY-MM-DD HH:MM"
+const fmtDate = (ms) => {                          // ms epoch → "YYYY-MM-DD HH:MM" (한국시간 KST 고정)
   if (!ms) return "-";
-  const d = new Date(ms), p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  // 서버 시간대가 UTC 여도 한국시간으로 보이게 : UTC+9 offset 후 getUTC* 로 읽는다(한국은 DST 없음)
+  const d = new Date(ms + 9 * 3600 * 1000), p = (n) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 };
 
 // 한글(전각)은 2칸으로 세어 정렬을 맞춘다
