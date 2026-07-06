@@ -210,6 +210,7 @@ const account = {
   totalTimeAt: 0, // 위 값을 수신한 클라 시각(performance 아님) — 라이브 증가 기준
   bestMs: 0,      // 초보자 코스(자유) 개인 최고 기록(ms)
   bestHardMs: 0,  // 어려움 코스(하드) 개인 최고 기록(ms)
+  lastLogin: 0,   // 직전 접속 시각(ms epoch, 0=처음)
 };
 
 /* =============================================================================
@@ -2621,6 +2622,7 @@ function connect() {
       account.totalTimeAt = Date.now();
       account.bestMs = msg.bestMs || 0;
       account.bestHardMs = msg.bestHardMs || 0;
+      account.lastLogin = msg.lastLogin || 0; // 직전 접속 시각(0=처음)
       account.loginTime = Date.now();
       playerName = msg.nickname;
       try { localStorage.setItem("carGameToken", msg.token); } catch {}
@@ -4003,7 +4005,22 @@ function updateAuthUI() {
 }
 
 let dashTimer = null;
+// ms epoch → "YYYY-MM-DD HH:MM" (마지막 접속 표시용)
+function fmtDateTime(ms) {
+  const d = new Date(ms), p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 function updateDashboard() {
+  // 접속 상태 : 현재 서버 연결 여부 (본인 대시보드는 접속 중이면 초록)
+  const status = document.getElementById("dashStatus");
+  if (status) {
+    const on = !!net.connected;
+    status.textContent = on ? "접속 중" : "오프라인";
+    status.style.color = on ? "var(--green)" : "var(--muted)";
+  }
+  // 마지막 접속 : 직전(이번 로그인 이전) 접속 시각
+  const last = document.getElementById("dashLastLogin");
+  if (last) last.textContent = account.lastLogin ? fmtDateTime(account.lastLogin) : "처음 접속";
   document.getElementById("dashWins").textContent = account.proWins;
   document.getElementById("dashPlays").textContent = account.proPlays;
   // 접속 시간 = 서버가 보낸 실시간 평생값 + 수신 후 경과분 (라이브, 이중계산 없음)

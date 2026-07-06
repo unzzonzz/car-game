@@ -242,11 +242,15 @@ function loginPlayer(p, userId) {
   p.name = u.nickname;
   p.loginAt = Date.now();
   if (u.color) p.color = u.color; // 계정에 저장된 차 색 → 즉시 릴레이에 반영
+  const prevLogin = u.lastLogin || 0; // 직전(이번 로그인 이전) 접속 시각 → "마지막 접속" 으로 표시
+  u.lastLogin = Date.now();           // 이번 로그인으로 갱신
+  persistUser(userId);
   send(p, {
     type: "authOk", id: userId, nickname: u.nickname, isAdmin: p.isAdmin,
     token: u.token, proWins: u.proWins || 0, proPlays: u.proPlays || 0,
     bestMs: u.bestTime || 0, bestHardMs: u.bestTimeHard || 0, totalTime: liveTotalTime(p),
     color: u.color || null, settings: u.settings || null, // 계정에 저장된 차 색 + 설정 복원
+    lastLogin: prevLogin, // 직전 접속 시각(0=처음)
   });
 }
 
