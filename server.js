@@ -15,6 +15,10 @@
  *  실행 :  node server.js   →  http://localhost:3000
  * ========================================================================== */
 
+// .env 파일이 있으면 환경변수로 로드(로컬/자체서버용). 없거나 dotenv 미설치여도 무해.
+//  운영 플랫폼(Render 등)은 대시보드 환경변수를 쓰므로 .env 없이도 동작한다.
+try { require("dotenv").config(); } catch {}
+
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
