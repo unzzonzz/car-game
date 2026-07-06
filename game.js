@@ -103,6 +103,8 @@ const MAP_GROUPS = {
       { name: "서바이벌", desc: "머리로 들이받아 상대를 터뜨리기", mode: null },
       { name: "술래잡기", desc: "술래를 피해 도망치는 추격전", mode: null },
       { name: "스모", desc: "링 밖으로 상대를 밀어내는 몸싸움", mode: null },
+      { name: "땅따먹기", desc: "지나온 자리로 영역을 넓혀 땅을 차지하는 생존전", mode: null },
+      { name: "축구", desc: "차로 공을 밀어 상대 골대에 넣는 팀 대결", mode: null },
     ],
   },
   racing: {
@@ -111,7 +113,7 @@ const MAP_GROUPS = {
     maps: [
       { name: "일반전", desc: "표준 규칙으로 달리는 기본 레이스", mode: null },
       { name: "경쟁전", desc: "실력을 겨루는 랭크 레이스", mode: null },
-      { name: "캐주얼", desc: "폭풍·바람 등 판마다 색다른 기믹이 있는 이색 레이스", mode: null },
+      { name: "캐주얼", desc: "특별한 규칙을 더한 매력적인 레이스", mode: null },
     ],
   },
   plaza: {
@@ -130,7 +132,6 @@ const MAP_GROUPS = {
     maps: [
       { name: "초보자 코스", desc: "완만한 코너로 달리는 입문용 서킷", mode: "racing" },
       { name: "어려움 코스", desc: "좁은 폭과 헤어핀의 고난도 서킷", mode: "hard" },
-      { name: "구불구불 코스", desc: "쉼 없이 이어지는 연속 U턴 슬라럼", mode: "serp" },
     ],
   },
 };
@@ -167,6 +168,7 @@ let playerName = "Player";
 // 프로 레이싱 상태 (서버 'roomList'/'race' 메시지로 갱신)
 const race = {
   state: "none",     // "none" | "browsing" | "lobby" | "countdown" | "racing"
+  exited: false,     // 프로에서 로비로 나가는 중 → 지연 도착한 방/레이스 메시지 무시(재진입/멈춤 방지)
   laps: 3,
   slot: 0,           // 내 그리드 슬롯
   list: [],          // 방 순위 [{id,name,ready,lap,finished,rank}]
@@ -2705,6 +2707,7 @@ function connect() {
       updateRaceUI();
     } else if (msg.type === "roomJoined") {
       // 방 입장 승인 → 대기실 팝업 (스테이지 진입은 전원 준비 후 시작 시점에)
+      race.exited = false; // 방 입장 → 방/레이스 메시지 정상 처리
       race.roomId = msg.roomId;
       race.isHost = !!msg.isHost;
       race.state = "lobby";
@@ -2830,6 +2833,9 @@ function sendCreateRoom() {
  *  프로 레이싱 — 서버 'race' 메시지 처리 + 로비/순위 UI
  * ========================================================================== */
 function handleRaceMessage(msg) {
+  // 프로에서 로비로 나가는 중이면(방 이미 이탈) 지연 도착한 방/레이스 메시지는 버린다.
+  //  → 이게 없으면 나간 뒤 뒤늦게 온 "racing/lobby" 메시지가 스테이지에 재진입하거나 차를 고정시켜 멈춤.
+  if (race.exited) { race.state = "none"; return; }
   // 프로 트랙 동기화 (로비 진입자/재동기화 대비)
   if (typeof msg.trackIndex === "number") WORLD.pro.track = buildProTrack(msg.trackIndex);
   const prevState = race.state;
@@ -3420,6 +3426,7 @@ function startGame(mode) {
 // "메뉴로" = 로비 월드로 복귀 (접속 화면 = 로비)
 function toMenu() {
   if (gameMode === "lobby") return;
+  race.exited = true; // 지연 도착한 방/레이스 메시지를 무시해 재진입/멈춤 버그 방지
   enterLobby();
 }
 
@@ -3572,6 +3579,7 @@ function updateLobby(dt) {
 function openCustomRooms() {
   SFX.click(); // 게이트 진입/클릭엔 버튼이 없어 직접 울린다 (다른 메뉴와 동일)
   CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0; // 보는 동안 차 정지
+  race.exited = false; // 커스텀 흐름 재진입 → 이제 방/레이스 메시지 정상 처리
   race.state = "browsing";
   race.isHost = false; race.myReady = false; race.rooms = [];
   lobby.ui = "hidden"; lobby.stopMs = 0;
