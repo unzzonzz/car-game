@@ -920,6 +920,67 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 }
 
 /* =============================================================================
+ *  세로 모바일(좁은 화면, ≤600px) 최적화
+ * -----------------------------------------------------------------------------
+ *  하단은 터치 조작 영역 → HUD 는 상단에 컴팩트하게 몰아 배치(겹침 0).
+ *   · 왼쪽 위 : 나가기 · 속력 · 채팅   |   오른쪽 위 : 미니맵 · 순위판/TOP10
+ *   · 아래 : 터치 컨트롤(좌 조향 / 우 가감속)   · 노치 대응 env(safe-area)
+ * ========================================================================== */
+@media (max-width: 820px) {
+  /* --- 오른쪽 위 : 미니맵 → 그 아래 순위판/TOP10 --- */
+  body:not(.lobby) #minimap {
+    top: calc(10px + env(safe-area-inset-top)); bottom: auto;
+    right: calc(10px + env(safe-area-inset-right)); left: auto;
+  }
+  body:not(.lobby) #standings,
+  body:not(.lobby) #topRecords {
+    top: calc(10px + env(safe-area-inset-top) + var(--mm, 112px) + 8px); bottom: auto;
+    right: calc(10px + env(safe-area-inset-right)); left: auto;
+    width: 150px; max-height: 42vh; overflow-y: auto;
+    font-size: 11.5px; padding: 8px 10px; border-radius: 12px;
+  }
+  .stand-rank { width: 15px; }
+  .stand-lap { min-width: 24px; }
+
+  /* --- 왼쪽 위 : 나가기 → 속력 → 채팅 --- */
+  body:not(.lobby) #exitBtn { left: calc(14px + env(safe-area-inset-left)); right: auto; top: calc(12px + env(safe-area-inset-top)); font-size: 15px; }
+  body:not(.lobby) #speed { left: calc(15px + env(safe-area-inset-left)); right: auto; top: calc(44px + env(safe-area-inset-top)); bottom: auto; }
+  body:not(.lobby) #chat {
+    left: calc(12px + env(safe-area-inset-left)); right: auto;
+    top: calc(74px + env(safe-area-inset-top)); bottom: auto;
+    width: 172px;
+  }
+  body:not(.lobby) #chatLog { height: 88px; font-size: 12px; padding: 0 8px; }
+  body:not(.lobby) #chatRow { margin-top: 6px; }
+  #chatInput { padding: 9px 6px 9px 14px; font-size: 13px; }
+  #chatSend { padding: 0 14px 0 8px; font-size: 13px; }
+
+  /* 기록 HUD(타임어택) : 상단 가운데(터치 영역 회피) */
+  body:not(.lobby) #recordHud { bottom: auto; top: calc(12px + env(safe-area-inset-top)); gap: 6px; }
+  #proTimer { top: calc(12px + env(safe-area-inset-top)); }
+
+  /* --- 아래 : 터치 컨트롤(양 모서리, 손가락 크기) --- */
+  #touchSteer { left: calc(16px + env(safe-area-inset-left)); bottom: calc(22px + env(safe-area-inset-bottom)); gap: 14px; }
+  #touchDrive { right: calc(16px + env(safe-area-inset-right)); bottom: calc(22px + env(safe-area-inset-bottom)); gap: 14px; }
+  .touch-btn { width: 68px; height: 68px; font-size: 13px; }
+  .touch-btn.gas { width: 82px; height: 82px; }
+
+  /* 로비 채팅 : 하단(터치 위) 왼쪽 — 로비엔 미니맵/순위판이 없어 상단은 헤더만 */
+  body.lobby #chat { left: calc(12px + env(safe-area-inset-left)); right: auto; bottom: calc(118px + env(safe-area-inset-bottom)); top: auto; width: 200px; }
+
+  /* 맵 선택 팝업 : 카드 1열 (가로 3열이 좁은 화면서 넘침). #mapModal 로 특정성↑(뒤 규칙 이김) */
+  #mapModal #mapGrid { grid-template-columns: 1fr; gap: 10px; }
+  #mapModal .map-card { aspect-ratio: auto; padding: 14px; }
+  #mapModal .map-panel { width: min(420px, 93vw); }
+
+  /* 설정 : 모바일은 HUD 위치가 고정이라 미니맵/채팅 "위치" 설정은 무의미 → 숨김 */
+  .set-row:has(#setMmPos), .set-row:has(#setChatPos) { display: none; }
+
+  /* 로비 : 터치 기기엔 키보드 키캡 숨김(터치로 조작하므로) */
+  body.touch #lobHint { display: none; }
+}
+
+/* =============================================================================
  *  로비 오버레이 — 접속 직후 대기 화면 (웜 화이트 월드 위에 떠 있는 요소들)
  * -----------------------------------------------------------------------------
  *  상태: (기본)=idle 전부 표시 / .s-hidden=주행 중 전부 걷힘 / .s-buttons=정지 후 버튼만
@@ -1276,7 +1337,7 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
 
 /* HUD 위치 설정 : 미니맵/채팅을 네 모서리 중 하나에 (인게임 전용, 모바일 가로 레이아웃 제외).
  *  같은 모서리를 고르면 채팅이 미니맵을 비켜 위/아래로 쌓인다. */
-@media (min-height: 541px) {
+@media (min-height: 541px) and (min-width: 821px) {
   body:not(.lobby).mm-tl #minimap { top: 18px; left: 18px; bottom: auto; right: auto; }
   body:not(.lobby).mm-tr #minimap { top: var(--top10bottom, 18px); right: 18px; bottom: auto; left: auto; }
   body:not(.lobby).mm-bl #minimap { bottom: 18px; left: 18px; top: auto; right: auto; }
