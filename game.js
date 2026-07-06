@@ -2752,7 +2752,7 @@ function connect() {
         let r = remotePlayers.get(p.id);
         if (!r) {
           // 처음 본 플레이어 → 즉시 그 자리에 스냅
-          r = { x: p.x, y: p.y, angle: p.angle, snap: true };
+          r = { x: p.x, y: p.y, angle: p.angle, snap: true, buf: [] };
           remotePlayers.set(p.id, r);
         }
         r.invuln = p.invuln;
@@ -2760,9 +2760,17 @@ function connect() {
         r.admin = p.admin;
         r.color = p.color;    // 상대의 커스텀 차 색 (없으면 렌더에서 id 색 폴백)
         r.drifting = p.drifting;
-        // 권위 타깃(위치+속도+각도+서버시각) 갱신 → 데드레커닝으로 이 사이를 매끈하게 채운다
-        r.tx = p.x; r.ty = p.y; r.tvx = p.vx || 0; r.tvy = p.vy || 0; r.ta = p.angle; r.tst = st;
-        if (p.teleport) r.snap = true; // 텔레포트/부활 → 즉시 스냅(보간으로 맵 가로지르는 것 방지)
+        const vx = p.vx || 0, vy = p.vy || 0;
+        r.evx = vx; r.evy = vy; // 버퍼 고갈 시 외삽용 최신 속도(px/s)
+        // 스냅샷을 "서버 송신 시각(st) + 속도"와 함께 버퍼에 쌓는다 → 사이를 에르밋 스플라인 보간
+        if (p.teleport) {
+          r.buf = [{ t: st, x: p.x, y: p.y, angle: p.angle, vx, vy }]; // 텔레포트/부활 → 리셋 + 스냅
+          r.snap = true;
+        } else {
+          const last = r.buf[r.buf.length - 1];
+          if (!last || st > last.t) r.buf.push({ t: st, x: p.x, y: p.y, angle: p.angle, vx, vy });
+          while (r.buf.length > 30) r.buf.shift(); // 버퍼 상한(최근 ~0.5s @60Hz)
+        }
       }
       // 스냅샷에 없는 = 떠난 플레이어 제거
       for (const id of remotePlayers.keys()) {
@@ -3167,41 +3175,58 @@ let lastSnapAt = 0;       // 직전 스냅샷 도착 시각(클라 시계)
 let snapGapMax = 33;      // 최근 최대 도착 간격(감쇠) — 지터 추정치
 const MAX_EXTRAP = 180;   // ms : 패킷이 늦으면 마지막 속도로 이 시간까지 외삽(지터 흡수 → 안 끊김)
 
-// 원격 차량 : 데드레커닝(속도 외삽) + 지수 오차보정.
-//  핵심 — 매 프레임 "권위 타깃을 그 차의 속도로 재생시각까지 투영" 한 목표로 부드럽게 수렴한다.
-//  스냅샷이 늦거나 빠져도 속도로 계속 나아가므로 "절대 멈추거나 끊기지 않는다". 새 스냅샷이
-//  오면 목표만 살짝 바뀌고 차는 이징으로 스르륵 따라가 스냅(튐)이 안 보인다.
-const SMOOTH_K = 16; // 오차 수렴 속도(클수록 빨리 따라붙고, 작을수록 더 부드럽지만 지연↑)
+// 원격 차량 : "버퍼 에르밋 스플라인 보간 + 출력 이징" (부드러움의 두 축을 결합).
+//  · 서버시각(st)+속도를 담은 스냅샷 버퍼의 두 샘플 사이를 "속도인지 3차 에르밋"으로 보간
+//    → 곡선도 코너 없이 매끈(선형보간의 폴리곤 코너 제거), 실제 경로를 정확히 따라감.
+//  · 그 목표를 프레임독립 지수 이징으로 따라가 재생시계/도착 지터를 저역통과 필터링 → 마이크로스터터 억제.
+//  · 버퍼가 마르면 마지막 속도로 MAX_EXTRAP 까지 외삽 → 끊김/멈춤 방지. (검증: 지터 유무 모두 기존보다 매끈)
+const SMOOTH_K = 16; // 출력 이징 세기(클수록 반응↑·필터↓, 작을수록 더 부드럽지만 지연↑)
 function updateRemotes(dt) {
   if (net.serverNewest === 0 && !net.hasServerTime) { return; }
-  // 재생 시계 : 실시간으로 계속 전진(끊겨도 진행) + (서버최신 - interpDelay)로 부드럽게 수렴
+  // 재생 시계 : 실시간으로 전진 + (서버최신 - interpDelay)로 완만히 수렴
   const target = net.serverNewest - interpDelay;
   if (net.playT === null) net.playT = target;
   else {
     net.playT += dt * 1000;
-    net.playT += (target - net.playT) * clamp(dt * 2.5, 0, 1);
+    net.playT += (target - net.playT) * Math.min(dt * 3, 0.08);
     if (net.playT > net.serverNewest + MAX_EXTRAP) net.playT = net.serverNewest + MAX_EXTRAP;
-    if (net.serverNewest - net.playT > interpDelay + 500) net.playT = target; // 너무 뒤처지면 리싱크
+    if (net.serverNewest - net.playT > interpDelay + 400) net.playT = target; // 크게 뒤처지면 리싱크
   }
   const renderT = net.playT;
-  const a = 1 - Math.exp(-SMOOTH_K * dt); // 지수 이징 계수(프레임레이트 독립)
+  const ease = 1 - Math.exp(-SMOOTH_K * dt); // 프레임독립 이징 계수(시계/지터 필터)
 
   for (const [id, r] of remotePlayers) {
-    if (r.tst == null) continue;
-    // 타깃(권위 상태)을 그 차의 속도로 재생시각까지 투영 → 목표 위치(끊김 없이 이어짐)
-    let ageS = (renderT - r.tst) / 1000;
-    ageS = clamp(ageS, -0.3, MAX_EXTRAP / 1000); // 과도 외삽 방지(방향전환 오버슛 억제)
-    const px = r.tx + r.tvx * ageS;
-    const py = r.ty + r.tvy * ageS;
-    if (r.snap) {                    // 첫 등장/텔레포트 → 즉시 스냅
-      r.x = px; r.y = py; r.angle = r.ta; r.snap = false;
+    const buf = r.buf;
+    if (!buf || buf.length === 0) continue;
+    // renderT 를 감싸는 두 스냅샷만 남기고 소비된 옛 샘플 정리(1개는 유지)
+    while (buf.length >= 2 && buf[1].t <= renderT) buf.shift();
+
+    let tx, ty, ta;
+    if (buf.length >= 2 && renderT >= buf[0].t) {
+      // 속도인지 3차 에르밋 스플라인 (양 끝 위치+속도로 C1 연속 곡선 → 매끈)
+      const A = buf[0], B = buf[1], span = B.t - A.t;
+      const u = span > 0 ? clamp((renderT - A.t) / span, 0, 1) : 1;
+      const sps = span / 1000, u2 = u * u, u3 = u2 * u;
+      const h00 = 2 * u3 - 3 * u2 + 1, h10 = u3 - 2 * u2 + u, h01 = -2 * u3 + 3 * u2, h11 = u3 - u2;
+      tx = h00 * A.x + h10 * A.vx * sps + h01 * B.x + h11 * B.vx * sps;
+      ty = h00 * A.y + h10 * A.vy * sps + h01 * B.y + h11 * B.vy * sps;
+      let d = B.angle - A.angle; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
+      ta = A.angle + d * u;
     } else {
-      r.x += (px - r.x) * a;         // 부드럽게 수렴(스냅/튐 없음)
-      r.y += (py - r.y) * a;
-      let d = r.ta - r.angle;
-      while (d > Math.PI) d -= Math.PI * 2;
-      while (d < -Math.PI) d += Math.PI * 2;
-      r.angle += d * a;
+      // 버퍼 고갈(renderT 가 최신보다 앞섬) → 마지막 위치에서 보고된 속도로 짧게 외삽
+      const s = buf[buf.length - 1];
+      const ahead = clamp(renderT - s.t, 0, MAX_EXTRAP) / 1000;
+      tx = s.x + (r.evx || 0) * ahead;
+      ty = s.y + (r.evy || 0) * ahead;
+      ta = s.angle;
+    }
+
+    if (r.snap) { r.x = tx; r.y = ty; r.angle = ta; r.snap = false; } // 첫 등장/텔레포트 → 즉시 스냅
+    else {
+      r.x += (tx - r.x) * ease;      // 이징 = 재생시계/지터 저역통과 필터
+      r.y += (ty - r.y) * ease;
+      let d = ta - r.angle; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
+      r.angle += d * ease;
     }
     // 드리프트 중인 원격 차량의 타이어 자국
     if (r.drifting) pushSkid(r, r.x, r.y, r.angle, SKID_COLOR);
@@ -3209,17 +3234,18 @@ function updateRemotes(dt) {
   }
 }
 
-// (구버전 서버 폴백은 데드레커닝으로 통합 — st/속도 없으면 tvx/tvy=0 이라 자연히 최근 위치로 수렴)
+// 구버전 서버(st 미제공) 폴백 : 버퍼 최신값으로 지수 수렴 (현 서버는 st 를 보내므로 거의 안 쓰임)
 function updateRemotesFallback() {
   for (const [id, r] of remotePlayers) {
-    if (r.tx == null) continue;
-    r.x = lerp(r.x, r.tx, 0.25);
-    r.y = lerp(r.y, r.ty, 0.25);
-    let d = r.ta - r.angle;
+    const s = r.buf && r.buf[r.buf.length - 1];
+    if (!s) continue;
+    r.x = lerp(r.x, s.x, 0.25);
+    r.y = lerp(r.y, s.y, 0.25);
+    let d = s.angle - r.angle;
     while (d > Math.PI) d -= Math.PI * 2;
     while (d < -Math.PI) d += Math.PI * 2;
     r.angle += d * 0.25;
-    if (r.drifting) pushSkid(r, r.x, r.y, r.angle, SKID_COLOR); // drifting 은 스냅샷 핸들러에서 갱신
+    if (r.drifting) pushSkid(r, r.x, r.y, r.angle, SKID_COLOR);
     else r._skid = null;
   }
 }
