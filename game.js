@@ -208,9 +208,8 @@ const account = {
   proWins: 0, proPlays: 0, loginTime: 0,
   totalTime: 0,   // 평생 누적 접속 시간(ms) — 서버가 보낸 "실시간" 값
   totalTimeAt: 0, // 위 값을 수신한 클라 시각(performance 아님) — 라이브 증가 기준
-  bestMs: 0,      // 자유 레이싱 개인 최고 기록(ms)
-  bestHardMs: 0,  // 하드코어 레이싱 개인 최고 기록(ms)
-  bestSerpMs: 0,  // 구불구불 레이싱 개인 최고 기록(ms)
+  bestMs: 0,      // 초보자 코스(자유) 개인 최고 기록(ms)
+  bestHardMs: 0,  // 어려움 코스(하드) 개인 최고 기록(ms)
 };
 
 /* =============================================================================
@@ -2622,7 +2621,6 @@ function connect() {
       account.totalTimeAt = Date.now();
       account.bestMs = msg.bestMs || 0;
       account.bestHardMs = msg.bestHardMs || 0;
-      account.bestSerpMs = msg.bestSerpMs || 0;
       account.loginTime = Date.now();
       playerName = msg.nickname;
       try { localStorage.setItem("carGameToken", msg.token); } catch {}
@@ -2650,12 +2648,7 @@ function connect() {
       if (typeof msg.bestHardMs === "number") {
         const improved = msg.bestHardMs > 0 && (!account.bestHardMs || msg.bestHardMs < account.bestHardMs);
         account.bestHardMs = msg.bestHardMs;
-        if (improved) SFX.record(); // 하드 기록 갱신 팡파레
-      }
-      if (typeof msg.bestSerpMs === "number") {
-        const improved = msg.bestSerpMs > 0 && (!account.bestSerpMs || msg.bestSerpMs < account.bestSerpMs);
-        account.bestSerpMs = msg.bestSerpMs;
-        if (improved) SFX.record(); // 구불구불 기록 갱신 팡파레
+        if (improved) SFX.record(); // 어려움 코스 기록 갱신 팡파레
       }
       updateDashboard();
     } else if (msg.type === "counts") {
@@ -3973,7 +3966,7 @@ function sendLogout() {
   if (net.connected && net.ws.readyState === WebSocket.OPEN) net.ws.send(JSON.stringify({ type: "logout", token: tk }));
   account.loggedIn = false; account.isAdmin = false; account.userId = null;
   account.proWins = 0; account.proPlays = 0;
-  account.totalTime = 0; account.totalTimeAt = 0; account.bestMs = 0; account.bestHardMs = 0; account.bestSerpMs = 0; account.loginTime = 0;
+  account.totalTime = 0; account.totalTimeAt = 0; account.bestMs = 0; account.bestHardMs = 0; account.loginTime = 0;
   updateAuthUI();
 }
 
@@ -4022,12 +4015,9 @@ function updateDashboard() {
   // 자유 레이싱 개인 최고 기록
   const best = document.getElementById("dashBest");
   if (best) best.textContent = account.bestMs ? fmtRaceTime(account.bestMs) : "-";
-  // 하드코어 레이싱 개인 최고 기록
+  // 어려움 코스(하드) 개인 최고 기록
   const bestHard = document.getElementById("dashBestHard");
   if (bestHard) bestHard.textContent = account.bestHardMs ? fmtRaceTime(account.bestHardMs) : "-";
-  // 구불구불 레이싱 개인 최고 기록
-  const bestSerp = document.getElementById("dashBestSerp");
-  if (bestSerp) bestSerp.textContent = account.bestSerpMs ? fmtRaceTime(account.bestSerpMs) : "-";
 }
 function showAccountModal() {
   document.getElementById("accId").textContent = account.userId || "-";
