@@ -944,12 +944,18 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   .stand-rank { width: 15px; }
   .stand-lap { min-width: 24px; }
 
-  /* --- 왼쪽 위 : 나가기 → 속력 → 채팅 --- */
-  body:not(.lobby) #exitBtn { left: calc(14px + env(safe-area-inset-left)); right: auto; top: calc(12px + env(safe-area-inset-top)); font-size: 15px; }
-  body:not(.lobby) #speed { left: calc(15px + env(safe-area-inset-left)); right: auto; top: calc(44px + env(safe-area-inset-top)); bottom: auto; }
+  /* --- 왼쪽 위 : 나가기(알약 버튼) → 속력 → 채팅 --- */
+  body:not(.lobby) #exitBtn {
+    left: calc(14px + env(safe-area-inset-left)); right: auto; top: calc(12px + env(safe-area-inset-top));
+    font-family: 'Jua', sans-serif; font-size: 14px; color: var(--ink);
+    background: rgba(255, 255, 255, 0.82); border: 1px solid var(--line);
+    border-radius: 999px; padding: 8px 18px; text-shadow: none;
+    box-shadow: 0 4px 14px rgba(58, 54, 46, 0.14);
+  }
+  body:not(.lobby) #speed { left: calc(16px + env(safe-area-inset-left)); right: auto; top: calc(58px + env(safe-area-inset-top)); bottom: auto; }
   body:not(.lobby) #chat {
     left: calc(12px + env(safe-area-inset-left)); right: auto;
-    top: calc(74px + env(safe-area-inset-top)); bottom: auto;
+    top: calc(86px + env(safe-area-inset-top)); bottom: auto;
     width: 172px;
   }
   body:not(.lobby) #chatLog { height: 88px; font-size: 12px; padding: 0 8px; }

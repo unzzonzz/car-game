@@ -241,10 +241,12 @@ function loginPlayer(p, userId) {
   p.isAdmin = p.account.isAdmin;
   p.name = u.nickname;
   p.loginAt = Date.now();
+  if (u.color) p.color = u.color; // 계정에 저장된 차 색 → 즉시 릴레이에 반영
   send(p, {
     type: "authOk", id: userId, nickname: u.nickname, isAdmin: p.isAdmin,
     token: u.token, proWins: u.proWins || 0, proPlays: u.proPlays || 0,
     bestMs: u.bestTime || 0, bestHardMs: u.bestTimeHard || 0, bestSerpMs: u.bestTimeSerp || 0, totalTime: liveTotalTime(p),
+    color: u.color || null, settings: u.settings || null, // 계정에 저장된 차 색 + 설정 복원
   });
 }
 
@@ -379,6 +381,26 @@ wss.on("connection", (ws) => {
       u.password = String(msg.next); delete u.salt; delete u.hash;
       persistUser(p.account.userId);
       send(p, { type: "pwOk" });
+      return;
+
+    } else if (msg.type === "savePrefs") {
+      // 계정별 차 색 + 설정 영속 저장 (로그인 유저만, 값 검증 후 저장)
+      if (!p.account) return;
+      const u = users[p.account.userId];
+      if (!u) return;
+      if (typeof msg.color === "string" && /^#[0-9a-fA-F]{6}$/.test(msg.color)) { u.color = msg.color; p.color = msg.color; }
+      const s = msg.settings;
+      if (s && typeof s === "object") {
+        const clean = (u.settings && typeof u.settings === "object") ? { ...u.settings } : {};
+        if (typeof s.volume === "number" && isFinite(s.volume)) clean.volume = Math.min(1, Math.max(0, s.volume));
+        if (typeof s.fov === "number" && isFinite(s.fov)) clean.fov = Math.min(100, Math.max(40, Math.round(s.fov)));
+        if (typeof s.showOthers === "boolean") clean.showOthers = s.showOthers;
+        if (typeof s.showSpeed === "boolean") clean.showSpeed = s.showSpeed;
+        if (["tl", "tr", "bl", "br"].includes(s.hudMm)) clean.hudMm = s.hudMm;
+        if (["tl", "tr", "bl", "br"].includes(s.hudChat)) clean.hudChat = s.hudChat;
+        u.settings = clean;
+      }
+      persistUser(p.account.userId);
       return;
     }
 

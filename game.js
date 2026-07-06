@@ -2510,6 +2510,45 @@ function setCarColor(c) {
   carColorCache = c;
   try { localStorage.setItem("carColor", c); } catch {}
 }
+
+/* 계정 환경설정(차 색 + 설정)을 서버(DB)에 저장 — 로그인 유저만. 비로그인은 localStorage 유지.
+ *  슬라이더 연속 변경 대비 디바운스. */
+let prefsSaveTimer = null;
+function savePrefs() {
+  if (!account.loggedIn) return;
+  clearTimeout(prefsSaveTimer);
+  prefsSaveTimer = setTimeout(() => {
+    if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
+    net.ws.send(JSON.stringify({
+      type: "savePrefs",
+      color: myColor(),
+      settings: {
+        volume: SFX.getVolume(), fov: fov,
+        showOthers: showOthers, showSpeed: showSpeed,
+        hudMm: hudLayout.mm, hudChat: hudLayout.chat,
+      },
+    }));
+  }, 400);
+}
+/* 로그인 시 계정에 저장돼 있던 차 색/설정을 복원해 적용 (authOk 에서 호출). */
+function applyAccountPrefs(color, settings) {
+  if (typeof color === "string" && /^#[0-9a-fA-F]{6}$/.test(color)) setCarColor(color);
+  if (settings && typeof settings === "object") {
+    if (typeof settings.volume === "number") SFX.setVolume(settings.volume);
+    if (typeof settings.fov === "number") {
+      const oldMult = fovMult();
+      fov = Math.min(100, Math.max(40, Math.round(settings.fov)));
+      try { localStorage.setItem("fov", String(fov)); } catch {}
+      const ratio = fovMult() / oldMult; camera.zoomT *= ratio; camera.zoom *= ratio;
+    }
+    if (typeof settings.showOthers === "boolean") { showOthers = settings.showOthers; try { localStorage.setItem("showOthers", showOthers ? "1" : "0"); } catch {} applyOthersToggle(); }
+    if (typeof settings.showSpeed === "boolean") { showSpeed = settings.showSpeed; try { localStorage.setItem("showSpeed", showSpeed ? "1" : "0"); } catch {} applySpeedVisibility(); }
+    if (HUD_CORNERS.includes(settings.hudMm)) hudLayout.mm = settings.hudMm;
+    if (HUD_CORNERS.includes(settings.hudChat)) hudLayout.chat = settings.hudChat;
+    applyHudLayout(); saveHudLayout();
+  }
+  syncSettingsUI();
+}
 // 밝기(0~1) — 흰색 계열 차가 흰 바닥에 묻히지 않게 아웃라인 판단용
 function hexLum(hex) {
   const n = parseInt(hex.slice(1), 16);
@@ -2578,6 +2617,7 @@ function connect() {
       try { localStorage.setItem("carGameToken", msg.token); } catch {}
       hideAuthModal();
       updateAuthUI();
+      applyAccountPrefs(msg.color, msg.settings); // 계정에 저장된 차 색/설정 복원
     } else if (msg.type === "authError") {
       if (!msg.silent) alert(msg.reason || "인증 실패");
       else { try { localStorage.removeItem("carGameToken"); } catch {} } // 만료 토큰 정리
@@ -3675,6 +3715,7 @@ function setupMenu() {
     showOthers = !showOthers;
     try { localStorage.setItem("showOthers", showOthers ? "1" : "0"); } catch {}
     applyOthersToggle();
+    savePrefs();
   });
 }
 
@@ -3699,6 +3740,7 @@ function setupLobbyUI() {
   volInput.addEventListener("input", () => {
     document.getElementById("setVolumeVal").textContent = volInput.value;
     SFX.setVolume(volInput.value / 100);
+    savePrefs();
   });
   volInput.addEventListener("change", () => SFX.click()); // 놓았을 때 현재 볼륨으로 미리듣기
   const fovInput = document.getElementById("setFov");
@@ -3711,6 +3753,7 @@ function setupLobbyUI() {
     const ratio = fovMult() / oldMult;
     camera.zoomT *= ratio;
     camera.zoom *= ratio;
+    savePrefs();
   });
   for (const [segId, key] of [["setMmPos", "mm"], ["setChatPos", "chat"]]) {
     document.getElementById(segId).addEventListener("click", (e) => {
@@ -3720,6 +3763,7 @@ function setupLobbyUI() {
       applyHudLayout();
       saveHudLayout();
       syncSettingsUI();
+      savePrefs();
       SFX.click();
     });
   }
@@ -3731,6 +3775,7 @@ function setupLobbyUI() {
     try { localStorage.setItem("showSpeed", showSpeed ? "1" : "0"); } catch {}
     applySpeedVisibility();
     syncSettingsUI();
+    savePrefs();
     SFX.click();
   });
   document.getElementById("lobDash").addEventListener("click", showDashboard);
@@ -3753,6 +3798,7 @@ function setupLobbyUI() {
           custom.selAnim = { from, delta, at: performance.now() };
         }
         setCarColor(CAR_COLORS[i]);
+        savePrefs();
         SFX.click();
       }
       return; // 커스텀 중엔 게이트 클릭 무시
