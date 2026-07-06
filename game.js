@@ -1259,37 +1259,34 @@ function obbMTV(a, b) {
   return { nx, ny, depth: minOv };
 }
 
-/* 8-b) 다른 플레이어와 충돌 — 자동차 실제 사각형(OBB) 히트박스로 정확히 판정.
- *  중심점 원이 아니라 차체 사각형이라, 옆으로 나란히·앞뒤·비스듬한 모서리까지 실제처럼 부딪힌다.
- *  서버 권위가 아닌 "클라 대칭 분리" : 각 클라가 자기 차를 상대 OBB 밖으로 밀어내고
- *  파고들던 속도를 없앤다(양쪽 동시 → 서로 못 지나감). 다른 차가 보일 때만 적용.
- *  ※ 상대에게 운동량 전달(밀쳐 날리기)은 서버 권위 물리가 있어야 완전해진다. */
-let lastBumpSfx = 0;
-const CAR_HIT_BOUNCE = 1.15; // 접근 속도 반사(1=미끄러짐, >1=살짝 튕김)
+/* 8-b) 다른 플레이어와 충돌 — 위치 겹침 방지(즉시)만 클라가 처리한다.
+ *  자동차 실제 사각형(OBB)으로 겹치면 상대 밖으로 밀어내 시각적 파고듦을 없앤다.
+ *  ※ 속도/운동량 변화(밀치기)는 "서버 권위" 로 처리한다 → 서버가 두 차의 실제 속도로
+ *    2체 충돌 임펄스를 계산해 양쪽에 "bump" 로 통지(handleNet 의 bump 처리). */
 const CAR_HIT_INSET = 1;     // 히트박스를 차체보다 살짝 작게(px) — 시각 겹침 방지 여유
 function updatePlayerCollision(car) {
   if (gameMode === "lobby" || !othersVisible()) return; // 로비/고스트 숨김 시 충돌 없음
   const hl = car.length / 2 - CAR_HIT_INSET, hw = car.width / 2 - CAR_HIT_INSET;
   const me = { x: car.x, y: car.y, ang: car.angle, hl, hw };
-  let bumpSpeed = 0;
   for (const [, r] of remotePlayers) {
-    const other = { x: r.x, y: r.y, ang: r.angle, hl, hw }; // 같은 차종 → 같은 치수
-    const mtv = obbMTV(me, other);
+    const mtv = obbMTV(me, { x: r.x, y: r.y, ang: r.angle, hl, hw }); // 같은 차종 → 같은 치수
     if (!mtv) continue;
-    car.x += mtv.nx * mtv.depth;   // 겹침 밖으로 밀어냄
+    car.x += mtv.nx * mtv.depth;   // 겹침 밖으로(위치만) — 속도는 서버 임펄스가 담당
     car.y += mtv.ny * mtv.depth;
     me.x = car.x; me.y = car.y;    // 여러 대와 연쇄 충돌 시 갱신 위치로 계속 판정
-    const vin = car.vx * mtv.nx + car.vy * mtv.ny; // 밀려나는 방향 속도(<0 = 파고드는 중)
-    if (vin < 0) {
-      car.vx -= vin * mtv.nx * CAR_HIT_BOUNCE;
-      car.vy -= vin * mtv.ny * CAR_HIT_BOUNCE;
-      bumpSpeed = Math.max(bumpSpeed, -vin);
-    }
   }
-  if (bumpSpeed > 0) {
-    decompose(car); // 바뀐 vx/vy 를 lf/ll(주 적분변수)에 반영
-    const now = performance.now();
-    if (bumpSpeed > 60 && now - lastBumpSfx > 200) { lastBumpSfx = now; SFX.collision(clamp(bumpSpeed / 700, 0.25, 0.8)); }
+}
+// 서버 권위 충돌 임펄스 수신 → 내 차 속도에 반영(진짜 밀려남/밀치기) + 효과음·흔들림
+let lastBumpSfx = 0;
+function applyBump(vx, vy) {
+  CAR.vx += vx; CAR.vy += vy;
+  decompose(CAR); // 바뀐 vx/vy 를 lf/ll(주 적분변수)에 반영
+  const sp = Math.hypot(vx, vy);
+  const now = performance.now();
+  if (sp > 40 && now - lastBumpSfx > 120) {
+    lastBumpSfx = now;
+    SFX.collision(clamp(sp / 700, 0.25, 0.9));
+    camera.shake = Math.min((camera.shake || 0) + sp * 0.012, 10); // 충격 흔들림
   }
 }
 
@@ -2623,6 +2620,9 @@ function connect() {
       CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
       CAR.invulnUntil = performance.now() + 1500;
       net.pendingTeleport = true; // 남들 화면에서 슬라이드 없이 스냅되도록
+    } else if (msg.type === "bump") {
+      // 서버 권위 충돌 임펄스 → 내 차 속도에 반영(진짜 밀치기/밀려남)
+      if (gameState === "playing" && gameMode !== "lobby") applyBump(Number(msg.vx) || 0, Number(msg.vy) || 0);
     } else if (msg.type === "death") {
       // 서버 판정: 내가 죽었다 → 모드 선택 화면으로 복귀
       handleDeath();
@@ -3098,6 +3098,8 @@ function netSend(car, now) {
     angle: +car.angle.toFixed(3),
     drifting: car.drifting, // 드리프트 중일 때만 → 남들 화면에도 그때만 자국
     color: myColor(),       // 커스텀 차 색 → 서버가 스냅샷으로 릴레이
+    vx: Math.round(car.vx), vy: Math.round(car.vy), // 서버 권위 충돌 임펄스 계산용
+    collide: othersVisible(), // 충돌 대상 여부(다른 차 보일 때만 밀치기)
   };
   // 막 텔레포트(벽/플레이어 리스폰)했으면 서버·남들에게 스냅하라고 알린다
   if (net.pendingTeleport) { msg.teleport = true; net.pendingTeleport = false; }

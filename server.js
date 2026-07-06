@@ -64,6 +64,66 @@ function flagCheat(p, now, reason) {
   }
 }
 
+/* =============================================================================
+ *  서버 권위 충돌(진짜 밀치기) — 클라가 보고한 위치+속도로 서버가 직접 판정한다.
+ *   · 히트박스: 자동차 실제 사각형(OBB), 분리축정리(SAT)로 겹침·법선 계산
+ *   · 반응: 등질량 2체 충돌 임펄스(운동량 전달 + 반발) → 양쪽에 "bump" 로 통지
+ *   → 두 클라가 같은 임펄스를 받으므로, 들이받으면 상대가 실제로 밀려나고 일관된다.
+ *   (위치 겹침 방지는 클라가 즉시 처리, 속도/운동량 변화는 서버가 권위)
+ * ========================================================================== */
+const CAR_HL = 18, CAR_HW = 8;   // 히트박스 반길이/반폭 (game.js 차체와 일치)
+const BUMP_RESTITUTION = 0.3;    // 반발계수(0=완전 비탄성, 1=완전 탄성)
+const BUMP_COOLDOWN_MS = 110;    // 같은 쌍 재충돌 최소 간격(임펄스 스팸 방지)
+const BUMP_MIN_J = 12;           // 이보다 작은 임펄스는 무시(미세 접촉)
+const bumpCooldowns = new Map(); // "idA:idB" -> 만료시각
+const pairKey = (a, b) => (a < b ? a + ":" + b : b + ":" + a);
+
+// 두 자동차 사각형(OBB)의 최소 분리 벡터(MTV). 겹치면 {nx,ny,depth}(A→밀려날 방향), 아니면 null.
+function carMTV(ax, ay, aAng, bx, by, bAng) {
+  const aC = Math.cos(aAng), aS = Math.sin(aAng), bC = Math.cos(bAng), bS = Math.sin(bAng);
+  const axes = [{ x: aC, y: aS }, { x: -aS, y: aC }, { x: bC, y: bS }, { x: -bS, y: bC }];
+  const dx = bx - ax, dy = by - ay;
+  let minOv = Infinity, nx = 0, ny = 0;
+  for (const ax0 of axes) {
+    const aR = CAR_HL * Math.abs(ax0.x * aC + ax0.y * aS) + CAR_HW * Math.abs(-ax0.x * aS + ax0.y * aC);
+    const bR = CAR_HL * Math.abs(ax0.x * bC + ax0.y * bS) + CAR_HW * Math.abs(-ax0.x * bS + ax0.y * bC);
+    const proj = dx * ax0.x + dy * ax0.y, ov = aR + bR - Math.abs(proj);
+    if (ov <= 0) return null;                       // 분리축 존재 → 충돌 아님
+    if (ov < minOv) { minOv = ov; const s = proj >= 0 ? -1 : 1; nx = ax0.x * s; ny = ax0.y * s; }
+  }
+  return { nx, ny, depth: minOv };
+}
+
+// 한 그룹(같은 방/모드에서 충돌 대상인 차들)의 쌍별 충돌을 풀어 각 차에 임펄스 통지
+function resolveCarCollisions(list, now) {
+  const impulses = new Map(); // id -> {vx,vy}
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      const A = list[i], B = list[j], sa = A.p.state, sb = B.p.state;
+      const mtv = carMTV(sa.x, sa.y, sa.angle, sb.x, sb.y, sb.angle);
+      if (!mtv) continue;
+      const key = pairKey(A.id, B.id);
+      if (now < (bumpCooldowns.get(key) || 0)) continue;      // 쿨다운 중
+      const nx = mtv.nx, ny = mtv.ny;
+      const vrel = ((sa.vx || 0) - (sb.vx || 0)) * nx + ((sa.vy || 0) - (sb.vy || 0)) * ny;
+      if (vrel >= 0) continue;                                 // 멀어지는 중 → 반응 없음
+      let J = -(1 + BUMP_RESTITUTION) * vrel / 2;              // 등질량 임펄스 스칼라
+      if (J < BUMP_MIN_J) continue;                            // 미세 접촉 무시
+      if (J > MAX_LEGIT_PXS) J = MAX_LEGIT_PXS;                // 과도 임펄스 상한(치트 방어)
+      const ia = impulses.get(A.id) || { vx: 0, vy: 0 }; ia.vx += J * nx; ia.vy += J * ny; impulses.set(A.id, ia);
+      const ib = impulses.get(B.id) || { vx: 0, vy: 0 }; ib.vx -= J * nx; ib.vy -= J * ny; impulses.set(B.id, ib);
+      bumpCooldowns.set(key, now + BUMP_COOLDOWN_MS);
+    }
+  }
+  for (const [id, imp] of impulses) {
+    const p = players.get(id);
+    if (!p || !p.state) continue;
+    p.state.vx = (p.state.vx || 0) + imp.vx;                  // 서버 저장 속도에도 반영(다음 틱 안정화)
+    p.state.vy = (p.state.vy || 0) + imp.vy;
+    send(p, { type: "bump", vx: Math.round(imp.vx), vy: Math.round(imp.vy) });
+  }
+}
+
 // 프로 맵 풀 : 서버가 인덱스만 정하고, 클라가 같은 인덱스로 동일 트랙을 생성한다.
 //  자유 레이싱은 고정 맵이라 랜덤이 없다. (game.js 의 PRO_RECIPES.length 와 일치)
 const PRO_RECIPE_COUNT = 5;
@@ -446,7 +506,12 @@ wss.on("connection", (ws) => {
 
       // 커스텀 차 색 (형식 검증 후 저장 → 스냅샷으로 릴레이)
       if (typeof msg.color === "string" && /^#[0-9a-fA-F]{6}$/.test(msg.color)) p.color = msg.color;
-      p.state = { x, y, angle: ang, drifting: !!msg.drifting, teleport: !!msg.teleport };
+      // 속도(vx,vy) — 서버 권위 충돌 임펄스 계산용. 최고속 초과분은 클램프(과충격 치트 방어).
+      let vx = Number(msg.vx) || 0, vy = Number(msg.vy) || 0;
+      const sp = Math.hypot(vx, vy);
+      if (sp > MAX_LEGIT_PXS) { const k = MAX_LEGIT_PXS / sp; vx *= k; vy *= k; }
+      p.state = { x, y, angle: ang, drifting: !!msg.drifting, teleport: !!msg.teleport, vx, vy };
+      p.collide = !!msg.collide && !flagged; // 충돌 대상 여부(플래그된 차는 충돌 제외)
 
       // 프로 레이싱 : 랩/완주는 서버가 게이팅 (클라가 보낸 lap 을 그대로 믿지 않는다)
       if (p.mode === "pro" && p.roomId != null && typeof msg.lap === "number") {
@@ -851,6 +916,21 @@ function runCollisions() {
 }
 
 setInterval(runCollisions, 1000 / COLLISION_HZ);
+
+// 서버 권위 차량 충돌(밀치기) 틱 : 같은 방(프로)/같은 모드에서 충돌 대상 차들을 모아 판정.
+setInterval(() => {
+  const now = Date.now();
+  const groups = new Map(); // 그룹키 -> [{id,p}]
+  for (const [id, p] of players) {
+    if (!p.active || !p.state || !p.collide) continue;
+    const key = p.mode === "pro" ? (p.roomId != null ? "room:" + p.roomId : null) : "mode:" + p.mode;
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ id, p });
+  }
+  for (const [, list] of groups) if (list.length >= 2) resolveCarCollisions(list, now);
+  for (const [k, t] of bumpCooldowns) if (now > t) bumpCooldowns.delete(k); // 만료 쿨다운 정리
+}, 1000 / COLLISION_HZ);
 
 // --- 브로드캐스트 루프 ------------------------------------------------------
 //  모드별로 활성 플레이어들의 최신 상태를 모아 30Hz 로 전송한다.
