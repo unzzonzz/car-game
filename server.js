@@ -283,6 +283,9 @@ const MIME = {
   ".css": "text/css",
   ".js": "application/javascript",
   ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".webmanifest": "application/manifest+json",
+  ".json": "application/json",
 };
 
 const server = http.createServer((req, res) => {
