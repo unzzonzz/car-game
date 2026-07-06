@@ -1233,6 +1233,41 @@ function updateCollision(car) {
   }
 }
 
+/* 8-b) 다른 플레이어와 충돌 — 서버 권위가 아닌 "클라이언트 대칭 분리" 방식.
+ *  각 클라가 자기 차를 상대(원격) 밖으로 밀어내고, 파고들던 속도를 없앤다.
+ *  양쪽이 동시에 하므로 서로 부딪혀 못 지나가는 것처럼 보인다(겹침 방지 + 살짝 튕김).
+ *  다른 차가 "실제로 보이는" 때만 적용 → 타임어택 참고용 고스트(숨김/반투명)는 통과.
+ *  ※ 상대에게 운동량을 전달하진 못한다(그건 서버 권위 물리 필요). 원 근사라 측면
+ *    여유가 조금 있다 — 더 정밀히 하려면 캡슐/OBB 로 확장 가능. */
+let lastBumpSfx = 0;
+const CAR_HIT_R = 34;        // 두 차 최소 중심간 거리(px) — 겹침 한계 (튜닝 가능)
+const CAR_HIT_BOUNCE = 1.2;  // 접근 속도 반사 계수(1=미끄러짐, >1=살짝 튕김)
+function updatePlayerCollision(car) {
+  if (gameMode === "lobby" || !othersVisible()) return; // 로비/고스트 숨김 시 충돌 없음
+  const R = CAR_HIT_R, R2 = R * R;
+  let bumpSpeed = 0;
+  for (const [, r] of remotePlayers) {
+    const dx = car.x - r.x, dy = car.y - r.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 === 0 || d2 >= R2) continue;
+    const d = Math.sqrt(d2);
+    const nx = dx / d, ny = dy / d;         // 상대→나 방향(밀려날 방향)
+    car.x += nx * (R - d);                  // 겹침 밖으로 밀어냄
+    car.y += ny * (R - d);
+    const vin = car.vx * nx + car.vy * ny;  // 법선 방향 속도(<0 = 접근 중)
+    if (vin < 0) {                          // 파고들던 속도 제거 + 약간 반사
+      car.vx -= vin * nx * CAR_HIT_BOUNCE;
+      car.vy -= vin * ny * CAR_HIT_BOUNCE;
+      bumpSpeed = Math.max(bumpSpeed, -vin);
+    }
+  }
+  if (bumpSpeed > 0) {
+    decompose(car); // 바뀐 vx/vy 를 lf/ll(주 적분변수)에 반영
+    const now = performance.now();
+    if (bumpSpeed > 60 && now - lastBumpSfx > 200) { lastBumpSfx = now; SFX.collision(clamp(bumpSpeed / 700, 0.25, 0.8)); }
+  }
+}
+
 /* 9) 노면 — 레이싱 트랙 이탈 시 감속 ------------------------------------------
  *  트랙(캡슐 링) 밖(풀밭/안쪽 구멍)에서는 전진 속도를 추가로 깎아 느려지게 한다. */
 function updateSurface(car, dt) {
@@ -3043,8 +3078,8 @@ function netSend(car, now) {
 // 렌더를 서버 시각보다 이만큼 과거로 늦춰(재생 시계), 그 사이 도착한 스냅샷을
 // 확보해두고 "서버 송신 시각(일정 간격)" 기준으로 두 스냅샷을 보간한다.
 // → 도착 지터/버스트가 있어도 일정 속도로 매끈하게 움직인다.
-const INTERP_DELAY = 90; // ms (60Hz면 스냅샷 ~5개분 버퍼 → 지연 줄이면서도 안전)
-const MAX_EXTRAP = 140;  // ms : 패킷이 늦으면 마지막 속도로 이 시간까지만 외삽(그 뒤 정지)
+const INTERP_DELAY = 50;  // ms — 낮을수록 지연↓(실물서버 저지연 기준). 60Hz면 ~3스냅샷 버퍼.
+const MAX_EXTRAP = 160;   // ms : 패킷이 늦으면 마지막 속도로 이 시간까지 외삽(지터 흡수 → 안 끊김)
 
 // 원격 차량 : 서버 타임스탬프 기반 엔티티 보간 (Source 엔진식).
 //  서버가 st 를 주지 않으면(재배포 전) 기존 지수 스무딩으로 폴백한다.
@@ -3181,6 +3216,7 @@ function frame(now) {
   // ----- 네트워크 -----
   netSend(CAR, now);          // 내 상태 송신
   updateRemotes(dt);          // 원격 차량 보간 (서버 타임스탬프 기반)
+  updatePlayerCollision(CAR); // 원격 위치 갱신 후, 내 차를 상대 밖으로 밀어냄(겹침 방지)
   updateExplosions(dt);       // 폭발 이펙트 갱신 (킬 판정은 서버가 통지)
 
   render(CAR);                // 렌더
