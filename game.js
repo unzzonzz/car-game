@@ -3589,6 +3589,10 @@ function updateLobby(dt) {
     }
   }
 
+  // 전환(와이프) 진행 중엔 게이트 진입 판정을 멈춘다 → 화면이 커버되는 260ms 동안 차가
+  //  게이트 위에 그대로 있어 도넛이 다시 차오르는(버퍼링 스피너처럼 보이는) 현상 방지.
+  if (wipeBusy) { lobby.gate = null; lobby.prog = 0; return; }
+
   // 게이트 진입 : 패치 안에 머무르면 도넛이 차오르고, 가득 차면 입장
   let g = null;
   for (const gate of LOBBY_GATES) {
