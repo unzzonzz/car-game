@@ -1233,31 +1233,56 @@ function updateCollision(car) {
   }
 }
 
-/* 8-b) 다른 플레이어와 충돌 — 서버 권위가 아닌 "클라이언트 대칭 분리" 방식.
- *  각 클라가 자기 차를 상대(원격) 밖으로 밀어내고, 파고들던 속도를 없앤다.
- *  양쪽이 동시에 하므로 서로 부딪혀 못 지나가는 것처럼 보인다(겹침 방지 + 살짝 튕김).
- *  다른 차가 "실제로 보이는" 때만 적용 → 타임어택 참고용 고스트(숨김/반투명)는 통과.
- *  ※ 상대에게 운동량을 전달하진 못한다(그건 서버 권위 물리 필요). 원 근사라 측면
- *    여유가 조금 있다 — 더 정밀히 하려면 캡슐/OBB 로 확장 가능. */
+/* 두 방향성 사각형(OBB)의 최소 분리 벡터(MTV) — 분리축 정리(SAT).
+ *  겹치면 {nx,ny,depth} (A 를 B 에서 밀어내는 단위방향 + 겹침 깊이), 안 겹치면 null.
+ *  a,b = {x,y,ang,hl,hw} : 중심, 방향각, 반길이(전후), 반폭(좌우). 차는 회전 사각형이라
+ *  각 박스의 forward/lateral 축 4개만 검사하면 충분하다. */
+function obbMTV(a, b) {
+  const aC = Math.cos(a.ang), aS = Math.sin(a.ang);
+  const bC = Math.cos(b.ang), bS = Math.sin(b.ang);
+  const axes = [ { x: aC, y: aS }, { x: -aS, y: aC }, { x: bC, y: bS }, { x: -bS, y: bC } ];
+  const dx = b.x - a.x, dy = b.y - a.y; // A→B 중심 벡터
+  let minOv = Infinity, nx = 0, ny = 0;
+  for (const ax of axes) {
+    // 각 박스의 반경을 이 축에 투영 : hl·|축·forward| + hw·|축·lateral|
+    const aR = a.hl * Math.abs(ax.x * aC + ax.y * aS) + a.hw * Math.abs(-ax.x * aS + ax.y * aC);
+    const bR = b.hl * Math.abs(ax.x * bC + ax.y * bS) + b.hw * Math.abs(-ax.x * bS + ax.y * bC);
+    const proj = dx * ax.x + dy * ax.y;   // 중심거리를 이 축에 투영
+    const ov = aR + bR - Math.abs(proj);  // 반경합 - 중심거리 = 겹침량
+    if (ov <= 0) return null;             // 분리축 발견 → 충돌 아님(빠른 탈출)
+    if (ov < minOv) {                     // 가장 얕게 겹친 축이 밀어낼 방향
+      minOv = ov;
+      const s = proj >= 0 ? -1 : 1;       // A 를 B 반대쪽으로 밀어낸다
+      nx = ax.x * s; ny = ax.y * s;
+    }
+  }
+  return { nx, ny, depth: minOv };
+}
+
+/* 8-b) 다른 플레이어와 충돌 — 자동차 실제 사각형(OBB) 히트박스로 정확히 판정.
+ *  중심점 원이 아니라 차체 사각형이라, 옆으로 나란히·앞뒤·비스듬한 모서리까지 실제처럼 부딪힌다.
+ *  서버 권위가 아닌 "클라 대칭 분리" : 각 클라가 자기 차를 상대 OBB 밖으로 밀어내고
+ *  파고들던 속도를 없앤다(양쪽 동시 → 서로 못 지나감). 다른 차가 보일 때만 적용.
+ *  ※ 상대에게 운동량 전달(밀쳐 날리기)은 서버 권위 물리가 있어야 완전해진다. */
 let lastBumpSfx = 0;
-const CAR_HIT_R = 34;        // 두 차 최소 중심간 거리(px) — 겹침 한계 (튜닝 가능)
-const CAR_HIT_BOUNCE = 1.2;  // 접근 속도 반사 계수(1=미끄러짐, >1=살짝 튕김)
+const CAR_HIT_BOUNCE = 1.15; // 접근 속도 반사(1=미끄러짐, >1=살짝 튕김)
+const CAR_HIT_INSET = 1;     // 히트박스를 차체보다 살짝 작게(px) — 시각 겹침 방지 여유
 function updatePlayerCollision(car) {
   if (gameMode === "lobby" || !othersVisible()) return; // 로비/고스트 숨김 시 충돌 없음
-  const R = CAR_HIT_R, R2 = R * R;
+  const hl = car.length / 2 - CAR_HIT_INSET, hw = car.width / 2 - CAR_HIT_INSET;
+  const me = { x: car.x, y: car.y, ang: car.angle, hl, hw };
   let bumpSpeed = 0;
   for (const [, r] of remotePlayers) {
-    const dx = car.x - r.x, dy = car.y - r.y;
-    const d2 = dx * dx + dy * dy;
-    if (d2 === 0 || d2 >= R2) continue;
-    const d = Math.sqrt(d2);
-    const nx = dx / d, ny = dy / d;         // 상대→나 방향(밀려날 방향)
-    car.x += nx * (R - d);                  // 겹침 밖으로 밀어냄
-    car.y += ny * (R - d);
-    const vin = car.vx * nx + car.vy * ny;  // 법선 방향 속도(<0 = 접근 중)
-    if (vin < 0) {                          // 파고들던 속도 제거 + 약간 반사
-      car.vx -= vin * nx * CAR_HIT_BOUNCE;
-      car.vy -= vin * ny * CAR_HIT_BOUNCE;
+    const other = { x: r.x, y: r.y, ang: r.angle, hl, hw }; // 같은 차종 → 같은 치수
+    const mtv = obbMTV(me, other);
+    if (!mtv) continue;
+    car.x += mtv.nx * mtv.depth;   // 겹침 밖으로 밀어냄
+    car.y += mtv.ny * mtv.depth;
+    me.x = car.x; me.y = car.y;    // 여러 대와 연쇄 충돌 시 갱신 위치로 계속 판정
+    const vin = car.vx * mtv.nx + car.vy * mtv.ny; // 밀려나는 방향 속도(<0 = 파고드는 중)
+    if (vin < 0) {
+      car.vx -= vin * mtv.nx * CAR_HIT_BOUNCE;
+      car.vy -= vin * mtv.ny * CAR_HIT_BOUNCE;
       bumpSpeed = Math.max(bumpSpeed, -vin);
     }
   }
@@ -2660,6 +2685,16 @@ function connect() {
         net.hasServerTime = true;
         if (msg.st > net.serverNewest) net.serverNewest = msg.st;
       }
+      // 적응형 지연 : 스냅샷 도착 간격의 "최근 최대값"을 지터로 보고 목표 지연을 잡아
+      //  부드럽게 수렴시킨다 (매끈하면 ~40ms, 랙 심하면 최대 220ms 까지 자동 상승).
+      const nowA = performance.now();
+      if (lastSnapAt) {
+        const gap = nowA - lastSnapAt;
+        snapGapMax = Math.max(gap, snapGapMax * 0.95);          // 스파이크엔 즉시↑, 평소엔 천천히↓
+        const target = clamp(snapGapMax * 1.5 + 10, INTERP_BASE, INTERP_MAX);
+        interpDelay += (target - interpDelay) * 0.08;           // 급변 방지, 천천히 조절
+      }
+      lastSnapAt = nowA;
       const st = hasSt ? msg.st : performance.now();
       const seen = new Set();
       for (const p of msg.players) {
@@ -3078,8 +3113,14 @@ function netSend(car, now) {
 // 렌더를 서버 시각보다 이만큼 과거로 늦춰(재생 시계), 그 사이 도착한 스냅샷을
 // 확보해두고 "서버 송신 시각(일정 간격)" 기준으로 두 스냅샷을 보간한다.
 // → 도착 지터/버스트가 있어도 일정 속도로 매끈하게 움직인다.
-const INTERP_DELAY = 50;  // ms — 낮을수록 지연↓(실물서버 저지연 기준). 60Hz면 ~3스냅샷 버퍼.
-const MAX_EXTRAP = 160;   // ms : 패킷이 늦으면 마지막 속도로 이 시간까지 외삽(지터 흡수 → 안 끊김)
+// 적응형 보간 지연 : 스냅샷 도착 지터를 재서 버퍼 깊이를 자동 조절한다.
+//  망이 매끈하면 지연을 최소로(저지연), 지터/랙이 심하면 자동으로 키워 끊김을 막는다.
+const INTERP_BASE = 40;   // 최소 지연(ms) — 아주 매끈한 망
+const INTERP_MAX = 220;   // 최대 지연(ms) — 지터/랙 심할 때 상한
+let interpDelay = 60;     // 현재 적용 중인 지연(ms), 매 스냅샷마다 동적 조절
+let lastSnapAt = 0;       // 직전 스냅샷 도착 시각(클라 시계)
+let snapGapMax = 33;      // 최근 최대 도착 간격(감쇠) — 지터 추정치
+const MAX_EXTRAP = 180;   // ms : 패킷이 늦으면 마지막 속도로 이 시간까지 외삽(지터 흡수 → 안 끊김)
 
 // 원격 차량 : 서버 타임스탬프 기반 엔티티 보간 (Source 엔진식).
 //  서버가 st 를 주지 않으면(재배포 전) 기존 지수 스무딩으로 폴백한다.
@@ -3087,15 +3128,15 @@ function updateRemotes(dt) {
   if (!net.hasServerTime) { updateRemotesFallback(); return; }
   if (net.serverNewest === 0) return; // 아직 스냅샷 없음
 
-  // 재생 시계 : 실시간으로 전진시키되(등속 보장), (서버최신 - INTERP_DELAY)로 부드럽게 수렴
-  const target = net.serverNewest - INTERP_DELAY;
+  // 재생 시계 : 실시간으로 전진시키되(등속 보장), (서버최신 - interpDelay)로 부드럽게 수렴
+  const target = net.serverNewest - interpDelay;
   if (net.playT === null) net.playT = target;
   else {
     net.playT += dt * 1000;
     net.playT += (target - net.playT) * clamp(dt * 2.5, 0, 1); // 드리프트 보정
     // 데이터보다 조금 앞서는 것은 허용(짧은 외삽으로 끊김 방지) — 단 상한을 둔다
     if (net.playT > net.serverNewest + MAX_EXTRAP) net.playT = net.serverNewest + MAX_EXTRAP;
-    if (net.serverNewest - net.playT > INTERP_DELAY + 500) net.playT = target; // 너무 뒤처지면 리싱크
+    if (net.serverNewest - net.playT > interpDelay + 500) net.playT = target; // 너무 뒤처지면 리싱크
   }
   const renderT = net.playT;
 
