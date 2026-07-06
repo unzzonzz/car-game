@@ -724,18 +724,20 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   width: 76px;
   height: 76px;
   border-radius: 50%;
-  border: none;
-  background: rgba(255, 255, 255, 0.14);
-  color: var(--white);
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--ink);          /* 밝은 로비·어두운 트랙 어디서나 보이게 진한 잉크색 + 테두리/그림자 */
+  box-shadow: 0 4px 14px rgba(58, 54, 46, 0.14);
   font-size: 15px;
-  font-weight: 400;
+  font-weight: 600;
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
   touch-action: none;
 }
-.touch-btn:active { background: rgba(255, 255, 255, 0.3); }
-.touch-btn.gas { width: 92px; height: 92px; background: rgba(90, 200, 120, 0.28); }
+.touch-btn:active { background: rgba(255, 255, 255, 0.88); }
+.touch-btn.gas { width: 92px; height: 92px; background: rgba(87, 184, 104, 0.82); color: #fff; border-color: rgba(87, 184, 104, 0.55); }
+.touch-btn.gas:active { background: rgba(87, 184, 104, 1); }
 
 /* 자유 모드 TOP10 기록 (채팅 아래, 순위판과 같은 위치/스타일) */
 #topRecords {
