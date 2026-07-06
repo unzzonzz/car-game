@@ -2553,6 +2553,7 @@ function connect() {
         : modeCounts.racing + modeCounts.hard + modeCounts.serp + modeCounts.pro;
       const on = document.getElementById("lobOnline");
       if (on) on.textContent = `온라인 ${modeCounts.total}`;
+      updateMapPopupCounts(); // 맵 팝업이 열려 있으면 카드별 인원도 갱신
     } else if (msg.type === "spawn") {
       // 서버가 정한 입장/부활 위치 → 거기서 시작.
       //  로비(서버 미입장)와 테스트(클라이언트가 스타트 라인 뒤에 직접 배치,
@@ -3523,6 +3524,12 @@ function openMapPopup(groupKey) {
     ds.textContent = m.desc;
     card.append(nm, ds);
     if (m.mode) {
+      // "준비 중" 칩과 같은 스타일로 현재 접속 인원 표시
+      const cnt = document.createElement("span");
+      cnt.className = "map-card-count";
+      cnt.dataset.mode = m.mode;
+      cnt.textContent = `${modeCounts[m.mode] || 0}명`;
+      card.appendChild(cnt);
       card.addEventListener("click", () => { closeMapPopup(); wipeTo(() => startGame(m.mode), { title: m.name, desc: m.desc }); });
     } else {
       const chip = document.createElement("span");
@@ -3543,6 +3550,14 @@ function closeMapPopup() {
   // 게이트 위에 있어도 팝업이 바로 다시 열리지 않게 — 벗어나야 재무장
   const g = LOBBY_GATES.find((x) => x.group === mapPopup.group);
   if (g) lobby.holdGate = g;
+}
+
+// 맵 팝업이 열려 있으면 각 카드의 "n명" 칩을 최신 접속자 수로 갱신 (counts 수신 시 호출)
+function updateMapPopupCounts() {
+  if (!mapPopup.open) return;
+  for (const el of document.querySelectorAll("#mapGrid .map-card-count")) {
+    el.textContent = `${modeCounts[el.dataset.mode] || 0}명`;
+  }
 }
 
 /* 커스텀 열기 : 차 정지 + 현재 위치를 링 중심으로 고정, 카메라 살짝 줌인 */
