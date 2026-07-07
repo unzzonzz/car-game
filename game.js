@@ -4017,22 +4017,7 @@ function updateAuthUI() {
 }
 
 let dashTimer = null;
-// ms epoch → "YYYY-MM-DD HH:MM" (한국시간 KST 고정 — 기기 시간대와 무관하게 일관)
-function fmtDateTime(ms) {
-  const d = new Date(ms + 9 * 3600 * 1000), p = (n) => String(n).padStart(2, "0"); // UTC+9(한국, DST 없음)
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
-}
 function updateDashboard() {
-  // 접속 상태 : 현재 서버 연결 여부 (본인 대시보드는 접속 중이면 초록)
-  const status = document.getElementById("dashStatus");
-  if (status) {
-    const on = !!net.connected;
-    status.textContent = on ? "접속 중" : "오프라인";
-    status.style.color = on ? "var(--green)" : "var(--muted)";
-  }
-  // 마지막 접속 : 직전(이번 로그인 이전) 접속 시각
-  const last = document.getElementById("dashLastLogin");
-  if (last) last.textContent = account.lastLogin ? fmtDateTime(account.lastLogin) : "처음 접속";
   document.getElementById("dashWins").textContent = account.proWins;
   document.getElementById("dashPlays").textContent = account.proPlays;
   // 접속 시간 = 서버가 보낸 실시간 평생값 + 수신 후 경과분 (라이브, 이중계산 없음)
