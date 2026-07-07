@@ -163,7 +163,7 @@ const modeCounts = { racing: 0, hard: 0, serp: 0, pro: 0, test: 0, total: 0 };
 let gameMode = "lobby";      // "lobby" | "racing" | "hard" | "serp" | "pro" | "test"
 let world = WORLD.lobby;     // 현재 월드 치수/타입
 let gameState = "menu";      // "menu" | "playing"
-let playerName = "Player";
+let playerName = "게스트";
 
 // 프로 레이싱 상태 (서버 'roomList'/'race' 메시지로 갱신)
 const race = {
@@ -3029,7 +3029,7 @@ const MAX_CHAT_LINES = 80;
 function currentName() {
   if (gameState === "playing") return playerName;
   const v = (document.getElementById("nameInput").value || "").trim().slice(0, 12);
-  return v || "Player";
+  return v || "게스트";
 }
 
 function sendChat() {
@@ -3411,7 +3411,7 @@ function startGame(mode) {
   } else {
     let stored = "";
     try { stored = (localStorage.getItem("carGameName") || "").trim(); } catch {}
-    playerName = stored.slice(0, 12) || "Player";
+    playerName = stored.slice(0, 12) || "게스트";
   }
 
   // 로비 오버레이/팝업 숨김 + 카메라 원복(줌/앵커)
@@ -3629,7 +3629,7 @@ function openCustomRooms() {
   if (net.connected && net.ws.readyState === WebSocket.OPEN) {
     let stored = "";
     try { stored = (localStorage.getItem("carGameName") || "").trim(); } catch {}
-    playerName = account.loggedIn ? account.nickname : (stored.slice(0, 12) || "Player");
+    playerName = account.loggedIn ? account.nickname : (stored.slice(0, 12) || "게스트");
     net.ws.send(JSON.stringify({ type: "join", mode: "pro", name: playerName }));
   }
   updateRaceUI();
@@ -3970,7 +3970,11 @@ function sendLogout() {
   account.loggedIn = false; account.isAdmin = false; account.userId = null;
   account.proWins = 0; account.proPlays = 0;
   account.totalTime = 0; account.totalTimeAt = 0; account.bestMs = 0; account.bestHardMs = 0; account.loginTime = 0;
-  updateAuthUI();
+  // 로그아웃 즉시 게스트 이름으로 전환 (저장된 게스트 이름 있으면 그것, 없으면 "게스트")
+  let guest = "";
+  try { guest = (localStorage.getItem("carGameName") || "").trim().slice(0, 12); } catch {}
+  playerName = guest || "게스트";
+  updateAuthUI(); // 이름 입력칸도 게스트 이름으로 복원
 }
 
 // 로그인/회원가입 팝업 열기/닫기
@@ -4001,7 +4005,12 @@ function updateAuthUI() {
     const ni = document.getElementById("nameInput");
     ni.value = account.nickname; ni.disabled = true;
   } else {
-    document.getElementById("nameInput").disabled = false;
+    // 로그아웃 시 계정 닉네임이 남지 않게 저장된 게스트 이름(없으면 빈칸)으로 복원
+    const ni = document.getElementById("nameInput");
+    ni.disabled = false;
+    let guest = "";
+    try { guest = (localStorage.getItem("carGameName") || "").trim(); } catch {}
+    ni.value = guest;
   }
 }
 
@@ -4119,6 +4128,14 @@ function setupAuth() {
   document.getElementById("dashBtn").addEventListener("click", showDashboard);
   document.getElementById("dashClose").addEventListener("click", hideDashboard);
   document.getElementById("accPwBtn").addEventListener("click", sendChangePassword);
+  // 계정 폼 : Enter 로 바로 전송
+  const enterSubmit = (ids, fn) => ids.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); fn(); } });
+  });
+  enterSubmit(["loginId", "loginPw"], sendLogin);
+  enterSubmit(["signupId", "signupNick", "signupPw"], sendSignup);
+  enterSubmit(["accCurPw", "accNewPw"], sendChangePassword);
   updateAuthUI();
 }
 
