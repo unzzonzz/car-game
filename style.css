@@ -1181,7 +1181,7 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
 }
 .map-card:hover:not(:disabled) { border-color: #d8d2c4; background: #f3f0e8; }
 .map-card-name { font-size: 16px; color: var(--ink); }
-.map-card-desc { font-size: 11.5px; color: var(--muted-2); line-height: 1.4; text-align: center; }
+.map-card-desc { font-size: 11.5px; color: var(--muted-2); line-height: 1.4; text-align: center; white-space: nowrap; }
 .map-card.soon { cursor: default; }
 .map-card.soon .map-card-name,
 .map-card.soon .map-card-desc { color: #d3cec2; }
