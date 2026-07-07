@@ -44,9 +44,9 @@ const CONFIG = {
  *  - serp     : 완전 구불구불한 슬라럼 코스(연속 U턴). 트랙 폭 300px.
  * ========================================================================== */
 const WORLD = {
-  racing: { w: 10000, h: 6000, type: "track", track: null },  // 연습 코스 A (밸런스)
-  hard: { w: 10000, h: 6000, type: "track", track: null },    // 연습 코스 B (테크니컬)
-  serp: { w: 10000, h: 6000, type: "track", track: null },    // 연습 코스 C (고속)
+  racing: { w: 10000, h: 6000, type: "track", track: null },  // 연습 B-1 (밸런스)
+  hard: { w: 10000, h: 6000, type: "track", track: null },    // 연습 B-2 (테크니컬)
+  serp: { w: 10000, h: 6000, type: "track", track: null },    // 연습 B-3 (고속)
   pro: { w: 10000, h: 6000, type: "track", track: null },     // 프로 레이싱(다른 서킷)
   lobby: { w: 3600, h: 3600, type: "lobby" },                 // 로비(메인 화면) — 로컬 전용
   test: { w: 6000, h: 3400, type: "stadium", track: null },   // 테스트 : 가로로 긴 운동장 트랙 (새 플랫 디자인)
@@ -130,9 +130,9 @@ const MAP_GROUPS = {
     title: "연습",
     desc: "다른 유저들과 함께 맵을 달리며 기록을 재는 모드",
     maps: [
-      { name: "코스 A", desc: "완만~중속 코너가 고르게 섞인 밸런스 코스", mode: "racing" },
-      { name: "코스 B", desc: "좁은 폭에 급코너가 많은 테크니컬 코스", mode: "hard" },
-      { name: "코스 C", desc: "긴 스윕으로 속도를 내는 고속 코스", mode: "serp" },
+      { name: "B-1", desc: "완만~중속 코너가 고르게 섞인 밸런스 코스", mode: "racing" },
+      { name: "B-2", desc: "좁은 폭에 급코너가 많은 테크니컬 코스", mode: "hard" },
+      { name: "B-3", desc: "긴 스윕으로 속도를 내는 고속 코스", mode: "serp" },
     ],
   },
 };
@@ -209,9 +209,9 @@ const account = {
   proWins: 0, proPlays: 0, loginTime: 0,
   totalTime: 0,   // 평생 누적 접속 시간(ms) — 서버가 보낸 "실시간" 값
   totalTimeAt: 0, // 위 값을 수신한 클라 시각(performance 아님) — 라이브 증가 기준
-  bestMs: 0,      // 코스 A 개인 최고 기록(ms)
-  bestHardMs: 0,  // 코스 B 개인 최고 기록(ms)
-  bestSerpMs: 0,  // 코스 C 개인 최고 기록(ms)
+  bestMs: 0,      // B-1 개인 최고 기록(ms) — 서버 bestB1
+  bestHardMs: 0,  // B-2 개인 최고 기록(ms) — 서버 bestB2
+  bestSerpMs: 0,  // B-3 개인 최고 기록(ms) — 서버 bestB3
   lastLogin: 0,   // 직전 접속 시각(ms epoch, 0=처음)
 };
 
@@ -664,9 +664,9 @@ function makeHardTrack(points, opts) {
   return { halfWidth: opts.halfWidth, kerb: opts.kerb, centerline, path, start };
 }
 
-/* 연습 코스 A/B/C — 셋 다 초보자 맵 크기(10000×6000) + 하드 규격(좁은 폭 112, 가혹한 잔디).
+/* 연습 코스 B-1/B-2/B-3 — 셋 다 초보자 맵 크기(10000×6000) + 하드 규격(좁은 폭 112, 가혹한 잔디).
  *  makeTrack 방사형 R(a): 진폭 합 < 1 → R>0 항상 → 자기교차(겹침) 없음.
- *  A=밸런스(완만~중속 코너 고르게), B=테크니컬(급코너 많음), C=고속(큰 로브+긴 스윕). */
+ *  B-1=밸런스(완만~중속 고르게), B-2=테크니컬(급코너 많음), B-3=고속(큰 로브+긴 스윕). */
 const PRACTICE_BASE = { w: 10000, h: 6000, halfWidth: 112, kerb: 16, stretch: 1.6 };
 const PRACTICE_A = { ...PRACTICE_BASE,
   R: a => 1 + 0.20 * Math.sin(2 * a + 0.4) + 0.16 * Math.sin(3 * a + 1.7) + 0.10 * Math.sin(4 * a + 0.9) };
@@ -706,16 +706,16 @@ function buildProTrack(index) {
 }
 
 function generateTrack() {
-  WORLD.racing.track = makeTrack(PRACTICE_A); // 연습 코스 A (밸런스)
+  WORLD.racing.track = makeTrack(PRACTICE_A); // 연습 B-1 (밸런스)
   WORLD.pro.track = buildProTrack(0);         // 프로 기본값 (서버 인덱스로 교체됨)
 }
 
 function generateHardTrack() {
-  WORLD.hard.track = makeTrack(PRACTICE_B); // 연습 코스 B (테크니컬)
+  WORLD.hard.track = makeTrack(PRACTICE_B); // 연습 B-2 (테크니컬)
 }
 
 function generateSerpTrack() {
-  WORLD.serp.track = makeTrack(PRACTICE_C); // 연습 코스 C (고속)
+  WORLD.serp.track = makeTrack(PRACTICE_C); // 연습 B-3 (고속)
 }
 
 /* 테스트 맵 : 가로로 긴 운동장(스타디움) 트랙 — 직선 2 + 반원 2 의 단순한 링.
@@ -1239,7 +1239,7 @@ function applyBump(vx, vy) {
 function updateSurface(car, dt) {
   if (!isTrackWorld()) return;                 // 자유/프로/하드 레이싱 모두 적용
   if (isOnTrack(car.x, car.y)) return;
-  // 풀밭 저항 : 전진/측면 속도를 지수적으로 감쇠. 연습 코스 A/B/C(racing/hard/serp)는 모두 가혹하게(하드 규격)
+  // 풀밭 저항 : 전진/측면 속도를 지수적으로 감쇠. 연습 B-1/B-2/B-3(racing/hard/serp)는 모두 가혹하게(하드 규격)
   const drag = (gameMode === "racing" || gameMode === "hard" || gameMode === "serp") ? OFFTRACK_DRAG_HARD : OFFTRACK_DRAG;
   const f = Math.exp(-drag * dt);
   car.lf *= f;
@@ -2585,12 +2585,12 @@ function connect() {
       if (typeof msg.bestHardMs === "number") {
         const improved = msg.bestHardMs > 0 && (!account.bestHardMs || msg.bestHardMs < account.bestHardMs);
         account.bestHardMs = msg.bestHardMs;
-        if (improved) SFX.record(); // 코스 B 기록 갱신 팡파레
+        if (improved) SFX.record(); // B-2 기록 갱신 팡파레
       }
       if (typeof msg.bestSerpMs === "number") {
         const improved = msg.bestSerpMs > 0 && (!account.bestSerpMs || msg.bestSerpMs < account.bestSerpMs);
         account.bestSerpMs = msg.bestSerpMs;
-        if (improved) SFX.record(); // 코스 C 기록 갱신 팡파레
+        if (improved) SFX.record(); // B-3 기록 갱신 팡파레
       }
       updateDashboard();
     } else if (msg.type === "counts") {
@@ -3968,13 +3968,13 @@ function updateDashboard() {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   document.getElementById("dashTime").textContent =
     (h ? h + "시간 " : "") + m + "분 " + sec + "초";
-  // 코스 A 개인 최고 기록
+  // B-1 개인 최고 기록
   const best = document.getElementById("dashBest");
   if (best) best.textContent = account.bestMs ? fmtRaceTime(account.bestMs) : "-";
-  // 코스 B 개인 최고 기록
+  // B-2 개인 최고 기록
   const bestHard = document.getElementById("dashBestHard");
   if (bestHard) bestHard.textContent = account.bestHardMs ? fmtRaceTime(account.bestHardMs) : "-";
-  // 코스 C 개인 최고 기록
+  // B-3 개인 최고 기록
   const bestSerp = document.getElementById("dashBestSerp");
   if (bestSerp) bestSerp.textContent = account.bestSerpMs ? fmtRaceTime(account.bestSerpMs) : "-";
 }
