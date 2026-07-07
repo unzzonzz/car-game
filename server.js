@@ -204,9 +204,9 @@ const PW_RULE_MSG = "비밀번호는 8자 이상, 영문·숫자·특수기호�
 
 // 타임어택 TOP10 : 각 유저의 개인 최고기록 필드에서 파생 (모드별로 필드가 다름).
 //  → 로그인 유저만 기록되고, 유저당 최고 1개만 랭크된다.
-//  새 연습코스 B-1/B-2/B-3 은 새 컬럼(bestB1/bestB2/bestB3)에 따로 기록한다.
+//  연습코스는 각자 새 컬럼에 기록한다 : A-1~3=bestA1/A2/A3, B-1~3=bestB1/B2/B3.
 //  옛 기록(bestTime=자유, bestTimeHard=하드)은 건드리지 않고 그대로 보존한다.
-const RECORD_FIELD = { racing: "bestB1", hard: "bestB2", serp: "bestB3" };
+const RECORD_FIELD = { a1: "bestA1", a2: "bestA2", a3: "bestA3", racing: "bestB1", hard: "bestB2", serp: "bestB3" };
 function topRecordsList(field) {
   const arr = [];
   for (const id in users) {
@@ -248,6 +248,7 @@ function loginPlayer(p, userId) {
   send(p, {
     type: "authOk", id: userId, nickname: u.nickname, isAdmin: p.isAdmin,
     token: u.token, proWins: u.proWins || 0, proPlays: u.proPlays || 0,
+    bestA1Ms: u.bestA1 || 0, bestA2Ms: u.bestA2 || 0, bestA3Ms: u.bestA3 || 0,
     bestMs: u.bestB1 || 0, bestHardMs: u.bestB2 || 0, bestSerpMs: u.bestB3 || 0, totalTime: liveTotalTime(p),
     color: u.color || null, settings: u.settings || null, // 계정에 저장된 차 색 + 설정 복원
     lastLogin: u.lastLogin, // 마지막 활동 시각
@@ -279,7 +280,7 @@ function sendStats(p) {
   if (!p.account) return;
   const u = users[p.account.userId];
   if (!u) return;
-  send(p, { type: "stats", proWins: u.proWins || 0, proPlays: u.proPlays || 0, bestMs: u.bestB1 || 0, bestHardMs: u.bestB2 || 0, bestSerpMs: u.bestB3 || 0, totalTime: liveTotalTime(p), lastLogin: u.lastLogin || 0 });
+  send(p, { type: "stats", proWins: u.proWins || 0, proPlays: u.proPlays || 0, bestA1Ms: u.bestA1 || 0, bestA2Ms: u.bestA2 || 0, bestA3Ms: u.bestA3 || 0, bestMs: u.bestB1 || 0, bestHardMs: u.bestB2 || 0, bestSerpMs: u.bestB3 || 0, totalTime: liveTotalTime(p), lastLogin: u.lastLogin || 0 });
 }
 
 // --- 정적 파일 서버 ---------------------------------------------------------
@@ -522,6 +523,9 @@ wss.on("connection", (ws) => {
       const mode = (msg.mode === "racing") ? "racing"
         : (msg.mode === "hard") ? "hard"
         : (msg.mode === "serp") ? "serp"
+        : (msg.mode === "a1") ? "a1"
+        : (msg.mode === "a2") ? "a2"
+        : (msg.mode === "a3") ? "a3"
         : (msg.mode === "test") ? "test"
         : (msg.mode === "pro") ? "pro" : "survival";
 
@@ -752,7 +756,7 @@ function broadcastConnected(obj) {
 
 // 모드별 참가 인원을 "모든 접속자"(메뉴 화면 포함)에게 알린다 → 모드 버튼에 표시
 function broadcastCounts() {
-  const counts = { survival: 0, racing: 0, hard: 0, serp: 0, pro: 0, test: 0 };
+  const counts = { survival: 0, a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, pro: 0, test: 0 };
   for (const [, p] of players) {
     if (p.active && counts[p.mode] !== undefined) counts[p.mode]++;
   }
@@ -1028,7 +1032,7 @@ setInterval(() => {
 //  (서바이벌/레이싱 플레이어는 서로 보이지 않도록 분리)
 setInterval(() => {
   const now = Date.now();
-  const byMode = { survival: [], racing: [], hard: [], serp: [], test: [] };
+  const byMode = { survival: [], a1: [], a2: [], a3: [], racing: [], hard: [], serp: [], test: [] };
   const byRoom = new Map(); // roomId -> entries (프로는 같은 방끼리만 본다)
 
   for (const [id, p] of players) {

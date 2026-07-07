@@ -44,6 +44,9 @@ const CONFIG = {
  *  - serp     : 완전 구불구불한 슬라럼 코스(연속 U턴). 트랙 폭 300px.
  * ========================================================================== */
 const WORLD = {
+  a1: { w: 10000, h: 6000, type: "track", track: null },      // 연습 A-1 (입문)
+  a2: { w: 10000, h: 6000, type: "track", track: null },      // 연습 A-2 (순한 S)
+  a3: { w: 10000, h: 6000, type: "track", track: null },      // 연습 A-3 (라운드)
   racing: { w: 10000, h: 6000, type: "track", track: null },  // 연습 B-1 (밸런스)
   hard: { w: 10000, h: 6000, type: "track", track: null },    // 연습 B-2 (테크니컬)
   serp: { w: 10000, h: 6000, type: "track", track: null },    // 연습 B-3 (고속)
@@ -128,8 +131,11 @@ const MAP_GROUPS = {
   // 커스텀 그룹은 팝업 없이 게이트에서 바로 방 목록(pro)으로 직행한다.
   practice: {
     title: "연습",
-    desc: "다른 유저들과 함께 맵을 달리며 기록을 재는 모드",
+    desc: "기록을 재는 연습 코스 — A조(넓고 쉬움) · B조(좁고 어려움)",
     maps: [
+      { name: "A-1", desc: "큰 곡선 위주의 가장 쉬운 입문 코스", mode: "a1" },
+      { name: "A-2", desc: "완만한 S가 섞인 흐름 좋은 코스", mode: "a2" },
+      { name: "A-3", desc: "둥근 코너가 이어지는 균형 코스", mode: "a3" },
       { name: "B-1", desc: "완만~중속 코너가 고르게 섞인 밸런스 코스", mode: "racing" },
       { name: "B-2", desc: "좁은 폭에 급코너가 많은 테크니컬 코스", mode: "hard" },
       { name: "B-3", desc: "긴 스윕으로 속도를 내는 고속 코스", mode: "serp" },
@@ -158,7 +164,7 @@ const CAR_COLORS = [
 ];
 const CUSTOM_RING_R = 175; // 링 반지름(월드 px)
 const custom = { active: false, cx: 0, cy: 0, selAnim: null }; // selAnim = 픽커(선택 링) 슬라이드 애니메이션
-const modeCounts = { racing: 0, hard: 0, serp: 0, pro: 0, test: 0, total: 0 };
+const modeCounts = { a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, pro: 0, test: 0, total: 0 };
 
 // 현재 모드/월드/게임 상태 (실제 시작은 하단 enterLobby() 가 로비로 설정)
 let gameMode = "lobby";      // "lobby" | "racing" | "hard" | "serp" | "pro" | "test"
@@ -209,6 +215,9 @@ const account = {
   proWins: 0, proPlays: 0, loginTime: 0,
   totalTime: 0,   // 평생 누적 접속 시간(ms) — 서버가 보낸 "실시간" 값
   totalTimeAt: 0, // 위 값을 수신한 클라 시각(performance 아님) — 라이브 증가 기준
+  bestA1Ms: 0,    // A-1 개인 최고 기록(ms) — 서버 bestA1
+  bestA2Ms: 0,    // A-2 개인 최고 기록(ms) — 서버 bestA2
+  bestA3Ms: 0,    // A-3 개인 최고 기록(ms) — 서버 bestA3
   bestMs: 0,      // B-1 개인 최고 기록(ms) — 서버 bestB1
   bestHardMs: 0,  // B-2 개인 최고 기록(ms) — 서버 bestB2
   bestSerpMs: 0,  // B-3 개인 최고 기록(ms) — 서버 bestB3
@@ -664,16 +673,23 @@ function makeHardTrack(points, opts) {
   return { halfWidth: opts.halfWidth, kerb: opts.kerb, centerline, path, start };
 }
 
-/* 연습 코스 B-1/B-2/B-3 — 셋 다 초보자 맵 크기(10000×6000) + 하드 규격(좁은 폭 112, 가혹한 잔디).
- *  makeTrack 방사형 R(a): 진폭 합 < 1 → R>0 항상 → 자기교차(겹침) 없음.
- *  B-1=밸런스(완만~중속 고르게), B-2=테크니컬(급코너 많음), B-3=고속(큰 로브+긴 스윕). */
-const PRACTICE_BASE = { w: 10000, h: 6000, halfWidth: 112, kerb: 16, stretch: 1.6 };
-const PRACTICE_A = { ...PRACTICE_BASE,
+/* 연습 코스 — 모두 10000×6000. makeTrack 방사형 R(a): 진폭 합 < 1 → R>0 항상 → 자기교차(겹침) 없음.
+ *  A조 = 구 초보자 규격(넓은 폭 230, 완만한 잔디, 쉬운 큰 코너) : A-1 입문 / A-2 순한S / A-3 라운드
+ *  B조 = 하드 규격(좁은 폭 112, 가혹한 잔디, 급코너)         : B-1 밸런스 / B-2 테크니컬 / B-3 고속 */
+const A_BASE = { w: 10000, h: 6000, halfWidth: 230, kerb: 26, stretch: 1.7 }; // 초보자 규격(넓음)
+const B_BASE = { w: 10000, h: 6000, halfWidth: 112, kerb: 16, stretch: 1.6 }; // 하드 규격(좁음)
+const PRACTICE_A1 = { ...A_BASE,
+  R: a => 1 + 0.16 * Math.sin(2 * a + 0.5) + 0.11 * Math.sin(3 * a + 1.8) };
+const PRACTICE_A2 = { ...A_BASE,
+  R: a => 1 + 0.19 * Math.sin(2 * a + 2.2) + 0.10 * Math.sin(3 * a + 0.4) + 0.08 * Math.sin(4 * a + 1.5) };
+const PRACTICE_A3 = { ...A_BASE,
+  R: a => 1 + 0.13 * Math.sin(2 * a + 1.0) + 0.14 * Math.sin(3 * a + 2.5) + 0.07 * Math.sin(5 * a + 0.8) };
+const PRACTICE_B1 = { ...B_BASE,
   R: a => 1 + 0.20 * Math.sin(2 * a + 0.4) + 0.16 * Math.sin(3 * a + 1.7) + 0.10 * Math.sin(4 * a + 0.9) };
-const PRACTICE_B = { ...PRACTICE_BASE,
+const PRACTICE_B2 = { ...B_BASE,
   R: a => 1 + 0.13 * Math.sin(2 * a + 1.1) + 0.14 * Math.sin(4 * a + 0.3)
         + 0.10 * Math.sin(5 * a + 2.1) + 0.06 * Math.sin(7 * a + 1.4) };
-const PRACTICE_C = { ...PRACTICE_BASE,
+const PRACTICE_B3 = { ...B_BASE,
   R: a => 1 + 0.27 * Math.sin(2 * a + 2.4) + 0.14 * Math.sin(3 * a + 0.6) + 0.10 * Math.sin(5 * a + 1.9) };
 
 /* 프로 레이싱 전용 맵 풀 (더 구불구불, 5종). 서버가 인덱스를 정해 같은 레이스의
@@ -706,16 +722,13 @@ function buildProTrack(index) {
 }
 
 function generateTrack() {
-  WORLD.racing.track = makeTrack(PRACTICE_A); // 연습 B-1 (밸런스)
-  WORLD.pro.track = buildProTrack(0);         // 프로 기본값 (서버 인덱스로 교체됨)
-}
-
-function generateHardTrack() {
-  WORLD.hard.track = makeTrack(PRACTICE_B); // 연습 B-2 (테크니컬)
-}
-
-function generateSerpTrack() {
-  WORLD.serp.track = makeTrack(PRACTICE_C); // 연습 B-3 (고속)
+  WORLD.a1.track     = makeTrack(PRACTICE_A1); // 연습 A-1 (입문)
+  WORLD.a2.track     = makeTrack(PRACTICE_A2); // 연습 A-2 (순한 S)
+  WORLD.a3.track     = makeTrack(PRACTICE_A3); // 연습 A-3 (라운드)
+  WORLD.racing.track = makeTrack(PRACTICE_B1); // 연습 B-1 (밸런스)
+  WORLD.hard.track   = makeTrack(PRACTICE_B2); // 연습 B-2 (테크니컬)
+  WORLD.serp.track   = makeTrack(PRACTICE_B3); // 연습 B-3 (고속)
+  WORLD.pro.track = buildProTrack(0);          // 프로 기본값 (서버 인덱스로 교체됨)
 }
 
 /* 테스트 맵 : 가로로 긴 운동장(스타디움) 트랙 — 직선 2 + 반원 2 의 단순한 링.
@@ -748,8 +761,6 @@ function makeStadiumTrack() {
 
 function generateTracks() {
   generateTrack();
-  generateHardTrack();
-  generateSerpTrack();
   WORLD.test.track = makeStadiumTrack();
 }
 
@@ -924,7 +935,8 @@ function isTrackWorld() {
  *  회색 아스팔트 + 흰 라인 — 모든 레이싱 코스가 동일한 플랫 디자인. */
 function isFlatTrackMode() {
   return gameMode === "test" || gameMode === "racing" || gameMode === "hard"
-      || gameMode === "serp" || gameMode === "pro";
+      || gameMode === "serp" || gameMode === "pro"
+      || gameMode === "a1" || gameMode === "a2" || gameMode === "a3";
 }
 
 
@@ -1307,7 +1319,10 @@ function updateLap(car) {
 }
 
 // 타임어택 기록 기능이 있는 모드(자유/하드) 여부
-function isTimeAttackMode() { return gameMode === "racing" || gameMode === "hard" || gameMode === "serp"; }
+function isTimeAttackMode() {
+  return gameMode === "a1" || gameMode === "a2" || gameMode === "a3"
+      || gameMode === "racing" || gameMode === "hard" || gameMode === "serp";
+}
 
 // 타임어택 상태 초기화 (모드 진입/이탈 시)
 function resetAttack() {
@@ -1862,8 +1877,8 @@ function gateSub(g) {
     case "racing": return "준비 중"; // 일반전/경쟁전 모두 준비 중
     case "plaza": return "준비 중";
     case "custom": return `${modeCounts.pro || 0}명 접속 중`;
-    // 연습 = 실제 코스(racing/hard/serp) 멀티플레이 접속 수
-    case "practice": return `${(modeCounts.racing || 0) + (modeCounts.hard || 0) + (modeCounts.serp || 0)}명 접속 중`;
+    // 연습 = 실제 코스(A-1~3 + B-1~3) 멀티플레이 접속 수
+    case "practice": return `${(modeCounts.a1 || 0) + (modeCounts.a2 || 0) + (modeCounts.a3 || 0) + (modeCounts.racing || 0) + (modeCounts.hard || 0) + (modeCounts.serp || 0)}명 접속 중`;
     case "test": return `${modeCounts.test || 0}명 접속 중`;
     case "garage": return "차 색상 바꾸기";
     default: return "";
@@ -2553,6 +2568,9 @@ function connect() {
       account.proPlays = msg.proPlays || 0;
       account.totalTime = msg.totalTime || 0;
       account.totalTimeAt = Date.now();
+      account.bestA1Ms = msg.bestA1Ms || 0;
+      account.bestA2Ms = msg.bestA2Ms || 0;
+      account.bestA3Ms = msg.bestA3Ms || 0;
       account.bestMs = msg.bestMs || 0;
       account.bestHardMs = msg.bestHardMs || 0;
       account.bestSerpMs = msg.bestSerpMs || 0;
@@ -2577,6 +2595,21 @@ function connect() {
       account.proPlays = msg.proPlays || 0;
       if (typeof msg.lastLogin === "number") account.lastLogin = msg.lastLogin; // 마지막 접속 실시간 갱신
       if (typeof msg.totalTime === "number") { account.totalTime = msg.totalTime; account.totalTimeAt = Date.now(); }
+      if (typeof msg.bestA1Ms === "number") {
+        const improved = msg.bestA1Ms > 0 && (!account.bestA1Ms || msg.bestA1Ms < account.bestA1Ms);
+        account.bestA1Ms = msg.bestA1Ms;
+        if (improved) SFX.record(); // A-1 기록 갱신 팡파레
+      }
+      if (typeof msg.bestA2Ms === "number") {
+        const improved = msg.bestA2Ms > 0 && (!account.bestA2Ms || msg.bestA2Ms < account.bestA2Ms);
+        account.bestA2Ms = msg.bestA2Ms;
+        if (improved) SFX.record(); // A-2 기록 갱신 팡파레
+      }
+      if (typeof msg.bestA3Ms === "number") {
+        const improved = msg.bestA3Ms > 0 && (!account.bestA3Ms || msg.bestA3Ms < account.bestA3Ms);
+        account.bestA3Ms = msg.bestA3Ms;
+        if (improved) SFX.record(); // A-3 기록 갱신 팡파레
+      }
       if (typeof msg.bestMs === "number") {
         const improved = msg.bestMs > 0 && (!account.bestMs || msg.bestMs < account.bestMs); // 더 빠른 기록
         account.bestMs = msg.bestMs;
@@ -2595,6 +2628,9 @@ function connect() {
       updateDashboard();
     } else if (msg.type === "counts") {
       // 모드별 참가 인원 → 로비 게이트 숫자 + 온라인 표시 갱신
+      modeCounts.a1 = msg.a1 || 0;
+      modeCounts.a2 = msg.a2 || 0;
+      modeCounts.a3 = msg.a3 || 0;
       modeCounts.racing = msg.racing || 0;
       modeCounts.hard = msg.hard || 0;
       modeCounts.serp = msg.serp || 0;
@@ -2602,7 +2638,7 @@ function connect() {
       modeCounts.test = msg.test || 0;
       modeCounts.total = typeof msg.total === "number"
         ? msg.total
-        : modeCounts.racing + modeCounts.hard + modeCounts.serp + modeCounts.pro;
+        : modeCounts.a1 + modeCounts.a2 + modeCounts.a3 + modeCounts.racing + modeCounts.hard + modeCounts.serp + modeCounts.pro;
       const on = document.getElementById("lobOnline");
       if (on) on.textContent = `온라인 ${modeCounts.total}`;
       updateMapPopupCounts(); // 맵 팝업이 열려 있으면 카드별 인원도 갱신
@@ -3909,7 +3945,7 @@ function sendLogout() {
   if (net.connected && net.ws.readyState === WebSocket.OPEN) net.ws.send(JSON.stringify({ type: "logout", token: tk }));
   account.loggedIn = false; account.isAdmin = false; account.userId = null;
   account.proWins = 0; account.proPlays = 0;
-  account.totalTime = 0; account.totalTimeAt = 0; account.bestMs = 0; account.bestHardMs = 0; account.bestSerpMs = 0; account.loginTime = 0;
+  account.totalTime = 0; account.totalTimeAt = 0; account.bestA1Ms = 0; account.bestA2Ms = 0; account.bestA3Ms = 0; account.bestMs = 0; account.bestHardMs = 0; account.bestSerpMs = 0; account.loginTime = 0;
   // 로그아웃 즉시 게스트 이름으로 전환 (저장된 게스트 이름 있으면 그것, 없으면 "게스트")
   let guest = "";
   try { guest = (localStorage.getItem("carGameName") || "").trim().slice(0, 12); } catch {}
@@ -3968,6 +4004,13 @@ function updateDashboard() {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   document.getElementById("dashTime").textContent =
     (h ? h + "시간 " : "") + m + "분 " + sec + "초";
+  // A-1/A-2/A-3 개인 최고 기록
+  const a1 = document.getElementById("dashA1");
+  if (a1) a1.textContent = account.bestA1Ms ? fmtRaceTime(account.bestA1Ms) : "-";
+  const a2 = document.getElementById("dashA2");
+  if (a2) a2.textContent = account.bestA2Ms ? fmtRaceTime(account.bestA2Ms) : "-";
+  const a3 = document.getElementById("dashA3");
+  if (a3) a3.textContent = account.bestA3Ms ? fmtRaceTime(account.bestA3Ms) : "-";
   // B-1 개인 최고 기록
   const best = document.getElementById("dashBest");
   if (best) best.textContent = account.bestMs ? fmtRaceTime(account.bestMs) : "-";

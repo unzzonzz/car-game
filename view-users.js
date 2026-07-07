@@ -1,8 +1,7 @@
 // users.json 을 터미널에서 보기 좋은 표로 출력한다 (비밀번호/토큰은 표시 안 함).
 //  실행:  node view-users.js            (기본: 마지막 접속 최신순)
-//  정렬:  node view-users.js b1         B-1 기록 빠른순
-//         node view-users.js b2         B-2 기록 빠른순
-//         node view-users.js b3         B-3 기록 빠른순
+//  정렬:  node view-users.js a1|a2|a3   A-1/A-2/A-3 기록 빠른순
+//         node view-users.js b1|b2|b3   B-1/B-2/B-3 기록 빠른순
 //         node view-users.js time       총 접속시간 많은순
 //  * 자유(구)/하드(구)는 코스 개편 전 옛 기록(보존용)
 //         node view-users.js wins       프로 우승 많은순
@@ -44,6 +43,9 @@ const padL = (s, w) => " ".repeat(Math.max(0, w - dispW(s))) + String(s);
 // --- 정렬 ---
 const key = process.argv[2] || "last";
 const sorters = {
+  a1: (a, b) => (a.bestA1 || 1e12) - (b.bestA1 || 1e12),
+  a2: (a, b) => (a.bestA2 || 1e12) - (b.bestA2 || 1e12),
+  a3: (a, b) => (a.bestA3 || 1e12) - (b.bestA3 || 1e12),
   b1: (a, b) => (a.bestB1 || 1e12) - (b.bestB1 || 1e12),
   b2: (a, b) => (a.bestB2 || 1e12) - (b.bestB2 || 1e12),
   b3: (a, b) => (a.bestB3 || 1e12) - (b.bestB3 || 1e12),
@@ -58,6 +60,9 @@ rows.sort(sorters[key] || sorters.last);
 const cols = [
   { h: "아이디", get: (u) => u.id || "-", pad: padR },
   { h: "닉네임", get: (u) => u.nickname || "-", pad: padR },
+  { h: "A-1", get: (u) => fmtRace(u.bestA1), pad: padL },
+  { h: "A-2", get: (u) => fmtRace(u.bestA2), pad: padL },
+  { h: "A-3", get: (u) => fmtRace(u.bestA3), pad: padL },
   { h: "B-1", get: (u) => fmtRace(u.bestB1), pad: padL },
   { h: "B-2", get: (u) => fmtRace(u.bestB2), pad: padL },
   { h: "B-3", get: (u) => fmtRace(u.bestB3), pad: padL },
@@ -71,7 +76,7 @@ const cols = [
 const width = cols.map((c) => Math.max(dispW(c.h), ...rows.map((u) => dispW(c.get(u)))));
 const line = (cells) => cells.map((c, i) => cols[i].pad(c, width[i])).join("  ");
 
-console.log(`\n총 ${rows.length}명  ·  정렬: ${key}  (b1/b2/b3/time/wins/name 으로 바꿀 수 있어요)\n`);
+console.log(`\n총 ${rows.length}명  ·  정렬: ${key}  (a1/a2/a3/b1/b2/b3/time/wins/name 으로 바꿀 수 있어요)\n`);
 console.log(line(cols.map((c) => c.h)));
 console.log(width.map((w) => "-".repeat(w)).join("  "));
 for (const u of rows) console.log(line(cols.map((c) => c.get(u))));

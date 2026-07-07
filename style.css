@@ -1160,6 +1160,8 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
   display: grid;
   grid-template-columns: repeat(3, 1fr); /* 가로 최대 3개 */
   gap: 14px;
+  max-height: 64vh;      /* 코스가 많아도(A조+B조 6개) 화면을 넘지 않게 */
+  overflow-y: auto;
 }
 .map-card {
   position: relative;
