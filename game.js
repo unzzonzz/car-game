@@ -44,9 +44,9 @@ const CONFIG = {
  *  - serp     : 완전 구불구불한 슬라럼 코스(연속 U턴). 트랙 폭 300px.
  * ========================================================================== */
 const WORLD = {
-  racing: { w: 10000, h: 6000, type: "track", track: null },  // 자유 레이싱
-  hard: { w: 18000, h: 11500, type: "hardTrack", track: null }, // 하드 레이싱
-  serp: { w: 4780, h: 3350, type: "serpTrack", track: null },  // 구불구불 레이싱
+  racing: { w: 10000, h: 6000, type: "track", track: null },  // 연습 코스 A (밸런스)
+  hard: { w: 10000, h: 6000, type: "track", track: null },    // 연습 코스 B (테크니컬)
+  serp: { w: 10000, h: 6000, type: "track", track: null },    // 연습 코스 C (고속)
   pro: { w: 10000, h: 6000, type: "track", track: null },     // 프로 레이싱(다른 서킷)
   lobby: { w: 3600, h: 3600, type: "lobby" },                 // 로비(메인 화면) — 로컬 전용
   test: { w: 6000, h: 3400, type: "stadium", track: null },   // 테스트 : 가로로 긴 운동장 트랙 (새 플랫 디자인)
@@ -130,8 +130,9 @@ const MAP_GROUPS = {
     title: "연습",
     desc: "다른 유저들과 함께 맵을 달리며 기록을 재는 모드",
     maps: [
-      { name: "초보자 코스", desc: "완만한 코너로 달리는 입문용 서킷", mode: "racing" },
-      { name: "어려움 코스", desc: "좁은 폭과 헤어핀의 고난도 서킷", mode: "hard" },
+      { name: "코스 A", desc: "완만~중속 코너가 고르게 섞인 밸런스 코스", mode: "racing" },
+      { name: "코스 B", desc: "좁은 폭에 급코너가 많은 테크니컬 코스", mode: "hard" },
+      { name: "코스 C", desc: "긴 스윕으로 속도를 내는 고속 코스", mode: "serp" },
     ],
   },
 };
@@ -208,8 +209,9 @@ const account = {
   proWins: 0, proPlays: 0, loginTime: 0,
   totalTime: 0,   // 평생 누적 접속 시간(ms) — 서버가 보낸 "실시간" 값
   totalTimeAt: 0, // 위 값을 수신한 클라 시각(performance 아님) — 라이브 증가 기준
-  bestMs: 0,      // 초보자 코스(자유) 개인 최고 기록(ms)
-  bestHardMs: 0,  // 어려움 코스(하드) 개인 최고 기록(ms)
+  bestMs: 0,      // 코스 A 개인 최고 기록(ms)
+  bestHardMs: 0,  // 코스 B 개인 최고 기록(ms)
+  bestSerpMs: 0,  // 코스 C 개인 최고 기록(ms)
   lastLogin: 0,   // 직전 접속 시각(ms epoch, 0=처음)
 };
 
@@ -662,12 +664,17 @@ function makeHardTrack(points, opts) {
   return { halfWidth: opts.halfWidth, kerb: opts.kerb, centerline, path, start };
 }
 
-/* 자유 레이싱 = 항상 "원래 맵"으로 고정 (랜덤 X) */
-const FREE_RECIPE = {
-  w: 10000, h: 6000, halfWidth: 230, kerb: 26, stretch: 1.7,
-  R: a => 1 + 0.16 * Math.sin(2 * a + 0.6) + 0.30 * Math.sin(3 * a + 0.4)
-        + 0.18 * Math.sin(5 * a + 1.3) + 0.10 * Math.sin(7 * a + 0.2),
-};
+/* 연습 코스 A/B/C — 셋 다 초보자 맵 크기(10000×6000) + 하드 규격(좁은 폭 112, 가혹한 잔디).
+ *  makeTrack 방사형 R(a): 진폭 합 < 1 → R>0 항상 → 자기교차(겹침) 없음.
+ *  A=밸런스(완만~중속 코너 고르게), B=테크니컬(급코너 많음), C=고속(큰 로브+긴 스윕). */
+const PRACTICE_BASE = { w: 10000, h: 6000, halfWidth: 112, kerb: 16, stretch: 1.6 };
+const PRACTICE_A = { ...PRACTICE_BASE,
+  R: a => 1 + 0.20 * Math.sin(2 * a + 0.4) + 0.16 * Math.sin(3 * a + 1.7) + 0.10 * Math.sin(4 * a + 0.9) };
+const PRACTICE_B = { ...PRACTICE_BASE,
+  R: a => 1 + 0.13 * Math.sin(2 * a + 1.1) + 0.14 * Math.sin(4 * a + 0.3)
+        + 0.10 * Math.sin(5 * a + 2.1) + 0.06 * Math.sin(7 * a + 1.4) };
+const PRACTICE_C = { ...PRACTICE_BASE,
+  R: a => 1 + 0.27 * Math.sin(2 * a + 2.4) + 0.14 * Math.sin(3 * a + 0.6) + 0.10 * Math.sin(5 * a + 1.9) };
 
 /* 프로 레이싱 전용 맵 풀 (더 구불구불, 5종). 서버가 인덱스를 정해 같은 레이스의
  *  모든 플레이어가 같은 맵을 보게 한다. R 진폭 합 < 1 → 항상 R>0(자기교차 없음).
@@ -690,52 +697,6 @@ const PRO_RECIPES = [
           + 0.20 * Math.sin(4 * a + 1.4) + 0.12 * Math.sin(6 * a + 0.2) + 0.10 * Math.sin(9 * a + 1.9) },
 ];
 
-const HARD_POINTS = [
-  // 1) 긴 직선 스타트
-  { x: 1300, y: 1400 },
-  { x: 3300, y: 1400 },
-  { x: 5700, y: 1400 },
-  { x: 7200, y: 1500 },
-
-  // 2) 큰 감속이 필요한 180도 헤어핀
-  { x: 8350, y: 2050 },
-  { x: 8900, y: 3150 },
-  { x: 8200, y: 4300 },
-  { x: 6450, y: 4450 },
-
-  // 3) S 코너: 헤어핀 아래쪽으로 크게 돌아 내려갔다 오른쪽으로 (헤어핀과 겹치지 않게)
-  { x: 5400, y: 4950 },
-  { x: 6600, y: 5650 },
-  { x: 8300, y: 5350 },
-  { x: 9500, y: 5000 },
-  { x: 10800, y: 3700 },
-  { x: 10300, y: 5400 },
-
-  // 4) 브레이킹 타이밍을 늦게 가져가는 복합 코너
-  { x: 11100, y: 5150 },
-  { x: 12400, y: 6350 },
-  { x: 13800, y: 6200 },
-  { x: 15050, y: 7400 },
-
-  // 5) 라인을 타면 풀악셀 가능한 초고속 코너
-  { x: 16200, y: 9000 },
-  { x: 14500, y: 10350 },
-  { x: 12000, y: 10650 },
-  { x: 9200, y: 10150 },
-  { x: 6900, y: 9250 },
-
-  // 6) 마지막 연속 헤어핀 U U U
-  { x: 5000, y: 9850 },
-  { x: 3550, y: 10600 },
-  { x: 2250, y: 9700 },
-  { x: 3850, y: 8750 },
-  { x: 2250, y: 7800 },
-  { x: 1150, y: 6650 },
-  { x: 2400, y: 5350 },
-  { x: 1400, y: 4050 },
-  { x: 2450, y: 2750 },
-];
-
 // 프로 트랙을 인덱스로 만들고 캐시한다 (한 번 만든 맵은 재사용)
 const proTrackCache = new Map();
 function buildProTrack(index) {
@@ -745,45 +706,16 @@ function buildProTrack(index) {
 }
 
 function generateTrack() {
-  WORLD.racing.track = makeTrack(FREE_RECIPE); // 자유 = 고정
-  WORLD.pro.track = buildProTrack(0);          // 프로 기본값 (서버 인덱스로 교체됨)
+  WORLD.racing.track = makeTrack(PRACTICE_A); // 연습 코스 A (밸런스)
+  WORLD.pro.track = buildProTrack(0);         // 프로 기본값 (서버 인덱스로 교체됨)
 }
 
 function generateHardTrack() {
-  WORLD.hard.track = makeHardTrack(HARD_POINTS, {
-    halfWidth: 112, // 총 트랙 폭 224px (자유 460px의 절반 이하 — 정밀 주행 요구)
-    kerb: 16,
-    samplesPerSegment: 28,
-    startPointIndex: 1,
-    tension: 0.34,
-  });
+  WORLD.hard.track = makeTrack(PRACTICE_B); // 연습 코스 B (테크니컬)
 }
 
-/* 구불구불 레이싱 : 연속 U턴(슬라럼) 폐곡선. 짧고 좁은 기둥 8개를 가파른 U턴으로
- *  촘촘히 잇고(직선 짧게·구불구불 많게), 마지막에 바깥(아래→왼쪽)으로 돌아 시작점으로
- *  닫는다. 가로로 길쭉한 맵 → 잘하는 사람 기준 30초 미만. */
-const SERP_POINTS = [
-  { x: 1200, y: 612.5 }, { x: 1200, y: 2037.5 },   // 기둥0 (아래로)
-  { x: 1540, y: 2037.5 }, { x: 1540, y: 612.5 },   // 기둥1 (위로)
-  { x: 1880, y: 612.5 }, { x: 1880, y: 2037.5 },   // 기둥2 (아래로)
-  { x: 2220, y: 2037.5 }, { x: 2220, y: 612.5 },   // 기둥3 (위로)
-  { x: 2560, y: 612.5 }, { x: 2560, y: 2037.5 },   // 기둥4 (아래로)
-  { x: 2900, y: 2037.5 }, { x: 2900, y: 612.5 },   // 기둥5 (위로)
-  { x: 3240, y: 612.5 }, { x: 3240, y: 2037.5 },   // 기둥6 (아래로)
-  { x: 3580, y: 2037.5 }, { x: 3580, y: 612.5 },   // 기둥7 (위로)
-  { x: 4280, y: 2737.5 },                          // 바깥 복귀 : 우하단
-  { x: 750,  y: 2737.5 },                          // 좌하단
-  { x: 750,  y: 612.5 },                           // 좌상단 → 시작점으로 닫힘
-];
-
 function generateSerpTrack() {
-  WORLD.serp.track = makeHardTrack(SERP_POINTS, {
-    halfWidth: 105, // 총 트랙 폭 210px (좁게 — 회전 여유 축소)
-    kerb: 16,
-    samplesPerSegment: 28,
-    startPointIndex: 0,
-    tension: 0.34,
-  });
+  WORLD.serp.track = makeTrack(PRACTICE_C); // 연습 코스 C (고속)
 }
 
 /* 테스트 맵 : 가로로 긴 운동장(스타디움) 트랙 — 직선 2 + 반원 2 의 단순한 링.
@@ -1307,8 +1239,8 @@ function applyBump(vx, vy) {
 function updateSurface(car, dt) {
   if (!isTrackWorld()) return;                 // 자유/프로/하드 레이싱 모두 적용
   if (isOnTrack(car.x, car.y)) return;
-  // 풀밭 저항 : 전진/측면 속도를 지수적으로 감쇠 (하드는 훨씬 가혹하게 → 이탈 시 크게 손해)
-  const drag = gameMode === "hard" ? OFFTRACK_DRAG_HARD : OFFTRACK_DRAG;
+  // 풀밭 저항 : 전진/측면 속도를 지수적으로 감쇠. 연습 코스 A/B/C(racing/hard/serp)는 모두 가혹하게(하드 규격)
+  const drag = (gameMode === "racing" || gameMode === "hard" || gameMode === "serp") ? OFFTRACK_DRAG_HARD : OFFTRACK_DRAG;
   const f = Math.exp(-drag * dt);
   car.lf *= f;
   car.ll *= f;
@@ -2623,6 +2555,7 @@ function connect() {
       account.totalTimeAt = Date.now();
       account.bestMs = msg.bestMs || 0;
       account.bestHardMs = msg.bestHardMs || 0;
+      account.bestSerpMs = msg.bestSerpMs || 0;
       account.lastLogin = msg.lastLogin || 0; // 직전 접속 시각(0=처음)
       account.loginTime = Date.now();
       playerName = msg.nickname;
@@ -2652,7 +2585,12 @@ function connect() {
       if (typeof msg.bestHardMs === "number") {
         const improved = msg.bestHardMs > 0 && (!account.bestHardMs || msg.bestHardMs < account.bestHardMs);
         account.bestHardMs = msg.bestHardMs;
-        if (improved) SFX.record(); // 어려움 코스 기록 갱신 팡파레
+        if (improved) SFX.record(); // 코스 B 기록 갱신 팡파레
+      }
+      if (typeof msg.bestSerpMs === "number") {
+        const improved = msg.bestSerpMs > 0 && (!account.bestSerpMs || msg.bestSerpMs < account.bestSerpMs);
+        account.bestSerpMs = msg.bestSerpMs;
+        if (improved) SFX.record(); // 코스 C 기록 갱신 팡파레
       }
       updateDashboard();
     } else if (msg.type === "counts") {
@@ -3971,7 +3909,7 @@ function sendLogout() {
   if (net.connected && net.ws.readyState === WebSocket.OPEN) net.ws.send(JSON.stringify({ type: "logout", token: tk }));
   account.loggedIn = false; account.isAdmin = false; account.userId = null;
   account.proWins = 0; account.proPlays = 0;
-  account.totalTime = 0; account.totalTimeAt = 0; account.bestMs = 0; account.bestHardMs = 0; account.loginTime = 0;
+  account.totalTime = 0; account.totalTimeAt = 0; account.bestMs = 0; account.bestHardMs = 0; account.bestSerpMs = 0; account.loginTime = 0;
   // 로그아웃 즉시 게스트 이름으로 전환 (저장된 게스트 이름 있으면 그것, 없으면 "게스트")
   let guest = "";
   try { guest = (localStorage.getItem("carGameName") || "").trim().slice(0, 12); } catch {}
@@ -4030,12 +3968,15 @@ function updateDashboard() {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   document.getElementById("dashTime").textContent =
     (h ? h + "시간 " : "") + m + "분 " + sec + "초";
-  // 자유 레이싱 개인 최고 기록
+  // 코스 A 개인 최고 기록
   const best = document.getElementById("dashBest");
   if (best) best.textContent = account.bestMs ? fmtRaceTime(account.bestMs) : "-";
-  // 어려움 코스(하드) 개인 최고 기록
+  // 코스 B 개인 최고 기록
   const bestHard = document.getElementById("dashBestHard");
   if (bestHard) bestHard.textContent = account.bestHardMs ? fmtRaceTime(account.bestHardMs) : "-";
+  // 코스 C 개인 최고 기록
+  const bestSerp = document.getElementById("dashBestSerp");
+  if (bestSerp) bestSerp.textContent = account.bestSerpMs ? fmtRaceTime(account.bestSerpMs) : "-";
 }
 function showAccountModal() {
   document.getElementById("accId").textContent = account.userId || "-";
