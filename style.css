@@ -1112,6 +1112,39 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 }
 .lob-btn:hover { transform: scale(1.08); }
 .lob-btn svg { width: 22px; height: 22px; }
+
+/* 디스코드 버튼 아래 말풍선 : 키캡 느낌(흰 면 + 1px 테두리)이되 그림자 없이,
+ *  위로 볼록 올라온 화살표가 사각 박스와 같은 면·테두리로 부드럽게 이어진다. */
+#lobDiscord { position: relative; }
+.lob-tip {
+  position: absolute;
+  top: calc(100% + 9px);           /* 버튼 아래로 (화살표 공간 포함) */
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px 11px;
+  font-family: 'Jua', 'Quicksand', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  pointer-events: none;            /* 캔버스 게이트 클릭을 가리지 않도록 */
+}
+.lob-tip::before {                 /* 위로 볼록 화살표 : 45도 회전 사각형의 위 두 변만 테두리 → 박스와 자연스럽게 연결 */
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  transform: translateX(-50%) rotate(45deg);
+  background: var(--white);
+  border-left: 1px solid var(--line);
+  border-top: 1px solid var(--line);
+  border-radius: 3px 0 0 0;        /* 화살표 끝만 살짝 둥글려 부드럽게 */
+}
 /* 주행 중 : 전부 걷힘 (복귀는 정지 1.5초 또는 ESC — 둘 다 전체 UI 페이드인) */
 #lobbyUI.s-hidden .lob-el { opacity: 0; pointer-events: none; }
 
