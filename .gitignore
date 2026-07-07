@@ -4,3 +4,4 @@ node_modules/
 .env
 users.json
 records.json
+chat-log.jsonl

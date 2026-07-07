@@ -426,6 +426,14 @@ const players = new Map();
 const CHAT_HISTORY_MAX = 20;
 const chatHistory = [];
 
+// 채팅 전체를 append-only 로그(JSONL)에 영구 저장 : 시간 t / 아이디 uid / 닉 name / 메시지 text / admin.
+//  인게임 채팅창은 최근 20개만 보여주지만, 이 파일엔 "몽땅" 남는다. → view-chat.js 로 열람.
+const CHAT_LOG_FILE = path.join(__dirname, "chat-log.jsonl");
+function logChat(p, name, text, t, admin) {
+  const entry = { t, uid: p.account ? p.account.userId : null, name, text, admin: !!admin };
+  fs.appendFile(CHAT_LOG_FILE, JSON.stringify(entry) + "\n", (err) => { if (err) console.error("[chat-log]", err.message); });
+}
+
 wss.on("connection", (ws) => {
   const id = nextId++;
   players.set(id, { ws, state: null, active: false, mode: "survival", name: "", roomId: null, account: null, isAdmin: false });
@@ -605,7 +613,8 @@ wss.on("connection", (ws) => {
       const name = p.account ? p.account.nickname : (p.active ? p.name : sanitizeName(msg.name));
       const chatMsg = { type: "chat", id, name, text, t: Date.now(), admin: !!p.isAdmin };
       chatHistory.push(chatMsg);
-      if (chatHistory.length > CHAT_HISTORY_MAX) chatHistory.shift(); // 최근 20개만 보관
+      if (chatHistory.length > CHAT_HISTORY_MAX) chatHistory.shift(); // 인게임 표시는 최근 20개만
+      logChat(p, name, text, chatMsg.t, chatMsg.admin);              // 로그 파일엔 몽땅 영구 저장
       broadcastConnected(chatMsg);
 
     } else if (msg.type === "timeAttack") {
