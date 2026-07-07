@@ -2,6 +2,7 @@
 //  실행:  node view-users.js            (기본: 마지막 접속 최신순)
 //  정렬:  node view-users.js a1|a2|a3   A-1/A-2/A-3 기록 빠른순
 //         node view-users.js b1|b2|b3   B-1/B-2/B-3 기록 빠른순
+//         node view-users.js c1|c2|c3   C-1/C-2/C-3 기록 빠른순
 //         node view-users.js time       총 접속시간 많은순
 //  * 자유(구)/하드(구)는 코스 개편 전 옛 기록(보존용)
 //         node view-users.js wins       프로 우승 많은순
@@ -49,6 +50,9 @@ const sorters = {
   b1: (a, b) => (a.bestB1 || 1e12) - (b.bestB1 || 1e12),
   b2: (a, b) => (a.bestB2 || 1e12) - (b.bestB2 || 1e12),
   b3: (a, b) => (a.bestB3 || 1e12) - (b.bestB3 || 1e12),
+  c1: (a, b) => (a.bestC1 || 1e12) - (b.bestC1 || 1e12),
+  c2: (a, b) => (a.bestC2 || 1e12) - (b.bestC2 || 1e12),
+  c3: (a, b) => (a.bestC3 || 1e12) - (b.bestC3 || 1e12),
   time: (a, b) => (b.totalTime || 0) - (a.totalTime || 0),
   wins: (a, b) => (b.proWins || 0) - (a.proWins || 0),
   last: (a, b) => (b.lastLogin || 0) - (a.lastLogin || 0),
@@ -66,6 +70,9 @@ const cols = [
   { h: "B-1", get: (u) => fmtRace(u.bestB1), pad: padL },
   { h: "B-2", get: (u) => fmtRace(u.bestB2), pad: padL },
   { h: "B-3", get: (u) => fmtRace(u.bestB3), pad: padL },
+  { h: "C-1", get: (u) => fmtRace(u.bestC1), pad: padL },
+  { h: "C-2", get: (u) => fmtRace(u.bestC2), pad: padL },
+  { h: "C-3", get: (u) => fmtRace(u.bestC3), pad: padL },
   { h: "자유(구)", get: (u) => fmtRace(u.bestTime), pad: padL },
   { h: "하드(구)", get: (u) => fmtRace(u.bestTimeHard), pad: padL },
   { h: "우승", get: (u) => String(u.proWins || 0), pad: padL },
@@ -76,7 +83,7 @@ const cols = [
 const width = cols.map((c) => Math.max(dispW(c.h), ...rows.map((u) => dispW(c.get(u)))));
 const line = (cells) => cells.map((c, i) => cols[i].pad(c, width[i])).join("  ");
 
-console.log(`\n총 ${rows.length}명  ·  정렬: ${key}  (a1/a2/a3/b1/b2/b3/time/wins/name 으로 바꿀 수 있어요)\n`);
+console.log(`\n총 ${rows.length}명  ·  정렬: ${key}  (a1~a3/b1~b3/c1~c3/time/wins/name 으로 바꿀 수 있어요)\n`);
 console.log(line(cols.map((c) => c.h)));
 console.log(width.map((w) => "-".repeat(w)).join("  "));
 for (const u of rows) console.log(line(cols.map((c) => c.get(u))));

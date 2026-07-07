@@ -50,6 +50,9 @@ const WORLD = {
   racing: { w: 10000, h: 6000, type: "track", track: null },  // 연습 B-1 (밸런스)
   hard: { w: 10000, h: 6000, type: "track", track: null },    // 연습 B-2 (테크니컬)
   serp: { w: 10000, h: 6000, type: "track", track: null },    // 연습 B-3 (고속)
+  c1: { w: 10000, h: 6000, type: "track", track: null },      // 연습 C-1 (하드코어)
+  c2: { w: 10000, h: 6000, type: "track", track: null },      // 연습 C-2 (헤어핀)
+  c3: { w: 10000, h: 6000, type: "track", track: null },      // 연습 C-3 (테크니컬)
   pro: { w: 10000, h: 6000, type: "track", track: null },     // 프로 레이싱(다른 서킷)
   lobby: { w: 3600, h: 3600, type: "lobby" },                 // 로비(메인 화면) — 로컬 전용
   test: { w: 6000, h: 3400, type: "stadium", track: null },   // 테스트 : 가로로 긴 운동장 트랙 (새 플랫 디자인)
@@ -129,20 +132,42 @@ const MAP_GROUPS = {
     ],
   },
   // 커스텀 그룹은 팝업 없이 게이트에서 바로 방 목록(pro)으로 직행한다.
+  // 연습 = 이중 구조 : 카테고리(코스 A/B/C) → 각 코스의 X-1~3 로 드릴다운해 직접 진입
   practice: {
     title: "연습",
-    desc: "기록을 재는 연습 코스 — A조(넓고 쉬움) · B조(좁고 어려움)",
+    desc: "코스를 골라 기록에 도전",
+    maps: [
+      { name: "코스 A", desc: "넓고 완만한 입문 코스", group: "courseA" },
+      { name: "코스 B", desc: "좁고 급코너의 도전 코스", group: "courseB" },
+      { name: "코스 C", desc: "가장 좁고 어려운 코스", group: "courseC" },
+    ],
+  },
+  courseA: {
+    title: "코스 A", desc: "넓은 폭 · 완만한 큰 코너", back: "practice",
     maps: [
       { name: "A-1", desc: "가장 쉬운 완만한 입문 코스", mode: "a1" },
       { name: "A-2", desc: "완만한 S 코너의 순한 코스", mode: "a2" },
       { name: "A-3", desc: "둥근 코너가 이어지는 코스", mode: "a3" },
+    ],
+  },
+  courseB: {
+    title: "코스 B", desc: "좁은 폭 · 급코너의 도전", back: "practice",
+    maps: [
       { name: "B-1", desc: "고르게 섞인 밸런스형 코스", mode: "racing" },
       { name: "B-2", desc: "급코너 많은 테크니컬 코스", mode: "hard" },
       { name: "B-3", desc: "긴 스윕의 빠른 고속 코스", mode: "serp" },
     ],
   },
+  courseC: {
+    title: "코스 C", desc: "가장 좁은 폭 · 최고 난이도", back: "practice",
+    maps: [
+      { name: "C-1", desc: "좁은 폭에 연속 급코너", mode: "c1" },
+      { name: "C-2", desc: "날카로운 헤어핀 코스", mode: "c2" },
+      { name: "C-3", desc: "촘촘한 급코너 기술 코스", mode: "c3" },
+    ],
+  },
 };
-const mapPopup = { open: false, group: null };
+const mapPopup = { open: false, group: null, root: null }; // root = 게이트에 대응하는 최상위 그룹(재무장용)
 
 // 초대 링크(?room=ID)로 접속하면 welcome 수신 후 해당 방으로 바로 참가 시도
 let pendingRoomJoin = null;
@@ -164,7 +189,7 @@ const CAR_COLORS = [
 ];
 const CUSTOM_RING_R = 175; // 링 반지름(월드 px)
 const custom = { active: false, cx: 0, cy: 0, selAnim: null }; // selAnim = 픽커(선택 링) 슬라이드 애니메이션
-const modeCounts = { a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, pro: 0, test: 0, total: 0 };
+const modeCounts = { a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, pro: 0, test: 0, total: 0 };
 
 // 현재 모드/월드/게임 상태 (실제 시작은 하단 enterLobby() 가 로비로 설정)
 let gameMode = "lobby";      // "lobby" | "racing" | "hard" | "serp" | "pro" | "test"
@@ -196,8 +221,7 @@ const race = {
   finalMs: 0,        // 완주 시점의 최종 누적 기록(ms)
 };
 
-const OFFTRACK_DRAG = 2.4;   // 트랙 이탈 시 추가 감속 계수 (클수록 풀밭처럼 느려짐)
-const OFFTRACK_DRAG_HARD = 6.5; // 하드 전용 : 이탈 시 매우 급격히 감속
+const OFFTRACK_DRAG = 2.4;   // 트랙 이탈 시 추가 감속 계수 (클수록 풀밭처럼 느려짐) — 모든 코스 공통
 
 // 자유 모드 타임어택 상태
 const attack = {
@@ -221,6 +245,9 @@ const account = {
   bestMs: 0,      // B-1 개인 최고 기록(ms) — 서버 bestB1
   bestHardMs: 0,  // B-2 개인 최고 기록(ms) — 서버 bestB2
   bestSerpMs: 0,  // B-3 개인 최고 기록(ms) — 서버 bestB3
+  bestC1Ms: 0,    // C-1 개인 최고 기록(ms) — 서버 bestC1
+  bestC2Ms: 0,    // C-2 개인 최고 기록(ms) — 서버 bestC2
+  bestC3Ms: 0,    // C-3 개인 최고 기록(ms) — 서버 bestC3
   lastLogin: 0,   // 직전 접속 시각(ms epoch, 0=처음)
 };
 
@@ -673,11 +700,13 @@ function makeHardTrack(points, opts) {
   return { halfWidth: opts.halfWidth, kerb: opts.kerb, centerline, path, start };
 }
 
-/* 연습 코스 — 모두 10000×6000. makeTrack 방사형 R(a): 진폭 합 < 1 → R>0 항상 → 자기교차(겹침) 없음.
- *  A조 = 구 초보자 규격(넓은 폭 230, 완만한 잔디, 쉬운 큰 코너) : A-1 입문 / A-2 순한S / A-3 라운드
- *  B조 = 하드 규격(좁은 폭 112, 가혹한 잔디, 급코너)         : B-1 밸런스 / B-2 테크니컬 / B-3 고속 */
-const A_BASE = { w: 10000, h: 6000, halfWidth: 230, kerb: 26, stretch: 1.7 }; // 초보자 규격(넓음)
-const B_BASE = { w: 10000, h: 6000, halfWidth: 112, kerb: 16, stretch: 1.6 }; // 하드 규격(좁음)
+/* 연습 코스 — 모두 10000×6000, 잔디는 전부 동일(일반). makeTrack 방사형 R(a): 진폭 합 < 1 → 자기교차 없음.
+ *  A조 = 넓은 폭 230, 완만한 큰 코너   : A-1 입문 / A-2 순한S / A-3 라운드
+ *  B조 = 좁은 폭 112, 급코너            : B-1 밸런스 / B-2 테크니컬 / B-3 고속
+ *  C조 = 폭 75(B의 2/3), 최고 난이도 급코너 : C-1 하드코어 / C-2 헤어핀 / C-3 테크니컬 */
+const A_BASE = { w: 10000, h: 6000, halfWidth: 230, kerb: 26, stretch: 1.7 }; // 넓음
+const B_BASE = { w: 10000, h: 6000, halfWidth: 112, kerb: 16, stretch: 1.6 }; // 좁음
+const C_BASE = { w: 10000, h: 6000, halfWidth: 75, kerb: 12, stretch: 1.6 };  // 가장 좁음(B의 2/3)
 const PRACTICE_A1 = { ...A_BASE,
   R: a => 1 + 0.16 * Math.sin(2 * a + 0.5) + 0.11 * Math.sin(3 * a + 1.8) };
 const PRACTICE_A2 = { ...A_BASE,
@@ -691,6 +720,15 @@ const PRACTICE_B2 = { ...B_BASE,
         + 0.10 * Math.sin(5 * a + 2.1) + 0.06 * Math.sin(7 * a + 1.4) };
 const PRACTICE_B3 = { ...B_BASE,
   R: a => 1 + 0.27 * Math.sin(2 * a + 2.4) + 0.14 * Math.sin(3 * a + 0.6) + 0.10 * Math.sin(5 * a + 1.9) };
+const PRACTICE_C1 = { ...C_BASE,
+  R: a => 1 + 0.15 * Math.sin(2 * a + 0.7) + 0.17 * Math.sin(4 * a + 1.9)
+        + 0.12 * Math.sin(5 * a + 0.5) + 0.07 * Math.sin(8 * a + 2.3) };
+const PRACTICE_C2 = { ...C_BASE,
+  R: a => 1 + 0.14 * Math.sin(2 * a + 1.4) + 0.22 * Math.sin(3 * a + 0.2)
+        + 0.16 * Math.sin(6 * a + 1.7) + 0.10 * Math.sin(9 * a + 0.6) };
+const PRACTICE_C3 = { ...C_BASE,
+  R: a => 1 + 0.17 * Math.sin(3 * a + 2.6) + 0.15 * Math.sin(4 * a + 0.9)
+        + 0.13 * Math.sin(6 * a + 1.3) + 0.08 * Math.sin(7 * a + 2.1) };
 
 /* 커스텀(프로) 방 코스 = 연습 코스 6종(A-1~B-3)을 그대로 사용. 서버가 인덱스(0~5)를 정해
  *  같은 방의 모든 플레이어가 같은 맵을 보게 한다. server.js 의 NAMED_COURSES 와 개수를 맞춰야 한다. */
@@ -712,6 +750,9 @@ function generateTrack() {
   WORLD.racing.track = makeTrack(PRACTICE_B1); // 연습 B-1 (밸런스)
   WORLD.hard.track   = makeTrack(PRACTICE_B2); // 연습 B-2 (테크니컬)
   WORLD.serp.track   = makeTrack(PRACTICE_B3); // 연습 B-3 (고속)
+  WORLD.c1.track     = makeTrack(PRACTICE_C1); // 연습 C-1 (하드코어)
+  WORLD.c2.track     = makeTrack(PRACTICE_C2); // 연습 C-2 (헤어핀)
+  WORLD.c3.track     = makeTrack(PRACTICE_C3); // 연습 C-3 (테크니컬)
   WORLD.pro.track = buildProTrack(0);          // 프로 기본값 (서버 인덱스로 교체됨)
 }
 
@@ -920,7 +961,8 @@ function isTrackWorld() {
 function isFlatTrackMode() {
   return gameMode === "test" || gameMode === "racing" || gameMode === "hard"
       || gameMode === "serp" || gameMode === "pro"
-      || gameMode === "a1" || gameMode === "a2" || gameMode === "a3";
+      || gameMode === "a1" || gameMode === "a2" || gameMode === "a3"
+      || gameMode === "c1" || gameMode === "c2" || gameMode === "c3";
 }
 
 
@@ -1235,8 +1277,8 @@ function applyBump(vx, vy) {
 function updateSurface(car, dt) {
   if (!isTrackWorld()) return;                 // 자유/프로/하드 레이싱 모두 적용
   if (isOnTrack(car.x, car.y)) return;
-  // 풀밭 저항 : 전진/측면 속도를 지수적으로 감쇠. 연습 B-1/B-2/B-3(racing/hard/serp)는 모두 가혹하게(하드 규격)
-  const drag = (gameMode === "racing" || gameMode === "hard" || gameMode === "serp") ? OFFTRACK_DRAG_HARD : OFFTRACK_DRAG;
+  // 풀밭 저항 : 전진/측면 속도를 지수적으로 감쇠. 모든 코스(A~C) 동일한 일반 잔디(가혹한 잔디 없음)
+  const drag = OFFTRACK_DRAG;
   const f = Math.exp(-drag * dt);
   car.lf *= f;
   car.ll *= f;
@@ -1305,7 +1347,8 @@ function updateLap(car) {
 // 타임어택 기록 기능이 있는 모드(자유/하드) 여부
 function isTimeAttackMode() {
   return gameMode === "a1" || gameMode === "a2" || gameMode === "a3"
-      || gameMode === "racing" || gameMode === "hard" || gameMode === "serp";
+      || gameMode === "racing" || gameMode === "hard" || gameMode === "serp"
+      || gameMode === "c1" || gameMode === "c2" || gameMode === "c3";
 }
 
 // 타임어택 상태 초기화 (모드 진입/이탈 시)
@@ -1861,8 +1904,8 @@ function gateSub(g) {
     case "racing": return "준비 중"; // 일반전/경쟁전 모두 준비 중
     case "plaza": return "준비 중";
     case "custom": return `${modeCounts.pro || 0}명 접속 중`;
-    // 연습 = 실제 코스(A-1~3 + B-1~3) 멀티플레이 접속 수
-    case "practice": return `${(modeCounts.a1 || 0) + (modeCounts.a2 || 0) + (modeCounts.a3 || 0) + (modeCounts.racing || 0) + (modeCounts.hard || 0) + (modeCounts.serp || 0)}명 접속 중`;
+    // 연습 = 실제 코스(A-1~3 + B-1~3 + C-1~3) 멀티플레이 접속 수
+    case "practice": return `${(modeCounts.a1 || 0) + (modeCounts.a2 || 0) + (modeCounts.a3 || 0) + (modeCounts.racing || 0) + (modeCounts.hard || 0) + (modeCounts.serp || 0) + (modeCounts.c1 || 0) + (modeCounts.c2 || 0) + (modeCounts.c3 || 0)}명 접속 중`;
     case "test": return `${modeCounts.test || 0}명 접속 중`;
     case "garage": return "차 색상 바꾸기";
     default: return "";
@@ -2561,6 +2604,9 @@ function connect() {
       account.bestMs = msg.bestMs || 0;
       account.bestHardMs = msg.bestHardMs || 0;
       account.bestSerpMs = msg.bestSerpMs || 0;
+      account.bestC1Ms = msg.bestC1Ms || 0;
+      account.bestC2Ms = msg.bestC2Ms || 0;
+      account.bestC3Ms = msg.bestC3Ms || 0;
       account.lastLogin = msg.lastLogin || 0; // 직전 접속 시각(0=처음)
       account.loginTime = Date.now();
       playerName = msg.nickname;
@@ -2612,6 +2658,21 @@ function connect() {
         account.bestSerpMs = msg.bestSerpMs;
         if (improved) SFX.record(); // B-3 기록 갱신 팡파레
       }
+      if (typeof msg.bestC1Ms === "number") {
+        const improved = msg.bestC1Ms > 0 && (!account.bestC1Ms || msg.bestC1Ms < account.bestC1Ms);
+        account.bestC1Ms = msg.bestC1Ms;
+        if (improved) SFX.record(); // C-1 기록 갱신 팡파레
+      }
+      if (typeof msg.bestC2Ms === "number") {
+        const improved = msg.bestC2Ms > 0 && (!account.bestC2Ms || msg.bestC2Ms < account.bestC2Ms);
+        account.bestC2Ms = msg.bestC2Ms;
+        if (improved) SFX.record(); // C-2 기록 갱신 팡파레
+      }
+      if (typeof msg.bestC3Ms === "number") {
+        const improved = msg.bestC3Ms > 0 && (!account.bestC3Ms || msg.bestC3Ms < account.bestC3Ms);
+        account.bestC3Ms = msg.bestC3Ms;
+        if (improved) SFX.record(); // C-3 기록 갱신 팡파레
+      }
       updateDashboard();
     } else if (msg.type === "counts") {
       // 모드별 참가 인원 → 로비 게이트 숫자 + 온라인 표시 갱신
@@ -2621,11 +2682,14 @@ function connect() {
       modeCounts.racing = msg.racing || 0;
       modeCounts.hard = msg.hard || 0;
       modeCounts.serp = msg.serp || 0;
+      modeCounts.c1 = msg.c1 || 0;
+      modeCounts.c2 = msg.c2 || 0;
+      modeCounts.c3 = msg.c3 || 0;
       modeCounts.pro = msg.pro || 0;
       modeCounts.test = msg.test || 0;
       modeCounts.total = typeof msg.total === "number"
         ? msg.total
-        : modeCounts.a1 + modeCounts.a2 + modeCounts.a3 + modeCounts.racing + modeCounts.hard + modeCounts.serp + modeCounts.pro;
+        : modeCounts.a1 + modeCounts.a2 + modeCounts.a3 + modeCounts.racing + modeCounts.hard + modeCounts.serp + modeCounts.c1 + modeCounts.c2 + modeCounts.c3 + modeCounts.pro;
       const on = document.getElementById("lobOnline");
       if (on) on.textContent = `온라인 ${modeCounts.total}`;
       updateMapPopupCounts(); // 맵 팝업이 열려 있으면 카드별 인원도 갱신
@@ -3645,14 +3709,17 @@ function openMapPopup(groupKey) {
   SFX.click(); // 다른 메뉴(버튼 클릭음)와 동일한 효과음 — 게이트 진입/클릭엔 버튼이 없어 직접 울린다
   mapPopup.open = true;
   mapPopup.group = groupKey;
+  if (LOBBY_GATES.some((x) => x.group === groupKey)) mapPopup.root = groupKey; // 게이트 대응 최상위 그룹만 root
   CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0; // 고르는 동안 차 정지
   document.getElementById("mapModalTitle").textContent = grp.title;
   document.getElementById("mapModalDesc").textContent = grp.desc;
+  const back = document.getElementById("mapModalBack"); // 하위 그룹이면 "뒤로", 최상위면 숨김
+  if (back) { back.style.display = grp.back ? "block" : "none"; back.onclick = grp.back ? () => openMapPopup(grp.back) : null; }
   const grid = document.getElementById("mapGrid");
   grid.innerHTML = "";
   for (const m of grp.maps) {
     const card = document.createElement("button");
-    card.className = "map-card" + (m.mode ? "" : " soon");
+    card.className = "map-card" + (m.mode || m.group ? "" : " soon");
     const nm = document.createElement("div");
     nm.className = "map-card-name";
     nm.textContent = m.name;
@@ -3668,6 +3735,9 @@ function openMapPopup(groupKey) {
       cnt.textContent = `${modeCounts[m.mode] || 0}명`;
       card.appendChild(cnt);
       card.addEventListener("click", () => { closeMapPopup(); wipeTo(() => startGame(m.mode), { title: m.name, desc: m.desc }); });
+    } else if (m.group) {
+      // 하위 그룹으로 드릴다운 (이중 구조) — 닫지 않고 같은 팝업을 다시 채운다
+      card.addEventListener("click", () => openMapPopup(m.group));
     } else {
       const chip = document.createElement("span");
       chip.className = "map-card-soon";
@@ -3684,8 +3754,8 @@ function closeMapPopup() {
   if (!mapPopup.open) return;
   mapPopup.open = false;
   document.getElementById("mapModal").classList.remove("show");
-  // 게이트 위에 있어도 팝업이 바로 다시 열리지 않게 — 벗어나야 재무장
-  const g = LOBBY_GATES.find((x) => x.group === mapPopup.group);
+  // 게이트 위에 있어도 팝업이 바로 다시 열리지 않게 — 벗어나야 재무장 (하위 그룹이어도 root 게이트로)
+  const g = LOBBY_GATES.find((x) => x.group === mapPopup.root);
   if (g) lobby.holdGate = g;
 }
 
@@ -3935,7 +4005,7 @@ function sendLogout() {
   if (net.connected && net.ws.readyState === WebSocket.OPEN) net.ws.send(JSON.stringify({ type: "logout", token: tk }));
   account.loggedIn = false; account.isAdmin = false; account.userId = null;
   account.proWins = 0; account.proPlays = 0;
-  account.totalTime = 0; account.totalTimeAt = 0; account.bestA1Ms = 0; account.bestA2Ms = 0; account.bestA3Ms = 0; account.bestMs = 0; account.bestHardMs = 0; account.bestSerpMs = 0; account.loginTime = 0;
+  account.totalTime = 0; account.totalTimeAt = 0; account.bestA1Ms = 0; account.bestA2Ms = 0; account.bestA3Ms = 0; account.bestMs = 0; account.bestHardMs = 0; account.bestSerpMs = 0; account.bestC1Ms = 0; account.bestC2Ms = 0; account.bestC3Ms = 0; account.loginTime = 0;
   // 로그아웃 즉시 게스트 이름으로 전환 (저장된 게스트 이름 있으면 그것, 없으면 "게스트")
   let guest = "";
   try { guest = (localStorage.getItem("carGameName") || "").trim().slice(0, 12); } catch {}
@@ -4010,6 +4080,13 @@ function updateDashboard() {
   // B-3 개인 최고 기록
   const bestSerp = document.getElementById("dashBestSerp");
   if (bestSerp) bestSerp.textContent = account.bestSerpMs ? fmtRaceTime(account.bestSerpMs) : "-";
+  // C-1/C-2/C-3 개인 최고 기록
+  const c1 = document.getElementById("dashC1");
+  if (c1) c1.textContent = account.bestC1Ms ? fmtRaceTime(account.bestC1Ms) : "-";
+  const c2 = document.getElementById("dashC2");
+  if (c2) c2.textContent = account.bestC2Ms ? fmtRaceTime(account.bestC2Ms) : "-";
+  const c3 = document.getElementById("dashC3");
+  if (c3) c3.textContent = account.bestC3Ms ? fmtRaceTime(account.bestC3Ms) : "-";
 }
 function showAccountModal() {
   document.getElementById("accId").textContent = account.userId || "-";
