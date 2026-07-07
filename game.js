@@ -3976,6 +3976,10 @@ function sendLogout() {
   let guest = "";
   try { guest = (localStorage.getItem("carGameName") || "").trim().slice(0, 12); } catch {}
   playerName = guest || "게스트";
+  // 로그아웃 시 로그인/회원가입 폼에 입력값이 남지 않게 비운다
+  for (const id of ["loginId", "loginPw", "signupId", "signupNick", "signupPw"]) {
+    const el = document.getElementById(id); if (el) el.value = "";
+  }
   updateAuthUI(); // 이름 입력칸도 게스트 이름으로 복원
 }
 
