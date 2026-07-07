@@ -692,32 +692,16 @@ const PRACTICE_B2 = { ...B_BASE,
 const PRACTICE_B3 = { ...B_BASE,
   R: a => 1 + 0.27 * Math.sin(2 * a + 2.4) + 0.14 * Math.sin(3 * a + 0.6) + 0.10 * Math.sin(5 * a + 1.9) };
 
-/* 프로 레이싱 전용 맵 풀 (더 구불구불, 5종). 서버가 인덱스를 정해 같은 레이스의
- *  모든 플레이어가 같은 맵을 보게 한다. R 진폭 합 < 1 → 항상 R>0(자기교차 없음).
- *  server.js 의 PRO_RECIPE_COUNT 와 개수를 맞춰야 한다. */
-const PRO_RECIPES = [
-  { w: 10000, h: 6000, halfWidth: 215, kerb: 25, stretch: 1.6,
-    R: a => 1 + 0.22 * Math.sin(2 * a + 1.5) + 0.18 * Math.sin(3 * a + 2.2)
-          + 0.24 * Math.sin(4 * a + 0.5) + 0.14 * Math.sin(6 * a + 1.0) },
-  { w: 10000, h: 6000, halfWidth: 210, kerb: 24, stretch: 1.75,
-    R: a => 1 + 0.16 * Math.sin(2 * a + 0.2) + 0.26 * Math.sin(3 * a + 1.8)
-          + 0.18 * Math.sin(5 * a + 0.7) + 0.14 * Math.sin(7 * a + 2.0) + 0.08 * Math.sin(9 * a + 0.4) },
-  { w: 10000, h: 6000, halfWidth: 220, kerb: 26, stretch: 1.55,
-    R: a => 1 + 0.24 * Math.sin(2 * a + 2.5) + 0.16 * Math.sin(4 * a + 0.9)
-          + 0.22 * Math.sin(5 * a + 1.6) + 0.10 * Math.sin(7 * a + 0.3) + 0.08 * Math.sin(8 * a + 2.2) },
-  { w: 10000, h: 6000, halfWidth: 205, kerb: 24, stretch: 1.7,
-    R: a => 1 + 0.18 * Math.sin(2 * a + 1.0) + 0.24 * Math.sin(3 * a + 0.5)
-          + 0.16 * Math.sin(5 * a + 2.3) + 0.16 * Math.sin(6 * a + 1.2) + 0.10 * Math.sin(8 * a + 0.6) },
-  { w: 10000, h: 6000, halfWidth: 218, kerb: 25, stretch: 1.65,
-    R: a => 1 + 0.20 * Math.sin(2 * a + 0.9) + 0.20 * Math.sin(3 * a + 2.6)
-          + 0.20 * Math.sin(4 * a + 1.4) + 0.12 * Math.sin(6 * a + 0.2) + 0.10 * Math.sin(9 * a + 1.9) },
-];
+/* 커스텀(프로) 방 코스 = 연습 코스 6종(A-1~B-3)을 그대로 사용. 서버가 인덱스(0~5)를 정해
+ *  같은 방의 모든 플레이어가 같은 맵을 보게 한다. server.js 의 NAMED_COURSES 와 개수를 맞춰야 한다. */
+const PRO_COURSES = [PRACTICE_A1, PRACTICE_A2, PRACTICE_A3, PRACTICE_B1, PRACTICE_B2, PRACTICE_B3];
+const PRO_COURSE_NAMES = ["A-1", "A-2", "A-3", "B-1", "B-2", "B-3"];
 
 // 프로 트랙을 인덱스로 만들고 캐시한다 (한 번 만든 맵은 재사용)
 const proTrackCache = new Map();
 function buildProTrack(index) {
-  const i = ((index % PRO_RECIPES.length) + PRO_RECIPES.length) % PRO_RECIPES.length;
-  if (!proTrackCache.has(i)) proTrackCache.set(i, makeTrack(PRO_RECIPES[i]));
+  const i = ((index % PRO_COURSES.length) + PRO_COURSES.length) % PRO_COURSES.length;
+  if (!proTrackCache.has(i)) proTrackCache.set(i, makeTrack(PRO_COURSES[i]));
   return proTrackCache.get(i);
 }
 
@@ -2868,7 +2852,7 @@ function enterFreeRacingFromPro() {
 }
 
 // 코스/시간제한 라벨
-function courseLabel(c) { return c === "random" ? "랜덤" : `코스 ${(+c) + 1}`; }
+function courseLabel(c) { return c === "random" ? "랜덤" : (PRO_COURSE_NAMES[+c] || `코스 ${(+c) + 1}`); }
 function timeLabel(ms) { return ms ? `${ms / 60000}분` : "무제한"; }
 
 // 방 목록(브라우저) 렌더
