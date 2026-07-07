@@ -732,8 +732,8 @@ const PRACTICE_C3 = { ...C_BASE,
 
 /* 커스텀(프로) 방 코스 = 연습 코스 6종(A-1~B-3)을 그대로 사용. 서버가 인덱스(0~5)를 정해
  *  같은 방의 모든 플레이어가 같은 맵을 보게 한다. server.js 의 NAMED_COURSES 와 개수를 맞춰야 한다. */
-const PRO_COURSES = [PRACTICE_A1, PRACTICE_A2, PRACTICE_A3, PRACTICE_B1, PRACTICE_B2, PRACTICE_B3];
-const PRO_COURSE_NAMES = ["A-1", "A-2", "A-3", "B-1", "B-2", "B-3"];
+const PRO_COURSES = [PRACTICE_A1, PRACTICE_A2, PRACTICE_A3, PRACTICE_B1, PRACTICE_B2, PRACTICE_B3, PRACTICE_C1, PRACTICE_C2, PRACTICE_C3];
+const PRO_COURSE_NAMES = ["A-1", "A-2", "A-3", "B-1", "B-2", "B-3", "C-1", "C-2", "C-3"];
 
 // 프로 트랙을 인덱스로 만들고 캐시한다 (한 번 만든 맵은 재사용)
 const proTrackCache = new Map();

@@ -131,7 +131,7 @@ function resolveCarCollisions(list, now) {
 
 // 프로 맵 풀 : 서버가 인덱스만 정하고, 클라가 같은 인덱스로 동일 트랙을 생성한다.
 //  (game.js 의 PRO_COURSES = A-1~B-3 6종과 일치. 실제 선택 범위는 NAMED_COURSES)
-const PRO_RECIPE_COUNT = 6;
+const PRO_RECIPE_COUNT = 9;
 
 // =============================================================================
 //  계정 / 로그인 (users.json 영속 저장, Node 내장 crypto 로 비밀번호 해시)
@@ -792,7 +792,7 @@ setInterval(broadcastCounts, 1000);
 const PRO_MAX = 7;
 const COUNTDOWN_MS = 5000;
 const END_TIMER_MS = 10000;
-const NAMED_COURSES = 6;        // 선택 가능한 코스 수 (game.js PRO_COURSES = A-1~B-3, 인덱스 0..5)
+const NAMED_COURSES = 9;        // 선택 가능한 코스 수 (game.js PRO_COURSES = A-1~C-3, 인덱스 0..8)
 const TIME_LIMITS = [0, 60000, 120000, 180000, 300000]; // 무제한/1/2/3/5분(ms)
 
 let nextRoomId = 1;
