@@ -2641,6 +2641,7 @@ function connect() {
     } else if (msg.type === "stats") {
       account.proWins = msg.proWins || 0;
       account.proPlays = msg.proPlays || 0;
+      if (typeof msg.lastLogin === "number") account.lastLogin = msg.lastLogin; // 마지막 접속 실시간 갱신
       if (typeof msg.totalTime === "number") { account.totalTime = msg.totalTime; account.totalTimeAt = Date.now(); }
       if (typeof msg.bestMs === "number") {
         const improved = msg.bestMs > 0 && (!account.bestMs || msg.bestMs < account.bestMs); // 더 빠른 기록

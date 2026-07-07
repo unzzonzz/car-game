@@ -242,15 +242,14 @@ function loginPlayer(p, userId) {
   p.name = u.nickname;
   p.loginAt = Date.now();
   if (u.color) p.color = u.color; // 계정에 저장된 차 색 → 즉시 릴레이에 반영
-  const prevLogin = u.lastLogin || 0; // 직전(이번 로그인 이전) 접속 시각 → "마지막 접속" 으로 표시
-  u.lastLogin = Date.now();           // 이번 로그인으로 갱신
+  u.lastLogin = Date.now(); // "마지막 접속" = 마지막 활동 시각(접속 순간)
   persistUser(userId);
   send(p, {
     type: "authOk", id: userId, nickname: u.nickname, isAdmin: p.isAdmin,
     token: u.token, proWins: u.proWins || 0, proPlays: u.proPlays || 0,
     bestMs: u.bestTime || 0, bestHardMs: u.bestTimeHard || 0, totalTime: liveTotalTime(p),
     color: u.color || null, settings: u.settings || null, // 계정에 저장된 차 색 + 설정 복원
-    lastLogin: prevLogin, // 직전 접속 시각(0=처음)
+    lastLogin: u.lastLogin, // 마지막 활동 시각
   });
 }
 
@@ -261,6 +260,7 @@ function flushConnectedTime(p) {
   if (!u) return;
   u.totalTime = (u.totalTime || 0) + (Date.now() - p.loginAt);
   p.loginAt = Date.now();
+  u.lastLogin = Date.now(); // "마지막 접속" = 마지막 활동 시각 : 접속 중이면 계속 최신으로 갱신
   persistUser(p.account.userId);
 }
 
@@ -278,7 +278,7 @@ function sendStats(p) {
   if (!p.account) return;
   const u = users[p.account.userId];
   if (!u) return;
-  send(p, { type: "stats", proWins: u.proWins || 0, proPlays: u.proPlays || 0, bestMs: u.bestTime || 0, bestHardMs: u.bestTimeHard || 0, totalTime: liveTotalTime(p) });
+  send(p, { type: "stats", proWins: u.proWins || 0, proPlays: u.proPlays || 0, bestMs: u.bestTime || 0, bestHardMs: u.bestTimeHard || 0, totalTime: liveTotalTime(p), lastLogin: u.lastLogin || 0 });
 }
 
 // --- 정적 파일 서버 ---------------------------------------------------------
@@ -1068,7 +1068,10 @@ setInterval(() => {
 // 접속 중인 로그인 유저의 평생 접속 시간을 주기적으로 누적 저장(1분마다).
 //  (연결이 오래 유지돼도 중간중간 반영되도록 — 크래시/강제종료 대비)
 setInterval(() => {
-  for (const [, p] of players) flushConnectedTime(p);
+  for (const [, p] of players) {
+    flushConnectedTime(p);
+    if (p.account && p.ws.readyState === p.ws.OPEN) sendStats(p); // 대시보드 실시간 갱신(접속시간·마지막접속)
+  }
 }, 60000);
 
 // 마이그레이션 : 구불구불(serp) 기록 컬럼 제거 — 가진 유저만 지우고 영속화(멱등, 재시작해도 안전).
