@@ -1135,7 +1135,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 .lob-tip::before {                 /* 위로 볼록 화살표 : 45도 회전 사각형의 위 두 변만 테두리 → 박스와 자연스럽게 연결 */
   content: "";
   position: absolute;
-  top: -5px;
+  top: -6px;
   left: 50%;
   width: 10px;
   height: 10px;
