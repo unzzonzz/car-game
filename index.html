@@ -54,6 +54,9 @@
       <button id="lobLogout" class="lob-btn" aria-label="로그아웃">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
       </button>
+      <button id="lobRank" class="lob-btn" aria-label="랭킹">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10v5a5 5 0 0 1-10 0V4z"/><path d="M7 6H5a2 2 0 0 0 0 4h1"/><path d="M17 6h2a2 2 0 0 1 0 4h-1"/></svg>
+      </button>
       <a id="lobDiscord" class="lob-btn" href="https://discord.gg/G8n88REdCe" target="_blank" rel="noopener" aria-label="디스코드">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5.2a13 13 0 0 1 6 0"/><path d="M6.3 5.6C4.6 6.2 3.4 7.2 3 8.4c-.9 2.9-1.1 5.8-.6 8.6 1.4 1.1 2.9 1.8 4.5 2.2l.9-1.8"/><path d="M17.7 5.6c1.7.6 2.9 1.6 3.3 2.8.9 2.9 1.1 5.8.6 8.6-1.4 1.1-2.9 1.8-4.5 2.2l-.9-1.8"/><path d="M8.6 17.7c2.2.5 4.6.5 6.8 0"/><circle cx="9.3" cy="12" r="0.8" fill="currentColor"/><circle cx="14.7" cy="12" r="0.8" fill="currentColor"/></svg>
         <span class="lob-tip">디스코드 들어와주세요!</span>
@@ -253,6 +256,21 @@
       <div class="dash-row"><span>프로 우승</span><span id="dashWins">0</span></div>
       <div class="dash-row"><span>프로 플레이</span><span id="dashPlays">0</span></div>
       <button id="dashClose" class="auth-btn auth-close">닫기</button>
+    </div>
+  </div>
+
+  <!-- 로비 랭킹 : 모든 코스 순위 (페이지네이션) -->
+  <div id="rankModal">
+    <div class="rank-card">
+      <h2>랭킹</h2>
+      <div id="rankCourses"></div>
+      <div id="rankList"></div>
+      <div id="rankPager">
+        <button id="rankPrev" class="rank-page-btn" aria-label="이전">←</button>
+        <span id="rankPageInfo">1 / 1</span>
+        <button id="rankNext" class="rank-page-btn" aria-label="다음">→</button>
+      </div>
+      <button id="rankClose" class="auth-btn auth-close">닫기</button>
     </div>
   </div>
 

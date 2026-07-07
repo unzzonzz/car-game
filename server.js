@@ -621,6 +621,15 @@ wss.on("connection", (ws) => {
       logChat(p, name, text, chatMsg.t, chatMsg.admin);              // 로그 파일엔 몽땅 영구 저장
       broadcastConnected(chatMsg);
 
+    } else if (msg.type === "getRankings") {
+      // 로비 랭킹 : 특정 코스(모드)의 "전체" 순위(닉/기록)를 정렬해 보낸다. 페이지네이션은 클라가 처리.
+      const field = RECORD_FIELD[msg.mode];
+      if (!field) return;
+      const arr = [];
+      for (const uid in users) { const u = users[uid]; if (u[field]) arr.push({ name: u.nickname, ms: u[field] }); }
+      arr.sort((a, b) => a.ms - b.ms);
+      send(p, { type: "rankings", mode: msg.mode, entries: arr });
+
     } else if (msg.type === "timeAttack") {
       // 자유/하드 타임어택 기록 제출 → 로그인 유저만, 개인 최고기록 갱신 시 TOP10 반영
       const field = RECORD_FIELD[p.mode]; // racing→bestB1, hard→bestB2, serp→bestB3 (새 컬럼)

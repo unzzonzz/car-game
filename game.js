@@ -897,6 +897,7 @@ window.addEventListener("keydown", e => {
     ["settingsModal", hideSettingsModal],
     ["accountModal", hideAccountModal],
     ["dashboard", hideDashboard],
+    ["rankModal", hideRankings],
     ["authModal", hideAuthModal],
   ];
   for (const [id, hide] of escPopups) {
@@ -2729,6 +2730,9 @@ function connect() {
     } else if (msg.type === "topRecords") {
       attack.top = msg.records || [];
       updateTopRecords();
+    } else if (msg.type === "rankings") {
+      // 로비 랭킹 응답 (현재 보고 있는 코스만 반영)
+      if (msg.mode === rankView.mode) { rankView.entries = msg.entries || []; renderRankings(); }
     } else if (msg.type === "roomList") {
       // 방 목록 갱신 (브라우저 화면)
       race.rooms = msg.rooms || [];
@@ -3890,6 +3894,10 @@ function setupLobbyUI() {
   });
   document.getElementById("lobDash").addEventListener("click", showDashboard);
   document.getElementById("lobLogout").addEventListener("click", () => { sendLogout(); });
+  document.getElementById("lobRank").addEventListener("click", () => { SFX.resume(); showRankings(); });
+  document.getElementById("rankClose").addEventListener("click", hideRankings);
+  document.getElementById("rankPrev").addEventListener("click", () => { if (rankView.page > 0) { rankView.page--; renderRankings(); } });
+  document.getElementById("rankNext").addEventListener("click", () => { rankView.page++; renderRankings(); });
 
   // 게이트 클릭/탭으로도 입장 (모바일 폴백) + 커스텀 스와치 선택
   canvas.addEventListener("pointerdown", (e) => {
@@ -4151,6 +4159,78 @@ function showDashboard() {
 function hideDashboard() {
   document.getElementById("dashboard").classList.remove("show");
   clearInterval(dashTimer);
+}
+
+/* ---------- 로비 랭킹 : 모든 코스(A-1~C-3) 순위, 전체 유저를 페이지네이션 ---------- */
+const RANK_COURSES = [
+  ["A-1", "a1"], ["A-2", "a2"], ["A-3", "a3"],
+  ["B-1", "racing"], ["B-2", "hard"], ["B-3", "serp"],
+  ["C-1", "c1"], ["C-2", "c2"], ["C-3", "c3"],
+];
+const RANK_PER_PAGE = 8; // 한 페이지에 보이는 순위 행 수
+const rankView = { mode: "a1", entries: [], page: 0, built: false };
+
+function showRankings() {
+  document.getElementById("rankModal").classList.add("show");
+  if (!rankView.built) { // 코스 선택 알약은 최초 1회만 생성
+    rankView.built = true;
+    const box = document.getElementById("rankCourses");
+    box.innerHTML = "";
+    for (const [name, mode] of RANK_COURSES) {
+      const b = document.createElement("button");
+      b.className = "rank-course";
+      b.textContent = name;
+      b.dataset.mode = mode;
+      b.addEventListener("click", () => requestRankings(mode));
+      box.appendChild(b);
+    }
+  }
+  requestRankings(rankView.mode || "a1");
+}
+function hideRankings() { document.getElementById("rankModal").classList.remove("show"); }
+
+function requestRankings(mode) {
+  rankView.mode = mode;
+  rankView.page = 0;
+  rankView.entries = [];
+  for (const el of document.querySelectorAll("#rankCourses .rank-course"))
+    el.classList.toggle("on", el.dataset.mode === mode); // 선택 코스 하이라이트
+  renderRankings(true); // 로딩 상태 표시
+  if (net.ws && net.ws.readyState === 1) net.ws.send(JSON.stringify({ type: "getRankings", mode }));
+}
+function renderRankings(loading) {
+  const list = document.getElementById("rankList");
+  const info = document.getElementById("rankPageInfo");
+  const prev = document.getElementById("rankPrev");
+  const next = document.getElementById("rankNext");
+  if (!list) return;
+  list.innerHTML = "";
+  const total = rankView.entries.length;
+  const pages = Math.max(1, Math.ceil(total / RANK_PER_PAGE));
+  if (rankView.page > pages - 1) rankView.page = pages - 1;
+  if (!total) {
+    const e = document.createElement("div");
+    e.className = "rank-empty";
+    e.textContent = loading ? "불러오는 중…" : "아직 기록이 없어요";
+    list.appendChild(e);
+    info.textContent = "0 / 0";
+    prev.disabled = true; next.disabled = true;
+    return;
+  }
+  const start = rankView.page * RANK_PER_PAGE;
+  rankView.entries.slice(start, start + RANK_PER_PAGE).forEach((r, i) => {
+    const rank = start + i + 1;
+    const row = document.createElement("div");
+    row.className = "rank-row" + (rank === 1 ? " top1" : "");
+    const rk = document.createElement("span"); rk.className = "rk"; rk.textContent = rank;
+    const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = r.name;
+    const tm = document.createElement("span"); tm.className = "tm"; tm.textContent = fmtRaceTime(r.ms);
+    row.append(rk, nm, tm);
+    list.appendChild(row);
+  });
+  info.textContent = `${rankView.page + 1} / ${pages}`;
+  prev.disabled = rankView.page <= 0;
+  next.disabled = rankView.page >= pages - 1;
 }
 
 function setupAuth() {
