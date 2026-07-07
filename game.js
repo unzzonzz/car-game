@@ -3879,6 +3879,7 @@ function setupLobbyUI() {
       }
       return; // 커스텀 중엔 게이트 클릭 무시
     }
+    if (lobby.ui === "idle") return; // 줌 인(대기 오버레이) 상태에선 클릭으로 게이트 안 열림 — 움직여 줌아웃 후에만
     for (const g of LOBBY_GATES) {
       if (Math.abs(wx - g.x) < g.w / 2 && Math.abs(wy - g.y) < g.h / 2) {
         if (g.group === "garage") openCustom();
