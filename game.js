@@ -3301,9 +3301,7 @@ function frame(now) {
   if (gameMode === "lobby") updateLobby(dt); // 로비: 오버레이 상태 + 게이트 진입 판정
   const spdKmh = Math.abs(CAR.lf) * PXS_TO_KMH;
   updateDriftSfx();           // 드리프트 스크리치(지속음) 시작/정지
-  // 로비 대기(일시정지) 상태 = 배기음 자연 페이드아웃, 그 외엔 속도로 엔진 드론 갱신
-  if (gameMode === "lobby" && lobby.ui === "idle") stopEngineSfx();
-  else updateEngineSfx(spdKmh);
+  updateEngineSfx(spdKmh);    // 엔진 드론 (속도 → 피치)
   updateBoostSfx(spdKmh);     // 부스트 단계음 (450/500/525)
   updateCamera(CAR, dt);      // 카메라 추적 (+ 흔들림 감쇠)
 
@@ -3440,8 +3438,6 @@ function applyLobHint() {
   if (el) el.style.display = show;
   const tip = document.querySelector(".lob-tip"); // 디스코드 말풍선 : 키캡과 동일 로직 (첫 접속에만)
   if (tip) tip.style.display = show;
-  const pause = document.getElementById("lobPause"); // 일시정지 아이콘 : 반대로 첫 접속이 아닐 때(복귀/자동/ESC)만
-  if (pause) pause.style.display = lobHintFirst ? "none" : "flex"; // CSS 기본값이 none 이라 표시값은 명시
 }
 
 /* 로비 진입 : 웜 화이트 월드에 차 스폰, 대기 오버레이 표시. 서버엔 미입장(로컬 전용). */

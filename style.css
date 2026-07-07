@@ -1030,18 +1030,6 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
   display: flex;
   justify-content: center;
 }
-/* 로비 일시정지 아이콘 : 첫 접속이 아니라 자동/ESC 로 오버레이가 다시 뜰 때 화면 가운데 (조용히 멈춘 느낌) */
-#lobPause {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  display: none;            /* JS(applyLobHint)가 첫 접속이 아닐 때만 표시 */
-  justify-content: center;
-  pointer-events: none;
-}
-#lobPause svg { width: 62px; height: 62px; color: var(--muted); }
 .kb {
   display: inline-flex;
   align-items: center;
@@ -1130,7 +1118,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 #lobDiscord { position: relative; }
 .lob-tip {
   position: absolute;
-  top: calc(100% + 12px);
+  top: calc(100% + 9px);           /* 버튼 아래로 (화살표 공간 포함) */
   left: 50%;
   transform: translateX(-50%);
   white-space: nowrap;
@@ -1147,7 +1135,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 .lob-tip::before {                 /* 위로 볼록 화살표 : 45도 회전 사각형의 위 두 변만 테두리 → 박스와 자연스럽게 연결 */
   content: "";
   position: absolute;
-  top: -6px;
+  top: -5px;
   left: 50%;
   width: 10px;
   height: 10px;
