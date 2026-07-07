@@ -3433,8 +3433,11 @@ function toMenu() {
    한 번 움직여서 오버레이를 걷으면 그 뒤로는 ESC/자동복귀로 떠도 숨긴다. */
 let lobHintFirst = true;
 function applyLobHint() {
+  const show = lobHintFirst ? "" : "none";
   const el = document.getElementById("lobHint");
-  if (el) el.style.display = lobHintFirst ? "" : "none";
+  if (el) el.style.display = show;
+  const tip = document.querySelector(".lob-tip"); // 디스코드 말풍선 : 키캡과 동일 로직 (첫 접속에만)
+  if (tip) tip.style.display = show;
 }
 
 /* 로비 진입 : 웜 화이트 월드에 차 스폰, 대기 오버레이 표시. 서버엔 미입장(로컬 전용). */
