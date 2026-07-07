@@ -925,6 +925,7 @@ window.addEventListener("keydown", e => {
   // 팝업이 열려 있으면 그것부터 닫는다. 모든 팝업 닫기에 메뉴 클릭음(버튼 클릭과 동일).
   //  ESC 는 keydown 이라 전역 버튼-클릭음 핸들러가 안 걸리므로 여기서 직접 울린다.
   const escPopups = [
+    ["createRoom", hideCreateRoom], // 방 만들기 팝업 → 이것만 닫고 방 목록으로 (전체 종료 X)
     ["settingsModal", hideSettingsModal],
     ["accountModal", hideAccountModal],
     ["dashboard", hideDashboard],
