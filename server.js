@@ -902,11 +902,13 @@ function broadcastRoom(roomId) {
   const room = rooms.get(roomId);
   if (!room) return;
   const now = Date.now();
+  // 랭크전 대기 중엔 맵 비공개 (맵 보고 나가는 닷지 방지) — 카운트다운부터 공개(스테이지 진입에 필요)
+  const hideMap = room.type === "rank" && room.state === "lobby";
   const msg = {
     type: "race",
     roomId, roomName: room.name, hostId: room.hostId,
-    state: room.state, laps: room.laps, course: room.course,
-    timeLimit: room.timeLimitMs, maxPlayers: room.maxPlayers, trackIndex: room.trackIndex,
+    state: room.state, laps: room.laps, course: hideMap ? null : room.course,
+    timeLimit: room.timeLimitMs, maxPlayers: room.maxPlayers, trackIndex: hideMap ? null : room.trackIndex,
     rank: room.type === "rank", // 랭크전 방 여부 (클라 UI 분기)
     canReady: roomMembers(roomId).length >= 2, // 최소 2명부터 준비/시작 가능
     countdownMs: room.state === "countdown" ? Math.max(0, room.countdownAt - now) : 0,
@@ -927,7 +929,9 @@ function enterRoom(pid, p, roomId) {
   p.slot = assignSlot(roomId);
   p.state = null; p.invulnUntil = 0; p.graceUntil = 0;
   send(p, { type: "roomJoined", roomId, isHost: room.hostId === pid });
-  send(p, { type: "proStart", slot: p.slot, laps: room.laps, trackIndex: room.trackIndex });
+  // 랭크전 대기 중엔 트랙도 비공개 — 카운트다운 브로드캐스트가 실제 trackIndex 를 전달한다
+  const hideMap = room.type === "rank" && room.state === "lobby";
+  send(p, { type: "proStart", slot: p.slot, laps: room.laps, trackIndex: hideMap ? null : room.trackIndex });
   broadcastRoom(roomId);
   broadcastRoomList();
 }

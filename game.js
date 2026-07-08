@@ -3319,7 +3319,7 @@ function updateRaceUI() {
   const info = document.getElementById("lobbyInfo");
   if (info) {
     info.textContent = race.isRank
-      ? `${courseLabel(race.course)} · ${race.laps}바퀴 · 3~${race.maxPlayers}명 · 무작위 매칭`
+      ? `맵 ??? · ${race.laps}바퀴 · 3~${race.maxPlayers}명 · 무작위 매칭`
       : `${courseLabel(race.course)} · ${race.laps}바퀴 · 시간제한 ${timeLabel(race.timeLimit)} · 최대 ${race.maxPlayers}명`;
   }
   const title = document.getElementById("lobbyTitle");
