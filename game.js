@@ -73,9 +73,9 @@ const SOCCER = {
   ballR: 24, ballFriction: 0.9,  // 공 반지름 / 구름마찰(초당 지수 감쇠)
   wallRest: 0.55,                // 벽 반발계수
   grab: 5,                       // 잡았을 때 차 앞 간격(px)
-  shootSpeed: 1150, dropSpeed: 70, // J 슛 / K 놓기 속도
+  grabFollow: 8,                 // 그랩 공의 "각도" 추종 속도(작을수록 회전 시 크게 스윙=아슬아슬, 스냅 X)
 };
-const ball = { x: SOCCER.cx, y: SOCCER.cy, vx: 0, vy: 0, grabbed: false, grabAt: 0, spots: [] };
+const ball = { x: SOCCER.cx, y: SOCCER.cy, vx: 0, vy: 0, grabbed: false, spots: [] };
 
 /* =============================================================================
  *  색상 팔레트 (디자인 시스템) — 캔버스로 그리는 주요 색을 한 곳에 모은다.
@@ -935,7 +935,7 @@ window.addEventListener("keydown", (e) => {
 /* =============================================================================
  *  입력 처리
  * ========================================================================== */
-const keys = { w: false, a: false, s: false, d: false, space: false, k: false };
+const keys = { w: false, a: false, s: false, d: false, space: false, j: false };
 
 // Enter 로 채팅창을 포커스한 그 Enter 의 keyup 이 곧바로 전송/blur 되는 것을 막는 플래그
 let chatFocusGuard = false;
@@ -990,8 +990,7 @@ window.addEventListener("keydown", (e) => {
     case "KeyR": // 타임어택 모드에서 R : 기록 시작/다시 (출발선 뒤로 → 재계측). 버튼과 동일
       if (!e.repeat && gameState === "playing" && isTimeAttackMode()) { SFX.click(); startAttack(); }
       break;
-    case "KeyJ": if (!e.repeat) soccerShoot(); break; // 축구 : 앞으로 슛(패스)
-    case "KeyK": keys.k = true; if (!e.repeat) soccerDrop(); break; // 축구 : 놓기 / 누른 채 접촉=바운스
+    case "KeyJ": keys.j = true; break; // 축구 : 누르는 동안만 공 그랩(드리블). 떼면 momentum 으로 나감
   }
 });
 window.addEventListener("keyup", (e) => {
@@ -1001,7 +1000,7 @@ window.addEventListener("keyup", (e) => {
     case "KeyS": keys.s = false; break;
     case "KeyD": keys.d = false; break;
     case "Space": keys.space = false; break;
-    case "KeyK": keys.k = false; break;
+    case "KeyJ": keys.j = false; break;
   }
 });
 
@@ -1868,8 +1867,10 @@ function drawGround() {
 
 /* ==========================  축구 (베타 · 싱글)  ==========================
  *  풋살장 크기 세로 운동장 + 위/아래 골대(그물 없음) + 진짜 3D 롤링 공.
- *  - 공 : 자유(물리) 또는 그랩(차 앞 5px 에 딱 붙음). 접촉해도 날아가지 않고 잡힌다.
- *  - J : 앞으로 슛(패스).  K : 앞에 살짝 놓기 / K 누른 채 접촉 = 그랩 대신 부딪힘(바운스).
+ *  - 공 : 평소엔 자유(부딪히기만). J 를 "누르고 있는 동안"만 차 앞에 살살 붙어 드리블.
+ *         스냅 없이 부드럽게 따라와 회전하면 아슬아슬하게 뒤처진다.
+ *  - J 떼기 = 그 순간 momentum 으로 공이 나감(자연스러운 패스/슛).
+ *  - 그랩 중 공은 경계 밖으로 안 나가고, 벽에 닿으면 그랩이 끊긴다.
  *  - 골 : 점수 없이 공만 가운데 리셋 (진동 없음). */
 
 // 공 무늬(오각형) = 정이십면체 12 꼭짓점을 구 위에 얹어 굴린다 (2D지만 3D 회전)
@@ -1877,15 +1878,26 @@ const _PHI = (1 + Math.sqrt(5)) / 2, _IL = Math.hypot(1, _PHI);
 function initSpots() {
   const raw = [[0,1,_PHI],[0,1,-_PHI],[0,-1,_PHI],[0,-1,-_PHI],[1,_PHI,0],[1,-_PHI,0],
                [-1,_PHI,0],[-1,-_PHI,0],[_PHI,0,1],[_PHI,0,-1],[-_PHI,0,1],[-_PHI,0,-1]];
-  ball.spots = raw.map(p => [p[0]/_IL, p[1]/_IL, p[2]/_IL]);
+  // 각 무늬 = [법선 nx,ny,nz, 접선 tx,ty,tz]. 접선을 같이 굴려 오각형 방향을 구 표면에 고정(제자리 스핀 X).
+  ball.spots = raw.map(p => {
+    const n = [p[0]/_IL, p[1]/_IL, p[2]/_IL];
+    const ref = Math.abs(n[2]) < 0.9 ? [0,0,1] : [1,0,0];              // 법선과 평행 아닌 기준
+    let tx = n[1]*ref[2]-n[2]*ref[1], ty = n[2]*ref[0]-n[0]*ref[2], tz = n[0]*ref[1]-n[1]*ref[0]; // t = n×ref
+    const tl = Math.hypot(tx,ty,tz) || 1; tx/=tl; ty/=tl; tz/=tl;
+    return [n[0],n[1],n[2], tx,ty,tz];
+  });
 }
-function rotateSpots(ax, ay, az, ang) { // 축(ax,ay,az 단위) 둘레 ang 회전 (로드리게스)
+function rotateSpots(ax, ay, az, ang) { // 축(ax,ay,az 단위) 둘레 ang 회전 (로드리게스) — 법선+접선 동시
   const c = Math.cos(ang), s = Math.sin(ang), t = 1 - c;
   const m00=c+ax*ax*t, m01=ax*ay*t-az*s, m02=ax*az*t+ay*s;
   const m10=ay*ax*t+az*s, m11=c+ay*ay*t, m12=ay*az*t-ax*s;
   const m20=az*ax*t-ay*s, m21=az*ay*t+ax*s, m22=c+az*az*t;
-  for (const v of ball.spots) { const x=v[0], y=v[1], z=v[2];
-    v[0]=m00*x+m01*y+m02*z; v[1]=m10*x+m11*y+m12*z; v[2]=m20*x+m21*y+m22*z; }
+  for (const v of ball.spots) {
+    const x=v[0], y=v[1], z=v[2];
+    v[0]=m00*x+m01*y+m02*z; v[1]=m10*x+m11*y+m12*z; v[2]=m20*x+m21*y+m22*z;
+    const tx=v[3], ty=v[4], tz=v[5];
+    v[3]=m00*tx+m01*ty+m02*tz; v[4]=m10*tx+m11*ty+m12*tz; v[5]=m20*tx+m21*ty+m22*tz;
+  }
 }
 function rollBall(dt) { // 이동 방향 수직축으로 굴려 무늬가 흐르게(구가 구르는 느낌)
   const s = Math.hypot(ball.vx, ball.vy);
@@ -1893,12 +1905,12 @@ function rollBall(dt) { // 이동 방향 수직축으로 굴려 무늬가 흐르
   rotateSpots(-ball.vy/s, ball.vx/s, 0, (s * dt) / SOCCER.ballR);
 }
 
-function resetBall() { ball.x = SOCCER.cx; ball.y = SOCCER.cy; ball.vx = 0; ball.vy = 0; ball.grabbed = false; ball.grabAt = 0; initSpots(); }
+function resetBall() { ball.x = SOCCER.cx; ball.y = SOCCER.cy; ball.vx = 0; ball.vy = 0; ball.grabbed = false; initSpots(); }
 function goalScored() { resetBall(); SFX.record(); }                 // 진동 없음
 function clampBall() { const bs = Math.hypot(ball.vx, ball.vy), MAX = 2600; if (bs > MAX) { ball.vx *= MAX/bs; ball.vy *= MAX/bs; } }
 const carFront = () => CAR.length * 1.15 / 2 + SOCCER.ballR + SOCCER.grab; // 그랩 시 공 중심까지 거리
 
-// 차↔공 접촉 : 기본은 잡기(그랩). K 누른 채이거나 쿨다운 중이면 부딪힘(바운스).
+// 차↔공 접촉 : J 누른 채 접촉하면 잡기(그랩 시작), 아니면 부딪힘(바운스).
 function ballCarContact() {
   const hl = CAR.length*1.15/2, hw = CAR.width*1.15/2, r = SOCCER.ballR;
   const dx = ball.x - CAR.x, dy = ball.y - CAR.y;
@@ -1909,11 +1921,10 @@ function ballCarContact() {
   if (d > r) return;
   if (d < 0.001) { ex = (lx>=0?1:-1); ey = 0; d = 0.001; }
   const nx = (ex/d)*c - (ey/d)*s, ny = (ex/d)*s + (ey/d)*c;    // 월드 법선
-  if (keys.k || performance.now() < ball.grabAt) {             // 바운스(그랩 X)
-    ball.x += nx*(r-d); ball.y += ny*(r-d);
-    const approach = Math.max(0, CAR.vx*nx + CAR.vy*ny);
-    ball.vx += nx*(approach*1.1 + 30); ball.vy += ny*(approach*1.1 + 30); clampBall();
-  } else { ball.grabbed = true; SFX.click(); }                 // 그랩
+  if (keys.j) { ball.grabbed = true; SFX.click(); return; }    // J 누른 채 → 그랩(드리블 시작)
+  ball.x += nx*(r-d); ball.y += ny*(r-d);                      // 아니면 부딪힘(바운스)
+  const approach = Math.max(0, CAR.vx*nx + CAR.vy*ny);
+  ball.vx += nx*(approach*1.1 + 30); ball.vy += ny*(approach*1.1 + 30); clampBall();
 }
 
 // 공 벽 반사 + 골 판정 (상/하 골 입구는 통과)
@@ -1928,16 +1939,10 @@ function soccerBallWalls() {
 }
 
 function updateBall(dt) {
-  if (ball.grabbed) {                                          // 잡은 공 : 차 앞에 딱 붙어 회전해도 따라옴
-    const fx = Math.cos(CAR.angle), fy = Math.sin(CAR.angle), f = carFront();
-    ball.x = CAR.x + fx*f; ball.y = CAR.y + fy*f;
-    ball.vx = CAR.vx; ball.vy = CAR.vy;                        // 놓을 때 연속성
-    rollBall(dt);
-    const S = SOCCER, gL = S.cx-S.goalW/2, gR = S.cx+S.goalW/2; // 드리블로 골 넣기
-    if (ball.x > gL && ball.x < gR && (ball.y < S.top || ball.y > S.bottom)) goalScored();
-    return;
-  }
-  ballCarContact();
+  if (ball.grabbed && !keys.j) releaseBall();                  // J 떼면 그 momentum 으로 풀림
+  if (ball.grabbed) { dribbleBall(dt); return; }
+
+  ballCarContact();                                           // J 누른 채 접촉=그랩 / 아니면 부딪힘
   if (ball.grabbed) return;
   ball.x += ball.vx*dt; ball.y += ball.vy*dt;
   const damp = Math.exp(-SOCCER.ballFriction*dt);              // 구름마찰 → 자연 감속
@@ -1947,23 +1952,40 @@ function updateBall(dt) {
   soccerBallWalls();
 }
 
-// J : 앞으로 슛(패스) / K : 앞에 살짝 놓기
-function soccerShoot() {
-  if (gameMode !== "soccer" || !ball.grabbed) return;
-  const fx = Math.cos(CAR.angle), fy = Math.sin(CAR.angle);
-  ball.grabbed = false;
-  ball.x = CAR.x + fx*(carFront()+6); ball.y = CAR.y + fy*(carFront()+6);
-  ball.vx = CAR.vx + fx*SOCCER.shootSpeed; ball.vy = CAR.vy + fy*SOCCER.shootSpeed; clampBall();
-  ball.grabAt = performance.now() + 400;                       // 잠깐 재그랩 방지
-  SFX.collision(0.65);
+// 그랩된 공 : 차 앞 거리(f)는 유지하되 "각도"만 부드럽게 뒤따른다.
+//  → 직진 땐 앞에 붙어있고, 회전하면 각이 뒤처져 옆으로 스윙(살살 붙어 아슬아슬). 속도 빨라도 차 밑으로 파묻히지 않음.
+function dribbleBall(dt) {
+  const f = carFront();
+  const k = 1 - Math.exp(-SOCCER.grabFollow*dt);              // 프레임레이트 무관 각도 추종
+  let ang = Math.atan2(ball.y - CAR.y, ball.x - CAR.x);        // 공의 현재 각(차 중심 기준)
+  if (Math.hypot(ball.x - CAR.x, ball.y - CAR.y) < 1) ang = CAR.angle;
+  let dA = CAR.angle - ang; dA = Math.atan2(Math.sin(dA), Math.cos(dA)); // 최단 회전량
+  ang += dA * k;                                              // 각도만 살살 추종(뒤처짐=스윙)
+  const nx = CAR.x + Math.cos(ang)*f, ny = CAR.y + Math.sin(ang)*f;
+  if (dt > 0) { ball.vx = (nx - ball.x)/dt; ball.vy = (ny - ball.y)/dt; } // 놓을 때 쓸 momentum
+  ball.x = nx; ball.y = ny;
+  rollBall(dt);
+  if (clampGrabbedBall()) { releaseBall(); return; }          // 경계/벽 닿으면 밖으로 안 나가고 그랩 끊김
+  const S = SOCCER, gL = S.cx-S.goalW/2, gR = S.cx+S.goalW/2;  // 드리블로 골
+  if (ball.x > gL && ball.x < gR && (ball.y < S.top || ball.y > S.bottom)) goalScored();
 }
-function soccerDrop() {
-  if (gameMode !== "soccer" || !ball.grabbed) return;
-  const fx = Math.cos(CAR.angle), fy = Math.sin(CAR.angle);
-  ball.grabbed = false;
-  ball.vx = CAR.vx + fx*SOCCER.dropSpeed; ball.vy = CAR.vy + fy*SOCCER.dropSpeed;
-  ball.grabAt = performance.now() + 250;
-  SFX.click();
+
+// 그랩 해제 : 현재(추종) 속도를 momentum 으로 유지한 채 자유 공으로.
+function releaseBall() {
+  if (!ball.grabbed) return;
+  ball.grabbed = false; clampBall(); SFX.click();
+}
+
+// 그랩 공을 필드 안으로 밀어넣고, 벽에 닿았으면 true(→그랩 끊김). 골 입구는 통과.
+function clampGrabbedBall() {
+  const S = SOCCER, r = S.ballR, gL = S.cx-S.goalW/2, gR = S.cx+S.goalW/2;
+  const inGoalX = ball.x > gL && ball.x < gR;
+  let hit = false;
+  if (ball.x - r < S.left)  { ball.x = S.left + r;  hit = true; }
+  if (ball.x + r > S.right) { ball.x = S.right - r; hit = true; }
+  if (!inGoalX && ball.y - r < S.top)    { ball.y = S.top + r;    hit = true; }
+  if (!inGoalX && ball.y + r > S.bottom) { ball.y = S.bottom - r; hit = true; }
+  return hit;
 }
 
 // 차를 필드 사각형 안에 가둔다 (골 입구도 차는 못 나감)
@@ -2023,10 +2045,12 @@ function drawBall() {
   ctx.save(); ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, 7); ctx.clip();
   for (const sp of b.spots.slice().sort((p,q)=>p[2]-q[2])) {  // 뒤(z작음)부터 → 앞이 위로
     const z = sp[2]; if (z <= 0.02) continue;                 // 뒤/가장자리 숨김
-    const sx = b.x + sp[0]*r, sy = b.y + sp[1]*r, rad = Math.atan2(sp[1], sp[0]);
+    const sx = b.x + sp[0]*r, sy = b.y + sp[1]*r;
+    const rad = Math.atan2(sp[1], sp[0]);                     // 반경방향(구 곡률 납작용)
+    const rot = Math.atan2(sp[4], sp[3]);                     // 오각형 방향 = 접선 투영(구와 함께 굴러, 제자리 스핀 X)
     ctx.globalAlpha = clamp(z*4, 0, 1); ctx.fillStyle = "#1b1e23";
     ctx.save(); ctx.translate(sx, sy); ctx.rotate(rad); ctx.scale(0.45+0.55*z, 1); ctx.rotate(-rad); // 반경방향 납작(구 곡률)
-    drawPentagon(0, 0, r*0.36*(0.5+0.5*z), rad*1.2);
+    drawPentagon(0, 0, r*0.36*(0.5+0.5*z), rot);
     ctx.restore();
   }
   ctx.restore(); ctx.globalAlpha = 1;
