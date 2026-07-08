@@ -683,6 +683,25 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 .dash-row span:last-child { font-family: 'Quicksand', sans-serif; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
 .dash-card .auth-btn { width: 100%; margin-top: 22px; }
 
+/* 랭크전 결과 팝업 : 대시보드와 같은 오버레이 + 승패 텍스트 */
+#rankResultModal {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(58, 54, 46, 0.28);
+  z-index: 46; /* 대기실/순위판 위 */
+}
+#rankResultModal.show { display: flex; }
+#rankResultOutcome {
+  font-family: 'Jua', sans-serif;
+  font-size: 34px;
+  margin: 4px 0 22px;
+}
+#rankResultOutcome.win { color: var(--green); }
+#rankResultOutcome.lose { color: var(--coral); }
+
 /* 로비 랭킹 모달 : 대시보드와 같은 오버레이. 모든 코스 순위 + 페이지네이션 */
 #rankModal {
   position: absolute;

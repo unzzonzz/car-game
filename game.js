@@ -138,7 +138,7 @@ const MAP_GROUPS = {
     desc: "다른 플레이어들과 경쟁하는 레이싱",
     maps: [
       { name: "일반전", desc: "표준 규칙으로 달리는 레이스", mode: null },
-      { name: "경쟁전", desc: "실력을 겨루는 랭크 레이스", mode: null },
+      { name: "경쟁전", desc: "실력을 겨루는 랭크 레이스", rank: true },
       { name: "캐주얼", desc: "특별한 규칙의 이색 레이스", mode: null },
     ],
   },
@@ -226,7 +226,7 @@ const CAR_COLORS = [
 ];
 const CUSTOM_RING_R = 175; // 링 반지름(월드 px)
 const custom = { active: false, cx: 0, cy: 0, selAnim: null }; // selAnim = 픽커(선택 링) 슬라이드 애니메이션
-const modeCounts = { a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, retro1: 0, retro2: 0, pro: 0, test: 0, total: 0 };
+const modeCounts = { a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, retro1: 0, retro2: 0, pro: 0, test: 0, rank: 0, total: 0 };
 
 // 현재 모드/월드/게임 상태 (실제 시작은 하단 enterLobby() 가 로비로 설정)
 let gameMode = "lobby";      // "lobby" | "racing" | "hard" | "serp" | "pro" | "test"
@@ -238,6 +238,7 @@ let playerName = "게스트";
 const race = {
   state: "none",     // "none" | "browsing" | "lobby" | "countdown" | "racing"
   exited: false,     // 프로에서 로비로 나가는 중 → 지연 도착한 방/레이스 메시지 무시(재진입/멈춤 방지)
+  isRank: false,     // 현재 방이 랭크전인지 (준비 없음 · 작은 카운트다운 · 점수)
   laps: 3,
   slot: 0,           // 내 그리드 슬롯
   list: [],          // 방 순위 [{id,name,ready,lap,finished,rank}]
@@ -274,6 +275,8 @@ let chatHistoryLoaded = false; // 최근 채팅을 한 번만 적용 (재접속 
 const account = {
   loggedIn: false, userId: null, nickname: "", isAdmin: false,
   proWins: 0, proPlays: 0, loginTime: 0,
+  rankScore: 100,     // 랭크전 점수 (기본 100)
+  rankAllowed: false, // 랭크전 참가 허용 (디스코드 신청 → 서버 컬럼)
   totalTime: 0,   // 평생 누적 접속 시간(ms) — 서버가 보낸 "실시간" 값
   totalTimeAt: 0, // 위 값을 수신한 클라 시각(performance 아님) — 라이브 증가 기준
   bestA1Ms: 0,    // A-1 개인 최고 기록(ms) — 서버 bestA1
@@ -956,6 +959,7 @@ window.addEventListener("keydown", e => {
     ["settingsModal", hideSettingsModal],
     ["accountModal", hideAccountModal],
     ["dashboard", hideDashboard],
+    ["rankResultModal", hideRankResult],
     ["rankModal", hideRankings],
     ["authModal", hideAuthModal],
   ];
@@ -964,7 +968,7 @@ window.addEventListener("keydown", e => {
   }
   if (gameMode === "lobby") {
     if (mapPopup.open) { SFX.click(); closeMapPopup(); return; }      // 게이트 맵 팝업 닫기
-    if (race.state === "lobby") { SFX.click(); sendLeaveRoom(); return; }   // 대기실 → 방 나가기
+    if (race.state === "lobby") { SFX.click(); race.isRank ? closeRankQueue() : sendLeaveRoom(); return; } // 대기실 → 방 나가기
     if (race.state === "browsing") { SFX.click(); closeCustomRooms(); return; } // 커스텀 방 목록 닫기
     lobbyIdle(); // 로비: 그 자리에서 줌인 + 메뉴 오버레이 복귀
   } else {
@@ -1772,6 +1776,30 @@ function drawRaceHud() {
   if (gameMode !== "pro") return;
   const now = performance.now();
   const cx = viewW / 2, cy = viewH * 0.30;
+
+  // ---- 랭크전 카운트다운 : 작은 글씨 (10초, 그동안 난입 가능) ----
+  if (race.isRank && race.state === "countdown" && race.countdownEnd > now) {
+    const secs = Math.ceil((race.countdownEnd - now) / 1000);
+    const step = 11 - secs; // 비프용 진행 카운터 (초가 줄 때마다 증가)
+    if (secs <= 3 && step > sfxCountLit) { sfxCountLit = step; SFX.beep(); } // 마지막 3초만 비프
+    const label = `${secs}초 후 시작`;
+    ctx.save();
+    ctx.font = "400 15px Jua, sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    const w = ctx.measureText(label).width + 34, h = 32;
+    ctx.shadowColor = "rgba(58,54,46,0.14)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 4;
+    ctx.fillStyle = "#ffffff";
+    roundRect(cx - w / 2, cy - h / 2, w, h, h / 2);
+    ctx.fill();
+    ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+    ctx.strokeStyle = "#ece8df"; ctx.lineWidth = 1;
+    roundRect(cx - w / 2, cy - h / 2, w, h, h / 2);
+    ctx.stroke();
+    ctx.fillStyle = "#6b675e";
+    ctx.fillText(label, cx, cy + 1);
+    ctx.restore();
+    return; // 5-라이트 카드 대신 작은 글씨만
+  }
 
   // ---- 카운트다운 : 흰 카드 위 5개 라이트가 코랄로 하나씩 점등 (소등 = 출발) ----
   if (race.state === "countdown" && race.countdownEnd > now) {
@@ -2905,6 +2933,8 @@ function connect() {
       account.bestC2Ms = msg.bestC2Ms || 0;
       account.bestC3Ms = msg.bestC3Ms || 0;
       account.lastLogin = msg.lastLogin || 0; // 직전 접속 시각(0=처음)
+      account.rankScore = typeof msg.rankScore === "number" ? msg.rankScore : 100;
+      account.rankAllowed = !!msg.rankAllowed;
       account.loginTime = Date.now();
       playerName = msg.nickname;
       try { localStorage.setItem("carGameToken", msg.token); } catch {}
@@ -2964,6 +2994,8 @@ function connect() {
         account.bestC3Ms = msg.bestC3Ms;
         if (improved) SFX.record(); // C-3 기록 갱신 팡파레
       }
+      if (typeof msg.rankScore === "number") account.rankScore = msg.rankScore;
+      if (typeof msg.rankAllowed === "boolean") account.rankAllowed = msg.rankAllowed;
       updateDashboard();
     } else if (msg.type === "counts") {
       // 모드별 참가 인원 → 로비 게이트 숫자 + 온라인 표시 갱신
@@ -2980,6 +3012,7 @@ function connect() {
       modeCounts.retro2 = msg.retro2 || 0;
       modeCounts.pro = msg.pro || 0;
       modeCounts.test = msg.test || 0;
+      modeCounts.rank = msg.rank || 0;
       modeCounts.total = typeof msg.total === "number"
         ? msg.total
         : modeCounts.a1 + modeCounts.a2 + modeCounts.a3 + modeCounts.racing + modeCounts.hard + modeCounts.serp + modeCounts.c1 + modeCounts.c2 + modeCounts.c3 + modeCounts.retro1 + modeCounts.retro2 + modeCounts.pro;
@@ -3025,6 +3058,20 @@ function connect() {
     } else if (msg.type === "rankings") {
       // 로비 랭킹 응답 (현재 보고 있는 코스만 반영)
       if (msg.mode === rankView.mode) { rankView.entries = msg.entries || []; renderRankings(); }
+    } else if (msg.type === "rankReject") {
+      // 랭크전 입장 거부 (미허용/비로그인) → 로비 복귀 + 안내
+      race.isRank = false; race.state = "none";
+      lobby.holdGate = LOBBY_GATES.find((x) => x.group === "racing") || null;
+      updateRaceUI();
+      alert(msg.reason || "랭크전에 입장할 수 없습니다.");
+    } else if (msg.type === "rankResult") {
+      // 랭크전 종료 결과 (점수 반영) → 로비 복귀 + 결과 팝업
+      account.rankScore = typeof msg.score === "number" ? msg.score : account.rankScore;
+      race.isRank = false;
+      const show = () => showRankResult(msg);
+      if (gameMode === "pro") wipeTo(() => { toMenu(); show(); }, { title: "랭크전 종료", desc: msg.win ? "우승했습니다!" : "다음엔 더 잘할 수 있어요" });
+      else show();
+      updateDashboard();
     } else if (msg.type === "roomList") {
       // 방 목록 갱신 (브라우저 화면)
       race.rooms = msg.rooms || [];
@@ -3122,6 +3169,7 @@ function handleRaceMessage(msg) {
   race.laps = msg.laps || race.laps;
   race.list = msg.players || [];
   race.canReady = !!msg.canReady;
+  if (typeof msg.rank === "boolean") race.isRank = msg.rank; // 서버가 방 타입을 확정
   race.isHost = msg.hostId === net.id;
   if (msg.roomName !== undefined) race.roomName = msg.roomName;
   if (msg.course !== undefined) race.course = msg.course;
@@ -3136,15 +3184,23 @@ function handleRaceMessage(msg) {
   race.countdownEnd = msg.countdownMs > 0 ? performance.now() + msg.countdownMs : 0;
   race.endEnd = msg.endMs > 0 ? performance.now() + msg.endMs : 0;
 
+  const stageTitle = race.isRank
+    ? { title: "랭크전", desc: "잠시 후 레이스가 시작됩니다" }
+    : { title: "커스텀 레이싱", desc: "잠시 후 레이스가 시작됩니다" };
   if (prevState !== "countdown" && race.state === "countdown") {
     sfxCountLit = -1; // 새 카운트다운 비프 준비
     // 로비 위 대기실에서 시작 확정 → 이제 스테이지 진입 + 그리드 배치
-    if (gameMode === "lobby") wipeTo(() => { enterProStage(); placeOnProGrid(); }, { title: "커스텀 레이싱", desc: "잠시 후 레이스가 시작됩니다" });
+    if (gameMode === "lobby") wipeTo(() => { enterProStage(); placeOnProGrid(); }, stageTitle);
+  }
+
+  // 랭크전 : 카운트다운 중 3명 미만이 되면 취소 → 스테이지에서 대기실로 복귀
+  if (race.isRank && prevState === "countdown" && race.state === "lobby" && gameMode === "pro") {
+    wipeTo(returnToWaitingRoom, { title: "인원 부족", desc: "3명이 모이면 다시 시작됩니다" });
   }
 
   // 카운트다운 → 레이싱 전환 시 : 바퀴 추적/누적 타이머 초기화 + GO 표시/효과음
   // 안전망 : 카운트다운 메시지를 놓치고 바로 racing 이 온 경우에도 스테이지 진입
-  if (gameMode === "lobby" && race.state === "racing") wipeTo(() => { enterProStage(); placeOnProGrid(); }, { title: "커스텀 레이싱", desc: "잠시 후 레이스가 시작됩니다" });
+  if (gameMode === "lobby" && race.state === "racing") wipeTo(() => { enterProStage(); placeOnProGrid(); }, stageTitle);
   if (prevState !== "racing" && race.state === "racing") {
     race.lap = 0; race.prog = 0; race.checkpoint = false;
     race.done = false; race.finalMs = 0; race.lapMark = 0;
@@ -3278,10 +3334,12 @@ function updateRaceUI() {
   // 로비 헤더(방 이름 + 설정)
   const info = document.getElementById("lobbyInfo");
   if (info) {
-    info.textContent = `${courseLabel(race.course)} · ${race.laps}바퀴 · 시간제한 ${timeLabel(race.timeLimit)} · 최대 ${race.maxPlayers}명`;
+    info.textContent = race.isRank
+      ? `${courseLabel(race.course)} · ${race.laps}바퀴 · 3~${race.maxPlayers}명 · 무작위 매칭`
+      : `${courseLabel(race.course)} · ${race.laps}바퀴 · 시간제한 ${timeLabel(race.timeLimit)} · 최대 ${race.maxPlayers}명`;
   }
   const title = document.getElementById("lobbyTitle");
-  if (title) title.textContent = race.roomName ? `${race.roomName}` : "커스텀 대기실";
+  if (title) title.textContent = race.isRank ? "랭크전 대기실" : (race.roomName ? `${race.roomName}` : "커스텀 대기실");
 
   // 로비 플레이어 목록
   const lobbyList = document.getElementById("lobbyList");
@@ -3296,19 +3354,28 @@ function updateRaceUI() {
     nm.className = "lobby-name";
     nm.textContent = p.name + (p.id === net.id ? " (나)" : "");
     const st = document.createElement("span");
-    st.className = "lobby-ready " + (p.ready ? "on" : "off");
-    st.textContent = p.ready ? "준비완료" : "대기중";
+    if (race.isRank) { // 랭크전 : 준비 개념 없음 → 상태 라벨 생략
+      st.className = "lobby-ready off";
+      st.textContent = "";
+    } else {
+      st.className = "lobby-ready " + (p.ready ? "on" : "off");
+      st.textContent = p.ready ? "준비완료" : "대기중";
+    }
     row.append(dot, nm, st);
     lobbyList.appendChild(row);
   }
 
-  // 준비 버튼
+  // 준비 버튼 (랭크전은 준비 없음 → 숨김) + 초대 버튼 (랭크방은 초대 불가)
   const btn = document.getElementById("readyBtn");
+  btn.style.display = race.isRank ? "none" : "block";
+  const share = document.getElementById("shareRoomBtn");
+  if (share) share.style.display = race.isRank ? "none" : "";
   btn.disabled = !race.canReady;
   btn.textContent = race.myReady ? "준비 취소" : "준비";
   btn.classList.toggle("ready", race.myReady);
-  document.getElementById("lobbyHint").textContent =
-    "모두 준비하면 자동으로 시작됩니다 (최소 2명)";
+  document.getElementById("lobbyHint").textContent = race.isRank
+    ? `3명이 모이면 10초 후 자동 시작 (현재 ${race.list.length}명)`
+    : "모두 준비하면 자동으로 시작됩니다 (최소 2명)";
 
   // 순위판 : 순위 · 이름 · 현재 랩 기록 · 현재랩/전체랩
   const sList = document.getElementById("standingsList");
@@ -3954,6 +4021,7 @@ function openCustomRooms() {
   SFX.click(); // 게이트 진입/클릭엔 버튼이 없어 직접 울린다 (다른 메뉴와 동일)
   CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0; // 보는 동안 차 정지
   race.exited = false; // 커스텀 흐름 재진입 → 이제 방/레이스 메시지 정상 처리
+  race.isRank = false;
   race.state = "browsing";
   race.isHost = false; race.myReady = false; race.rooms = [];
   lobby.ui = "hidden"; lobby.stopMs = 0;
@@ -3974,6 +4042,29 @@ function closeCustomRooms() {
   hideCreateRoom();
   // 게이트를 벗어나야 재무장 (다른 팝업들과 동일)
   lobby.holdGate = LOBBY_GATES.find((x) => x.group === "custom") || null;
+  updateRaceUI();
+}
+
+/* 랭크전 입장 : 방 목록 없이 서버가 자동 배정(무작위 매칭). roomJoined 수신 시 대기실이 뜬다. */
+function openRankQueue() {
+  SFX.click();
+  CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0;
+  race.exited = false;
+  race.isRank = true;
+  race.state = "none"; // roomJoined 전까지 패널 없음 (서버가 즉시 배정)
+  race.isHost = false; race.myReady = false;
+  lobby.ui = "hidden"; lobby.stopMs = 0;
+  document.getElementById("lobbyUI").classList.add("s-hidden");
+  if (net.connected && net.ws.readyState === WebSocket.OPEN) {
+    net.ws.send(JSON.stringify({ type: "join", mode: "rank" }));
+  }
+}
+
+/* 랭크 대기실 나가기 (레이스 시작 전) : 방 이탈 + 로비로 */
+function closeRankQueue() {
+  race.state = "none"; race.isRank = false;
+  sendLeave(); // 서버: leaveRoom + 이탈 (랭크는 방 목록 화면이 없다)
+  lobby.holdGate = LOBBY_GATES.find((x) => x.group === "racing") || null;
   updateRaceUI();
 }
 
@@ -4023,7 +4114,7 @@ function openMapPopup(groupKey) {
   grid.innerHTML = "";
   for (const m of grp.maps) {
     const card = document.createElement("button");
-    card.className = "map-card" + (m.mode || m.group ? "" : " soon");
+    card.className = "map-card" + (m.mode || m.group || m.rank ? "" : " soon");
     const nm = document.createElement("div");
     nm.className = "map-card-name";
     nm.textContent = m.name;
@@ -4031,7 +4122,25 @@ function openMapPopup(groupKey) {
     ds.className = "map-card-desc";
     ds.textContent = m.desc;
     card.append(nm, ds);
-    if (m.mode) {
+    if (m.rank) {
+      // 랭크전 : 허용된 계정만 입장. 아니면 디스코드 신청 안내.
+      if (account.loggedIn && account.rankAllowed) {
+        const cnt = document.createElement("span");
+        cnt.className = "map-card-count";
+        cnt.dataset.mode = "rank";
+        cnt.textContent = `${modeCounts.rank || 0}명`;
+        card.appendChild(cnt);
+        card.addEventListener("click", () => { closeMapPopup(); openRankQueue(); });
+      } else {
+        card.classList.add("soon");
+        ds.textContent = "디스코드로 신청 후 참가 가능";
+        const chip = document.createElement("span");
+        chip.className = "map-card-soon";
+        chip.textContent = "디스코드 신청";
+        card.appendChild(chip);
+        card.disabled = true;
+      }
+    } else if (m.mode) {
       // "준비 중" 칩과 같은 스타일로 현재 접속 인원 표시
       const cnt = document.createElement("span");
       cnt.className = "map-card-count";
@@ -4115,7 +4224,10 @@ function setupMenu() {
     sendReady(race.myReady);
     updateRaceUI();
   });
-  document.getElementById("lobbyLeave").addEventListener("click", sendLeaveRoom); // 방 → 브라우저
+  document.getElementById("lobbyLeave").addEventListener("click", () => {
+    if (race.isRank) closeRankQueue(); // 랭크: 방 목록이 없다 → 로비로
+    else sendLeaveRoom();              // 커스텀: 방 → 브라우저
+  });
 
   // 방 브라우저 / 방 만들기 다이얼로그 (나가기는 좌측 상단 exitBtn 으로 통일)
   document.getElementById("createRoomBtn").addEventListener("click", showCreateRoom);
@@ -4369,6 +4481,23 @@ function updateDashboard() {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   document.getElementById("dashTime").textContent =
     (h ? h + "시간 " : "") + m + "분 " + sec + "초";
+  const rs = document.getElementById("dashRankScore");
+  if (rs) rs.textContent = `${account.rankScore}점`;
+}
+
+// 랭크전 결과 팝업 : 승패 + 점수 변화 + 현재 점수
+function showRankResult(msg) {
+  const outcome = document.getElementById("rankResultOutcome");
+  outcome.textContent = msg.win ? "우승!" : "패배";
+  outcome.className = msg.win ? "win" : "lose";
+  const d = msg.delta || 0;
+  document.getElementById("rankResultDelta").textContent = (d > 0 ? `+${d}` : `${d}`) + "점";
+  document.getElementById("rankResultScore").textContent = `${msg.score}점`;
+  document.getElementById("rankResultModal").classList.add("show");
+  if (msg.win) SFX.record();
+}
+function hideRankResult() {
+  document.getElementById("rankResultModal").classList.remove("show");
 }
 function showAccountModal() {
   document.getElementById("accId").textContent = account.userId || "-";
@@ -4504,6 +4633,7 @@ function setupAuth() {
   });
   document.getElementById("dashBtn").addEventListener("click", showDashboard);
   document.getElementById("dashClose").addEventListener("click", hideDashboard);
+  document.getElementById("rankResultClose").addEventListener("click", hideRankResult);
   // 계정 폼 : Enter 로 바로 전송
   const enterSubmit = (ids, fn) => ids.forEach((id) => {
     const el = document.getElementById(id);

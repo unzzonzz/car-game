@@ -253,6 +253,7 @@ function loginPlayer(p, userId) {
     bestC1Ms: u.bestC1 || 0, bestC2Ms: u.bestC2 || 0, bestC3Ms: u.bestC3 || 0, totalTime: liveTotalTime(p),
     color: u.color || null, settings: u.settings || null, // 계정에 저장된 차 색 + 설정 복원
     lastLogin: u.lastLogin, // 마지막 활동 시각
+    rankScore: rankScoreOf(u), rankAllowed: rankAllowedOf(u, userId), // 랭크전 점수/참가 허용
   });
 }
 
@@ -281,7 +282,7 @@ function sendStats(p) {
   if (!p.account) return;
   const u = users[p.account.userId];
   if (!u) return;
-  send(p, { type: "stats", proWins: u.proWins || 0, proPlays: u.proPlays || 0, bestA1Ms: u.bestA1 || 0, bestA2Ms: u.bestA2 || 0, bestA3Ms: u.bestA3 || 0, bestMs: u.bestB1 || 0, bestHardMs: u.bestB2 || 0, bestSerpMs: u.bestB3 || 0, bestC1Ms: u.bestC1 || 0, bestC2Ms: u.bestC2 || 0, bestC3Ms: u.bestC3 || 0, totalTime: liveTotalTime(p), lastLogin: u.lastLogin || 0 });
+  send(p, { type: "stats", proWins: u.proWins || 0, proPlays: u.proPlays || 0, bestA1Ms: u.bestA1 || 0, bestA2Ms: u.bestA2 || 0, bestA3Ms: u.bestA3 || 0, bestMs: u.bestB1 || 0, bestHardMs: u.bestB2 || 0, bestSerpMs: u.bestB3 || 0, bestC1Ms: u.bestC1 || 0, bestC2Ms: u.bestC2 || 0, bestC3Ms: u.bestC3 || 0, totalTime: liveTotalTime(p), lastLogin: u.lastLogin || 0, rankScore: rankScoreOf(u), rankAllowed: rankAllowedOf(u, p.account.userId) });
 }
 
 // --- 정적 파일 서버 ---------------------------------------------------------
@@ -529,6 +530,8 @@ wss.on("connection", (ws) => {
 
     if (msg.type === "join") {
       p.name = p.account ? p.account.nickname : sanitizeName(msg.name);
+      p.rankMode = false;
+      if (msg.mode === "rank") { joinRank(id, p); return; } // 랭크전 : 자동 매치메이킹
       const mode = (msg.mode === "racing") ? "racing"
         : (msg.mode === "hard") ? "hard"
         : (msg.mode === "serp") ? "serp"
@@ -590,7 +593,7 @@ wss.on("connection", (ws) => {
     } else if (msg.type === "joinRoom") {
       if (!p.active || p.mode !== "pro" || p.roomId != null) return;
       const room = rooms.get(msg.roomId);
-      if (!room) { send(p, { type: "joinReject", reason: "방이 사라졌습니다." }); return; }
+      if (!room || room.type === "rank") { send(p, { type: "joinReject", reason: "방이 사라졌습니다." }); return; } // 랭크방은 직접 참가 불가
       if (room.state !== "lobby") { send(p, { type: "joinReject", reason: "레이스가 진행 중인 방입니다." }); return; }
       if (roomMembers(room.id).length >= room.maxPlayers) { send(p, { type: "joinReject", reason: "방이 가득 찼습니다." }); return; }
       enterRoom(id, p, room.id);
@@ -602,12 +605,12 @@ wss.on("connection", (ws) => {
 
     } else if (msg.type === "leave") {
       if (p.mode === "pro" && p.roomId != null) leaveRoom(id, p);
-      p.active = false; p.state = null; p.roomId = null;
+      p.active = false; p.state = null; p.roomId = null; p.rankMode = false;
 
     } else if (msg.type === "ready") {
       if (p.roomId == null) return;
       const room = rooms.get(p.roomId);
-      if (!room || room.state !== "lobby") return;
+      if (!room || room.state !== "lobby" || room.type === "rank") return; // 랭크전엔 준비 없음
       p.ready = !!msg.value;
       broadcastRoom(p.roomId);
       maybeStartCountdown(p.roomId);
@@ -780,9 +783,11 @@ function broadcastConnected(obj) {
 
 // 모드별 참가 인원을 "모든 접속자"(메뉴 화면 포함)에게 알린다 → 모드 버튼에 표시
 function broadcastCounts() {
-  const counts = { survival: 0, a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, retro1: 0, retro2: 0, pro: 0, test: 0 };
+  const counts = { survival: 0, a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, retro1: 0, retro2: 0, pro: 0, test: 0, rank: 0 };
   for (const [, p] of players) {
-    if (p.active && counts[p.mode] !== undefined) counts[p.mode]++;
+    if (!p.active) continue;
+    if (p.rankMode) { counts.rank++; continue; } // 랭크전은 내부적으로 pro — 따로 집계
+    if (counts[p.mode] !== undefined) counts[p.mode]++;
   }
   const payload = JSON.stringify({ type: "counts", ...counts, total: players.size }); // total = 로비 포함 전체 접속자
   for (const [, p] of players) {
@@ -805,6 +810,19 @@ const COUNTDOWN_MS = 5000;
 const END_TIMER_MS = 10000;
 const NAMED_COURSES = 9;        // 선택 가능한 코스 수 (game.js PRO_COURSES = A-1~C-3, 인덱스 0..8)
 const TIME_LIMITS = [0, 60000, 120000, 180000, 300000]; // 무제한/1/2/3/5분(ms)
+
+// --- 랭크전 : 디스코드 신청(rankAllowed) 유저만, 자동 매치메이킹 방 ---
+//  3명 모이면 10초 카운트다운(그동안 5명까지 난입), 준비 없음. 맵 = A-1~B-3 랜덤.
+const RANK_MIN = 3;
+const RANK_MAX = 5;
+const RANK_COUNTDOWN_MS = 10000;
+const RANK_TIME_LIMIT_MS = 300000; // 완주자 없어도 5분이면 종료
+const RANK_COURSES = 6;            // A-1~B-3 (인덱스 0..5)
+const RANK_LAPS = 3;
+const RANK_BASE = 100;             // 기본 점수
+const RANK_DELTA = { 3: [10, -7], 4: [15, -5], 5: [20, -3] }; // 인원별 [승리, 패배]
+function rankScoreOf(u) { return typeof u.rankScore === "number" ? u.rankScore : RANK_BASE; }
+function rankAllowedOf(u, userId) { return u.rankAllowed === true || userId === ADMIN_ID; } // 관리자는 항상 허용
 
 let nextRoomId = 1;
 const rooms = new Map(); // roomId -> room
@@ -840,6 +858,7 @@ function hostName(room) {
 function roomSummaries() {
   const out = [];
   for (const [, r] of rooms) {
+    if (r.type === "rank") continue; // 랭크방은 커스텀 브라우저에 노출 안 함
     out.push({
       id: r.id, name: r.name, host: hostName(r),
       players: roomMembers(r.id).length, maxPlayers: r.maxPlayers,
@@ -879,6 +898,7 @@ function broadcastRoom(roomId) {
     roomId, roomName: room.name, hostId: room.hostId,
     state: room.state, laps: room.laps, course: room.course,
     timeLimit: room.timeLimitMs, maxPlayers: room.maxPlayers, trackIndex: room.trackIndex,
+    rank: room.type === "rank", // 랭크전 방 여부 (클라 UI 분기)
     canReady: roomMembers(roomId).length >= 2, // 최소 2명부터 준비/시작 가능
     countdownMs: room.state === "countdown" ? Math.max(0, room.countdownAt - now) : 0,
     endMs: (room.state === "racing" && room.raceEndAt > 0) ? Math.max(0, room.raceEndAt - now) : 0,
@@ -905,13 +925,21 @@ function enterRoom(pid, p, roomId) {
 function leaveRoom(pid, p) {
   const rid = p.roomId;
   if (rid == null) return;
-  p.roomId = null; p.ready = false; p.state = null;
+  p.roomId = null; p.ready = false; p.state = null; p.rankMode = false;
   const room = rooms.get(rid);
   if (!room) return;
   const remain = roomMembers(rid);
-  if (remain.length === 0) { rooms.delete(rid); broadcastRoomList(); return; }
+  if (remain.length === 0) {
+    // 랭크전 레이스 중 전원 탈주 = 전원 패배 처리 (탈주로 감점 회피 방지)
+    if (room.type === "rank" && room.state === "racing") applyRankScores(room, null);
+    rooms.delete(rid); broadcastRoomList(); return;
+  }
   if (room.hostId === pid) room.hostId = remain[0].id; // 호스트 위임
   if (room.state === "countdown" && remain.length < 1) { room.state = "lobby"; room.countdownAt = 0; }
+  // 랭크전 : 카운트다운 중 3명 미만이 되면 취소 → 다시 대기
+  if (room.type === "rank" && room.state === "countdown" && remain.length < RANK_MIN) {
+    room.state = "lobby"; room.countdownAt = 0;
+  }
   broadcastRoom(rid);
   broadcastRoomList();
   maybeStartCountdown(rid);
@@ -921,6 +949,14 @@ function maybeStartCountdown(roomId) {
   const room = rooms.get(roomId);
   if (!room || room.state !== "lobby") return;
   const m = roomMembers(roomId);
+  if (room.type === "rank") {
+    if (m.length < RANK_MIN) return;           // 3명 모이면 자동 시작 (준비 없음)
+    room.state = "countdown";
+    room.countdownAt = Date.now() + RANK_COUNTDOWN_MS;
+    room.raceEndAt = 0;
+    broadcastRoom(roomId);
+    return;
+  }
   if (m.length < 2 || !m.every((e) => e.p.ready)) return; // 최소 2명 + 전원 준비
   room.state = "countdown";
   room.countdownAt = Date.now() + COUNTDOWN_MS;
@@ -932,6 +968,7 @@ function maybeStartCountdown(roomId) {
 function endRoomRace(roomId) {
   const room = rooms.get(roomId);
   if (!room) return;
+  if (room.type === "rank") return endRankRace(roomId, room);
   const members = roomMembers(roomId);
   const ranked = rankedRoom(roomId);
   const counted = members.length >= 2;           // 우승 기록은 2명 이상일 때만
@@ -956,6 +993,81 @@ function endRoomRace(roomId) {
   broadcastRoomList();
 }
 
+// =============================================================================
+//  랭크전 — 자동 매치메이킹 (디스코드 신청 유저만)
+// -----------------------------------------------------------------------------
+//  - 입장 = 자리 있는 랭크방(대기/카운트다운·5명 미만)에 자동 배정, 없으면 새 방.
+//  - 3명 모이면 10초 카운트다운(그동안 난입 가능), 3명 미만이 되면 취소.
+//  - 종료 = 점수 반영(시작 인원 기준) → 결과 통지 → 방 해산. 준비/재대기 없음.
+// =============================================================================
+function joinRank(pid, p) {
+  if (!p.account) { send(p, { type: "rankReject", reason: "로그인이 필요합니다." }); return; }
+  const u = users[p.account.userId];
+  if (!u || !rankAllowedOf(u, p.account.userId)) {
+    send(p, { type: "rankReject", reason: "디스코드에서 랭크전 참가 신청 후 이용할 수 있습니다." });
+    return;
+  }
+  p.mode = "pro"; p.active = true; p.roomId = null; p.rankMode = true;
+  resetMotion(p);
+  // 자리 있는 랭크방 중 인원이 가장 많은 방부터 채운다 (방 선택 불가 → 무작위 매칭)
+  let best = null, bestN = -1;
+  for (const [, r] of rooms) {
+    if (r.type !== "rank" || (r.state !== "lobby" && r.state !== "countdown")) continue;
+    const n = roomMembers(r.id).length;
+    if (n >= RANK_MAX) continue;
+    if (n > bestN) { best = r; bestN = n; }
+  }
+  if (!best) {
+    const trackIndex = Math.floor(Math.random() * RANK_COURSES); // 맵 = A-1~B-3 랜덤
+    best = {
+      id: nextRoomId++, name: "랭크전", hostId: 0, state: "lobby", type: "rank",
+      laps: RANK_LAPS, course: trackIndex, trackIndex, timeLimitMs: RANK_TIME_LIMIT_MS, maxPlayers: RANK_MAX,
+      countdownAt: 0, raceEndAt: 0, raceStartAt: 0, starters: [], startN: 0,
+    };
+    rooms.set(best.id, best);
+  }
+  enterRoom(pid, p, best.id);
+  maybeStartCountdown(best.id); // 3번째 입장이면 10초 카운트다운 시작
+  console.log(`[>] player ${pid} matched into rank room ${best.id} (${roomMembers(best.id).length}/${RANK_MAX})`);
+}
+
+// 점수 반영 : 시작 멤버 전원에게 인원별 승/패 점수. 중도 탈주자도 패배 처리(감점 회피 방지).
+//  room.scored 로 이중 반영 방지. 반환 = id → {delta, score} (결과 통지용).
+function applyRankScores(room, winnerId) {
+  const out = new Map();
+  if (room.scored) return out;
+  room.scored = true;
+  const [wDelta, lDelta] = RANK_DELTA[Math.max(RANK_MIN, Math.min(RANK_MAX, room.startN))] || RANK_DELTA[RANK_MIN];
+  for (const s of room.starters || []) {
+    const u = users[s.uid];
+    if (!u) continue;
+    const delta = s.id === winnerId ? wDelta : lDelta;
+    u.rankScore = Math.max(0, rankScoreOf(u) + delta); // 0점 아래로는 안 내려감
+    u.rankPlays = (u.rankPlays || 0) + 1;
+    if (s.id === winnerId) u.rankWins = (u.rankWins || 0) + 1;
+    persistUser(s.uid);
+    out.set(s.id, { delta, score: u.rankScore });
+    // 중도 탈주자도 접속 중이면 대시보드 점수 즉시 갱신
+    for (const [, p2] of players) if (p2.account && p2.account.userId === s.uid) { sendStats(p2); break; }
+  }
+  return out;
+}
+
+// 랭크전 종료 : 우승자(완주 우선 순위 1위) 확정 → 점수 → 결과 통지 → 방 해산
+function endRankRace(roomId, room) {
+  const ranked = rankedRoom(roomId);
+  const winnerId = ranked.length ? ranked[0].id : null;
+  const deltas = applyRankScores(room, winnerId);
+  for (const { id, p } of roomMembers(roomId)) {
+    const d = deltas.get(id);
+    if (d) send(p, { type: "rankResult", win: id === winnerId, delta: d.delta, score: d.score, n: room.startN });
+    if (p.account) sendStats(p); // 대시보드 점수 갱신
+    p.roomId = null; p.active = false; p.state = null; p.rankMode = false; p.ready = false;
+  }
+  rooms.delete(roomId);
+  console.log(`[>] rank room ${roomId} finished (winner ${winnerId}, ${room.startN} players)`);
+}
+
 function proTick() {
   const now = Date.now();
   for (const rid of [...rooms.keys()]) {
@@ -965,6 +1077,11 @@ function proTick() {
       if (now >= room.countdownAt) {
         room.state = "racing"; room.raceStartAt = now;
         room.raceEndAt = room.timeLimitMs > 0 ? now + room.timeLimitMs : 0;
+        if (room.type === "rank") { // 시작 멤버/인원 확정 → 점수 배분 기준 (중도 탈주해도 패배 반영)
+          const m = roomMembers(rid);
+          room.startN = m.length;
+          room.starters = m.filter((e) => e.p.account).map((e) => ({ uid: e.p.account.userId, id: e.id }));
+        }
         for (const { p } of roomMembers(rid)) { p.lap = 0; p.lapMs = 0; p.prog = 0; p.finished = false; p.finishTime = 0; resetMotion(p); }
         broadcastRoomList();
       }
