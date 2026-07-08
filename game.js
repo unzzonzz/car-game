@@ -1490,7 +1490,8 @@ function updateAttack(car) {
 
 function sendTimeAttack(ms) {
   if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
-  net.ws.send(JSON.stringify({ type: "timeAttack", ms: Math.round(ms) }));
+  // 내림(floor) : 화면 타이머(fmtRaceTime)도 내림이라, 반올림하면 경계에서 TOP10 이 1단위 크게 보인다
+  net.ws.send(JSON.stringify({ type: "timeAttack", ms: Math.floor(ms) }));
 }
 
 // 프로 그리드 슬롯 위치 (시작선 뒤쪽, 2열 스태거)

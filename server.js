@@ -649,8 +649,8 @@ wss.on("connection", (ws) => {
       if (now - (p.taModeSince || now) < ms * 0.7) return; // 모드 체류 벽시계보다 짧은 기록 = 조작
       const u = users[p.account.userId];
       if (!u) return;
-      if (!u[field] || Math.round(ms) < u[field]) {
-        u[field] = Math.round(ms);
+      if (!u[field] || Math.floor(ms) < u[field]) {
+        u[field] = Math.floor(ms); // 내림 : 화면 타이머(내림)와 일치 — 반올림 시 경계에서 1단위 크게 기록됨
         persistUser(p.account.userId);
         sendStats(p);              // 대시보드 최고기록 갱신
         broadcastRecords(p.mode);  // 해당 모드 TOP10 갱신
