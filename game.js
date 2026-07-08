@@ -73,8 +73,8 @@ const SOCCER = {
   ballR: 24, ballFriction: 0.9,  // 공 반지름 / 구름마찰(초당 지수 감쇠)
   wallRest: 0.55,                // 벽 반발계수
   grab: 5,                       // 잡았을 때 차 앞 간격(px)
-  grabFollow: 8,                 // 그랩 공의 "각도" 추종 속도(작을수록 회전 시 크게 스윙=아슬아슬, 스냅 X)
-  grabBreakAng: 45 * Math.PI / 180, // 그랩 공이 앞에서 이 각도 이상 옆으로 벌어지면 그랩 끊김(급회전=놓침)
+  grabFollow: 14,                // 그랩 공의 "각도" 추종 속도(클수록 앞에 붙는 느낌↑, 회전 스윙↓). 미세한 give 유지
+  grabBreakAng: 20 * Math.PI / 180, // 그랩 공이 앞에서 이 각도 이상 옆으로 벌어지면 그랩 끊김(급회전=놓침)
 };
 const ball = { x: SOCCER.cx, y: SOCCER.cy, vx: 0, vy: 0, grabbed: false, spots: [] };
 
