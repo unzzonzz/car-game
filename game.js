@@ -58,11 +58,22 @@ const WORLD = {
   pro: { w: 10000, h: 6000, type: "track", track: null },     // 프로 레이싱(다른 서킷)
   lobby: { w: 3600, h: 3600, type: "lobby" },                 // 로비(메인 화면) — 로컬 전용
   test: { w: 6000, h: 3400, type: "stadium", track: null },   // 테스트 : 가로로 긴 운동장 트랙 (새 플랫 디자인)
+  soccer: { w: 3400, h: 5160, type: "soccer", track: null },  // 축구(베타) — 싱글, 세로형 운동장
 };
 
 /* 로비 : 접속하자마자 차를 몰 수 있는 웜 화이트 월드. 게이트에 들어가면 모드 입장.
  *  게이트 = 플랫 컬러 패치(아치형 배치), 0.8초 머무르면 확정. 클릭/탭으로도 입장 가능. */
 const LOBBY_SPAWN = { x: 1800, y: 1920 }; // 게이트 줄(y1560)에 더 가깝게 (시작점~게이트 거리 좁힘)
+
+/* 축구(베타·싱글) : 세로형 운동장. 필드(흰 경계) 사각형 좌표 + 위/아래 골대(경계 밖 사각 네트).
+ *  월드 3400×5160. 기록/서버 없음(로컬 전용). */
+const SOCCER = {
+  left: 400, right: 3000, top: 580, bottom: 4580, cx: 1700, cy: 2580,
+  goalW: 900, goalD: 340,        // 골 입구 폭 / 깊이(경계 밖으로)
+  ballR: 34, ballFriction: 0.75, // 공 반지름 / 구름마찰(초당 지수 감쇠)
+  wallRest: 0.6,                 // 벽 반발계수
+};
+const ball = { x: SOCCER.cx, y: SOCCER.cy, vx: 0, vy: 0, rot: 0 };
 
 /* =============================================================================
  *  색상 팔레트 (디자인 시스템) — 캔버스로 그리는 주요 색을 한 곳에 모은다.
@@ -87,6 +98,7 @@ const PALETTE = {
   purple:      "#7a55d6", // 연습
   terracotta:  "#c75b4a", // 주행 테스트
   retro:       "#2fa39a", // 레트로 (틸)
+  beta:        "#e0559a", // 베타 테스트 (핑크)
   ink:         "#3a3a3a", // 차고 / 진한 텍스트
 };
 
@@ -100,6 +112,7 @@ const LOBBY_GATES = [
   { group: "custom",   label: "커스텀",  color: PALETTE.yellow,     x: 2120, y: 1560, w: 250, h: 150 },
   { group: "practice", label: "연습",    color: PALETTE.purple,     x: 2440, y: 1560, w: 250, h: 150 },
   { group: "test",     label: "주행 테스트",  color: PALETTE.terracotta, x: 2760, y: 1560, w: 250, h: 150 },
+  { group: "beta",     label: "베타 테스트",  color: PALETTE.beta,       x: 3080, y: 1560, w: 250, h: 150 },
   { group: "garage",   label: "차고",    color: PALETTE.ink,        x: 2600, y: 2150, w: 220, h: 140 },
 ];
 
@@ -168,6 +181,14 @@ const MAP_GROUPS = {
       { name: "C-1", desc: "좁은 폭에 연속 급코너", mode: "c1" },
       { name: "C-2", desc: "날카로운 헤어핀 코스", mode: "c2" },
       { name: "C-3", desc: "촘촘한 급코너 기술 코스", mode: "c3" },
+    ],
+  },
+  // 베타 테스트 = 개발 중인 신규 모드(멀티 없이 싱글로 먼저)
+  beta: {
+    title: "베타 테스트",
+    desc: "개발 중인 신규 모드 (싱글)",
+    maps: [
+      { name: "축구", desc: "공을 골대에 넣는 단독 연습", mode: "soccer" },
     ],
   },
   // 레트로 = 예전 코스 2종. 기록은 옛 컬럼(bestTime/bestTimeHard)을 그대로 쓴다.
@@ -967,6 +988,9 @@ window.addEventListener("keydown", (e) => {
     case "KeyR": // 타임어택 모드에서 R : 기록 시작/다시 (출발선 뒤로 → 재계측). 버튼과 동일
       if (!e.repeat && gameState === "playing" && isTimeAttackMode()) { SFX.click(); startAttack(); }
       break;
+    case "ShiftLeft": case "ShiftRight": // 축구 대쉬 (≥100km/h → 강한 슛 + 50km/h)
+      if (!e.repeat) tryDash();
+      break;
   }
 });
 window.addEventListener("keyup", (e) => {
@@ -1700,9 +1724,13 @@ function render(car) {
 
   drawGround();
   drawSkid();
+  if (gameMode === "soccer") drawBall(); // 축구공 (바닥 위)
 
-  // 속도 불꽃 (내 차 뒤만) — 차체 아래에 깔리도록 차량보다 먼저 그린다
+  // 속도 불꽃 (내 차 뒤만) — 차체 아래에 깔리도록 차량보다 먼저 그린다.
+  //  save/restore 로 감싸 불꽃 렌더가 남긴 ctx 상태(alpha/transform 등)가 뒤 그리기를 오염시키지 않게.
+  ctx.save();
   drawSpeedFlame(car.x, car.y, car.angle, Math.abs(car.lf) * PXS_TO_KMH);
+  ctx.restore();
 
   // 다른 플레이어 차량 (보간된 위치) — 커스텀 색 우선(없으면 id 색 폴백).
   //  연습/타임어택에서 "다른 차 숨김"이면 그리지 않는다.
@@ -1729,7 +1757,7 @@ function render(car) {
 
   ctx.restore();
 
-  if (gameMode !== "lobby") drawMinimap(car);
+  if (gameMode !== "lobby" && gameMode !== "soccer") drawMinimap(car);
   drawSpeed(car);
   drawRaceHud(); // 프로 레이싱 신호등/GO
   updateTimeHud(); // 우측 하단 #time (프로 현재 랩 / 타임어택)
@@ -1831,8 +1859,141 @@ function updateTimeHud() {
 // 바닥 : 모드에 따라 로비 / 오픈 맵(그리드) / 레이싱 트랙
 function drawGround() {
   if (gameMode === "lobby") drawLobbyGround();
+  else if (gameMode === "soccer") drawSoccerGround();
   else if (isFlatTrackMode()) drawFlatTrackGround();
   else if (isTrackWorld()) drawRacingGround();
+}
+
+/* ==========================  축구 (베타 · 싱글)  ==========================
+ *  세로형 운동장 + 위/아래 골대(경계 밖 사각 네트) + 굴러가는 공.
+ *  - 공 : 속도·구름마찰(자연 감속)·벽 반사·차 충돌 밀림/차기, 무늬가 이동거리만큼 회전.
+ *  - 대쉬(Shift, ≥100km/h) : 앞 공에 속도 비례 강한 슛, 차는 50km/h 로.
+ *  - 골 : 점수 없이 공만 가운데 리셋. */
+function resetBall() { ball.x = SOCCER.cx; ball.y = SOCCER.cy; ball.vx = 0; ball.vy = 0; ball.rot = 0; }
+function goalScored() { resetBall(); camera.shake = Math.max(camera.shake, 10); SFX.record(); }
+function clampBall() { const bs = Math.hypot(ball.vx, ball.vy), MAX = 3200; if (bs > MAX) { ball.vx *= MAX / bs; ball.vy *= MAX / bs; } }
+
+let _lastBallSfx = 0;
+function soccerHitOk() { const n = performance.now(); if (n - _lastBallSfx < 120) return false; _lastBallSfx = n; return true; }
+
+// 차(회전 사각형) ↔ 공(원) 충돌 : 겹침 해소 + 다가가는 속도만큼 공에 임펄스(밀기/차기)
+function ballCarCollision() {
+  const hl = CAR.length * 1.15 / 2, hw = CAR.width * 1.15 / 2, r = SOCCER.ballR;
+  const dx = ball.x - CAR.x, dy = ball.y - CAR.y;
+  const c = Math.cos(CAR.angle), s = Math.sin(CAR.angle);
+  const lx = dx * c + dy * s, ly = -dx * s + dy * c;        // 차 로컬(전방, 측면)
+  const qx = clamp(lx, -hl, hl), qy = clamp(ly, -hw, hw);   // 사각형 최근접점
+  let ex = lx - qx, ey = ly - qy, d = Math.hypot(ex, ey);
+  if (d > r) return;
+  if (d < 0.001) { ex = (lx >= 0 ? 1 : -1); ey = 0; d = 0.001; } // 정중앙 관통 → 전방으로
+  const nlx = ex / d, nly = ey / d;
+  const nx = nlx * c - nly * s, ny = nlx * s + nly * c;      // 월드 법선
+  const push = r - d;
+  ball.x += nx * push; ball.y += ny * push;
+  const approach = Math.max(0, CAR.vx * nx + CAR.vy * ny);   // 차가 공 쪽으로 다가가는 속도
+  const kick = approach * 1.7 + 55;
+  ball.vx += nx * kick; ball.vy += ny * kick; clampBall();
+  if (approach > 120 && soccerHitOk()) SFX.collision(clamp(approach / 500, 0.25, 0.8));
+}
+
+// 공 벽 반사 + 골 판정 (상/하 골 입구는 통과)
+function soccerBallWalls() {
+  const S = SOCCER, r = S.ballR, e = S.wallRest, gL = S.cx - S.goalW / 2, gR = S.cx + S.goalW / 2;
+  if (ball.x - r < S.left)  { ball.x = S.left + r;  ball.vx = Math.abs(ball.vx) * e; }
+  if (ball.x + r > S.right) { ball.x = S.right - r; ball.vx = -Math.abs(ball.vx) * e; }
+  const inGoalX = ball.x > gL && ball.x < gR;
+  if (inGoalX && (ball.y < S.top || ball.y > S.bottom)) return goalScored();
+  if (!inGoalX && ball.y - r < S.top)    { ball.y = S.top + r;    ball.vy = Math.abs(ball.vy) * e; }
+  if (!inGoalX && ball.y + r > S.bottom) { ball.y = S.bottom - r; ball.vy = -Math.abs(ball.vy) * e; }
+}
+
+function updateBall(dt) {
+  ballCarCollision();
+  ball.x += ball.vx * dt; ball.y += ball.vy * dt;
+  const damp = Math.exp(-SOCCER.ballFriction * dt);         // 구름마찰 → 자연 감속
+  ball.vx *= damp; ball.vy *= damp;
+  const spd = Math.hypot(ball.vx, ball.vy);
+  if (spd < 4) { ball.vx = 0; ball.vy = 0; }
+  ball.rot += (spd * dt) / SOCCER.ballR;                    // 굴러가는 회전
+  soccerBallWalls();
+}
+
+// 차를 필드 사각형 안에 가둔다 (골 입구도 차는 못 나감)
+function updateSoccerCar(car) {
+  const S = SOCCER, h = car.length * 1.15 / 2; let hit = false;
+  if (car.x < S.left + h)   { car.x = S.left + h;   car.vx = -car.vx * 0.3; hit = true; }
+  if (car.x > S.right - h)  { car.x = S.right - h;  car.vx = -car.vx * 0.3; hit = true; }
+  if (car.y < S.top + h)    { car.y = S.top + h;    car.vy = -car.vy * 0.3; hit = true; }
+  if (car.y > S.bottom - h) { car.y = S.bottom - h; car.vy = -car.vy * 0.3; hit = true; }
+  if (hit) decompose(car);
+}
+
+// Shift 대쉬 : ≥100km/h 에서 앞 공에 속도 비례 강한 슛 + 차는 50km/h(무겁게 살짝 앞으로)
+function tryDash() {
+  if (gameMode !== "soccer" || gameState !== "playing") return;
+  const speed = Math.hypot(CAR.vx, CAR.vy);
+  if (speed * PXS_TO_KMH < 100) return;
+  const fx = Math.cos(CAR.angle), fy = Math.sin(CAR.angle);
+  const dx = ball.x - CAR.x, dy = ball.y - CAR.y, dist = Math.hypot(dx, dy);
+  const reach = CAR.length * 1.15 / 2 + SOCCER.ballR + 100;
+  if (dist < reach && (dx * fx + dy * fy) > -30) {          // 공이 앞쪽 사정거리 안
+    const power = speed * 4.2;                              // 속도 비례(세게)
+    ball.vx += fx * power; ball.vy += fy * power; clampBall();
+  }
+  const t = 50 * KMH_TO_PXS;                                // 차 : 50km/h 로 (무겁게 살짝 앞으로)
+  CAR.vx = fx * t; CAR.vy = fy * t; decompose(CAR);
+  camera.shake = Math.max(camera.shake, 7);
+  SFX.collision(0.9);
+}
+
+/* ---------- 축구 렌더 ---------- */
+function drawSoccerGround() {
+  const S = SOCCER, fw = S.right - S.left, fh = S.bottom - S.top;
+  ctx.fillStyle = "#5e9a33"; ctx.fillRect(0, 0, world.w, world.h);          // 바깥(골대 영역) 어두운 잔디
+  ctx.fillStyle = PALETTE.grass; ctx.fillRect(S.left, S.top, fw, fh);       // 필드 잔디
+  const bands = 12, bh = fh / bands;                                        // 가로 줄무늬(잔디깎기)
+  for (let i = 0; i < bands; i++) { ctx.fillStyle = i % 2 ? "rgba(255,255,255,0.045)" : "rgba(0,0,0,0.045)"; ctx.fillRect(S.left, S.top + i * bh, fw, bh); }
+  drawGoalBox(S.top, -1); drawGoalBox(S.bottom, 1);                         // 골대(경계 밖)
+  ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = 6; ctx.lineJoin = "round"; ctx.lineCap = "round";
+  ctx.strokeRect(S.left, S.top, fw, fh);                                    // 경계
+  ctx.beginPath(); ctx.moveTo(S.left, S.cy); ctx.lineTo(S.right, S.cy); ctx.stroke(); // 하프라인
+  ctx.beginPath(); ctx.arc(S.cx, S.cy, 380, 0, Math.PI * 2); ctx.stroke();  // 센터서클
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.beginPath(); ctx.arc(S.cx, S.cy, 9, 0, 7); ctx.fill();                // 센터스팟
+  const pbW = 1500, pbH = 620, gaW = 940, gaH = 240;
+  ctx.strokeRect(S.cx - pbW / 2, S.top, pbW, pbH);                          // 페널티 박스
+  ctx.strokeRect(S.cx - pbW / 2, S.bottom - pbH, pbW, pbH);
+  ctx.strokeRect(S.cx - gaW / 2, S.top, gaW, gaH);                          // 골 area
+  ctx.strokeRect(S.cx - gaW / 2, S.bottom - gaH, gaW, gaH);
+  ctx.beginPath(); ctx.arc(S.cx, S.top + 460, 7, 0, 7); ctx.fill();         // 페널티 스팟
+  ctx.beginPath(); ctx.arc(S.cx, S.bottom - 460, 7, 0, 7); ctx.fill();
+}
+function drawGoalBox(lineY, dir) { // dir -1=위, +1=아래
+  const S = SOCCER, gw = S.goalW, gd = S.goalD, x0 = S.cx - gw / 2, x1 = S.cx + gw / 2;
+  const yIn = lineY, yOut = lineY + dir * gd, yA = Math.min(yIn, yOut), yB = Math.max(yIn, yOut);
+  ctx.fillStyle = "rgba(255,255,255,0.14)"; ctx.fillRect(x0, yA, gw, gd);   // 네트 배경
+  ctx.strokeStyle = "rgba(255,255,255,0.45)"; ctx.lineWidth = 2; ctx.beginPath(); // 네트 격자
+  for (let gx = x0; gx <= x1 + 1; gx += 42) { ctx.moveTo(gx, yA); ctx.lineTo(gx, yB); }
+  for (let gy = yA; gy <= yB + 1; gy += 42) { ctx.moveTo(x0, gy); ctx.lineTo(x1, gy); }
+  ctx.stroke();
+  ctx.strokeStyle = "#e58a3a"; ctx.lineWidth = 9; ctx.lineJoin = "round"; ctx.lineCap = "round"; // 주황 골대 프레임
+  ctx.beginPath(); ctx.moveTo(x0, yIn); ctx.lineTo(x0, yOut); ctx.lineTo(x1, yOut); ctx.lineTo(x1, yIn); ctx.stroke();
+  ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 11; ctx.beginPath(); ctx.moveTo(x0, yIn); ctx.lineTo(x1, yIn); ctx.stroke(); // 골라인 굵은 흰 바
+}
+function drawPentagon(x, y, rad, rot) {
+  ctx.beginPath();
+  for (let i = 0; i < 5; i++) { const a = rot - Math.PI / 2 + i * 2 * Math.PI / 5; const px = x + Math.cos(a) * rad, py = y + Math.sin(a) * rad; i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }
+  ctx.closePath(); ctx.fill();
+}
+function drawBall() {
+  const b = ball, r = SOCCER.ballR;
+  ctx.fillStyle = "rgba(0,0,0,0.18)"; ctx.beginPath(); ctx.ellipse(b.x + 4, b.y + 6, r * 0.95, r * 0.82, 0, 0, 7); ctx.fill(); // 그림자
+  ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.rot);
+  ctx.fillStyle = "#f6f6f3"; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+  ctx.fillStyle = "#24272c"; drawPentagon(0, 0, r * 0.4, 0);               // 중앙 오각형
+  for (let i = 0; i < 5; i++) { const a = -Math.PI / 2 + i * 2 * Math.PI / 5; drawPentagon(Math.cos(a) * r * 0.72, Math.sin(a) * r * 0.72, r * 0.24, a + Math.PI / 5); }
+  ctx.restore();
+  ctx.strokeStyle = "rgba(0,0,0,0.28)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, 7); ctx.stroke();
 }
 
 /* 플랫 트랙 바닥 (테스트 + 초보자 코스 공용) : 서킷 스타일 플랫 렌더링(검정/그라데이션 없음).
@@ -1949,6 +2110,7 @@ function gateSub(g) {
     // 연습 = 실제 코스(A-1~3 + B-1~3 + C-1~3) 멀티플레이 접속 수
     case "practice": return `${(modeCounts.a1 || 0) + (modeCounts.a2 || 0) + (modeCounts.a3 || 0) + (modeCounts.racing || 0) + (modeCounts.hard || 0) + (modeCounts.serp || 0) + (modeCounts.c1 || 0) + (modeCounts.c2 || 0) + (modeCounts.c3 || 0)}명 접속 중`;
     case "test": return `${modeCounts.test || 0}명 접속 중`;
+    case "beta": return "1인 플레이";
     case "garage": return "차 색상 바꾸기";
     default: return "";
   }
@@ -3259,7 +3421,7 @@ function applySnapshot(st, players) {
 // 내 차 상태를 서버에 전송 — 모니터 주사율대로(매 프레임). 안전 상한 ~165Hz(6ms)만 둔다.
 //  → 서버가 항상 최신 위치를 갖고, 남들 화면에선 수신측 보간이 각자 모니터 Hz로 렌더한다.
 function netSend(car, now) {
-  if (gameMode === "lobby") return; // 로비는 로컬 전용(서버 미입장)
+  if (gameMode === "lobby" || gameMode === "soccer") return; // 로비/축구는 로컬 전용(서버 미입장)
   if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
   if (now - net.lastSend < 6) return; // 매 프레임 전송(60·120·144Hz 그대로), 6ms 미만만 차단
   net.lastSend = now;
@@ -3410,6 +3572,7 @@ function frame(now) {
   updateAttack(CAR);          // 자유 모드 타임어택 계측
   updateSkid(CAR);            // 스키드 마크
   if (gameMode === "lobby") updateLobby(dt); // 로비: 오버레이 상태 + 게이트 진입 판정
+  else if (gameMode === "soccer") { updateSoccerCar(CAR); updateBall(dt); } // 축구: 차 벽가둠 + 공 물리
   const spdKmh = Math.abs(CAR.lf) * PXS_TO_KMH;
   updateDriftSfx();           // 드리프트 스크리치(지속음) 시작/정지
   updateEngineSfx(spdKmh);    // 엔진 드론 (속도 → 피치)
@@ -3518,6 +3681,15 @@ function startGame(mode) {
   } else if (mode === "pro") {
     race.state = "browsing"; // 방 목록 화면. roomList/roomJoined 로 갱신됨
     race.isHost = false; race.myReady = false; race.rooms = [];
+  } else if (mode === "soccer") {
+    resetBall();                                    // 공 가운데
+    CAR.x = SOCCER.cx; CAR.y = SOCCER.cy + 950; CAR.angle = -Math.PI / 2; // 하단, 공을 바라봄
+    CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0;
+    minimap.style.display = "none";                 // 축구는 미니맵 없음
+    camera.zoom = camera.zoomT = zoomFor(1) * 0.45; // 넓게 보기 (공/골대 시야 확보)
+    camera.ay = camera.ayT = 0.5;
+    net.pendingTeleport = true;
+    updateCamera(CAR, 0);
   }
 
   if (isTimeAttackMode()) resetAttack();
@@ -3530,7 +3702,7 @@ function startGame(mode) {
   updateFreeUI();
   updateMainLink(); // 메인 링크 숨김
 
-  sendJoin(); // 서버에 입장
+  if (mode !== "soccer") sendJoin(); // 서버에 입장 (축구는 싱글·로컬)
 }
 
 // "메뉴로" = 로비 월드로 복귀 (접속 화면 = 로비)
