@@ -2225,7 +2225,7 @@ function gateSub(g) {
   switch (g.group) {
     case "retro": return `${(modeCounts.retro1 || 0) + (modeCounts.retro2 || 0)}명 접속 중`; // 레트로 = 초보자+어려움
     case "arcade": return "준비 중"; // 술래잡기/스모 모두 준비 중
-    case "racing": return "준비 중"; // 일반전/경쟁전 모두 준비 중
+    case "racing": return `${modeCounts.rank || 0}명 접속 중`; // 경쟁전(랭크) 접속 수 (일반전/캐주얼은 아직 준비 중)
     case "plaza": return "준비 중";
     case "custom": return `${modeCounts.pro || 0}명 접속 중`;
     // 연습 = 실제 코스(A-1~3 + B-1~3 + C-1~3) 멀티플레이 접속 수
