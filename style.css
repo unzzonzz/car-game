@@ -1372,28 +1372,8 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
 }
 #accountModal.show { display: flex; }
 #accountModal .dash-card { width: min(340px, 90vw); }
-/* 계정 팝업 : 비밀번호 변경 섹션 (아이디/닉네임 아래, 구분선으로 분리) */
-.acc-pw { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--line); }
-.acc-pw-title { font-family: 'Jua', sans-serif; font-size: 14px; color: var(--muted); margin-bottom: 14px; }
-.acc-pw input {
-  width: 100%;
-  padding: 13px 18px;
-  margin-bottom: 12px;
-  font-family: 'Jua', sans-serif;
-  font-size: 15px;
-  color: var(--ink);
-  background: var(--white);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  outline: none;
-  transition: border-color 0.15s ease;
-}
-.acc-pw input:focus { border-color: var(--muted-2); }
-.acc-pw input::placeholder { color: #c6c0b2; }
-.acc-pw .auth-btn { width: 100%; margin-top: 2px; }
-.acc-pw-msg { min-height: 18px; margin-top: 10px; font-family: 'Jua', sans-serif; font-size: 13px; text-align: center; }
 /* 로그아웃 버튼(계정 팝업) : 코랄 고스트로 구분, 닫기와 묶어 배치 */
-#accLogoutBtn { color: var(--coral); background: transparent; border-color: var(--coral); }
+#accLogoutBtn { color: var(--coral); background: transparent; border-color: var(--coral); margin-top: 22px; }
 #accLogoutBtn:hover { background: var(--coral); color: var(--white); border-color: var(--coral); }
 #accLogoutBtn + .auth-close { margin-top: 10px; }
 

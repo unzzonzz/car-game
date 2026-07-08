@@ -2914,12 +2914,6 @@ function connect() {
     } else if (msg.type === "authError") {
       if (!msg.silent) alert(msg.reason || "인증 실패");
       else { try { localStorage.removeItem("carGameToken"); } catch {} } // 만료 토큰 정리
-    } else if (msg.type === "pwOk") {
-      const cur = document.getElementById("accCurPw"); if (cur) cur.value = "";
-      const nw = document.getElementById("accNewPw"); if (nw) nw.value = "";
-      setAccPwMsg("비밀번호가 변경되었습니다.", true);
-    } else if (msg.type === "pwError") {
-      setAccPwMsg(msg.reason || "변경 실패", false);
     } else if (msg.type === "stats") {
       account.proWins = msg.proWins || 0;
       account.proPlays = msg.proPlays || 0;
@@ -4379,30 +4373,10 @@ function updateDashboard() {
 function showAccountModal() {
   document.getElementById("accId").textContent = account.userId || "-";
   document.getElementById("accName").textContent = account.nickname || "-";
-  // 비밀번호 변경 폼 초기화
-  const cur = document.getElementById("accCurPw"); if (cur) cur.value = "";
-  const nw = document.getElementById("accNewPw"); if (nw) nw.value = "";
-  setAccPwMsg("", true);
   document.getElementById("accountModal").classList.add("show");
 }
 function hideAccountModal() {
   document.getElementById("accountModal").classList.remove("show");
-}
-// 계정 팝업의 비밀번호 변경 안내문 (성공=초록, 실패=코랄)
-function setAccPwMsg(text, ok) {
-  const el = document.getElementById("accPwMsg");
-  if (!el) return;
-  el.textContent = text || "";
-  el.style.color = ok ? "var(--green)" : "var(--coral)";
-}
-// 현재 비번 + 새 비번 검증 후 서버로 변경 요청
-function sendChangePassword() {
-  const cur = document.getElementById("accCurPw").value;
-  const next = document.getElementById("accNewPw").value;
-  if (!cur) { setAccPwMsg("현재 비밀번호를 입력하세요.", false); return; }
-  if (!validPassword(next)) { setAccPwMsg(PW_RULE_MSG, false); return; }
-  if (cur === next) { setAccPwMsg("새 비밀번호가 현재와 같습니다.", false); return; }
-  sendAuth({ type: "changePassword", current: cur, next });
 }
 
 /* 설정 팝업 : 열 때마다 현재 값(볼륨/배치)을 UI 에 동기화 */
@@ -4530,7 +4504,6 @@ function setupAuth() {
   });
   document.getElementById("dashBtn").addEventListener("click", showDashboard);
   document.getElementById("dashClose").addEventListener("click", hideDashboard);
-  document.getElementById("accPwBtn").addEventListener("click", sendChangePassword);
   // 계정 폼 : Enter 로 바로 전송
   const enterSubmit = (ids, fn) => ids.forEach((id) => {
     const el = document.getElementById(id);
@@ -4538,7 +4511,6 @@ function setupAuth() {
   });
   enterSubmit(["loginId", "loginPw"], sendLogin);
   enterSubmit(["signupId", "signupNick", "signupPw"], sendSignup);
-  enterSubmit(["accCurPw", "accNewPw"], sendChangePassword);
 
   // 비밀번호 input Caps Lock 감지 : 켜져 있으면 바로 아래 .caps-warn 을 보여준다
   document.querySelectorAll('input[type="password"]').forEach((inp) => {
