@@ -824,6 +824,10 @@ const RANK_COURSES = 6;            // A-1~B-3 (인덱스 0..5)
 const RANK_LAPS = 3;
 const RANK_BASE = 100;             // 기본 점수
 const RANK_DELTA = { 3: [10, -7], 4: [15, -5], 5: [20, -3] }; // 인원별 [승리, 패배]
+const RANK_ANON_COLOR = "#b8b2a6"; // 시작 전 익명 차/원 색 (웜 그레이)
+// 레이스 시작 전(대기/카운트다운)엔 서로 누군지 모르게 이름/색/관리자 표시를 가린다.
+//  → 잘하는 사람 보고 나가는 닷지 방지. 시작(racing)되면 공개되고, 그 뒤로 나가면 실점.
+const rankAnon = (room) => room.type === "rank" && room.state !== "racing";
 function rankScoreOf(u) { return typeof u.rankScore === "number" ? u.rankScore : RANK_BASE; }
 function rankAllowedOf(u, userId) { return u.rankAllowed === true || userId === ADMIN_ID; } // 관리자는 항상 허용
 
@@ -905,7 +909,9 @@ function broadcastRoom(roomId) {
     canReady: roomMembers(roomId).length >= 2, // 최소 2명부터 준비/시작 가능
     countdownMs: room.state === "countdown" ? Math.max(0, room.countdownAt - now) : 0,
     endMs: (room.state === "racing" && room.raceEndAt > 0) ? Math.max(0, room.raceEndAt - now) : 0,
-    players: rankedRoom(roomId),
+    players: rankAnon(room) // 랭크전 시작 전 : 이름/색/관리자 가림 (닷지 방지)
+      ? rankedRoom(roomId).map((e) => ({ ...e, name: "???", color: RANK_ANON_COLOR, admin: false }))
+      : rankedRoom(roomId),
   };
   for (const { p } of roomMembers(roomId)) send(p, msg);
 }
@@ -1222,6 +1228,10 @@ setInterval(() => {
     };
     if (p.mode === "pro") {
       if (p.roomId != null) {
+        const room = rooms.get(p.roomId);
+        if (room && rankAnon(room)) { // 랭크전 시작 전 : 이름표/차 색/금색 관리자 가림
+          entry.name = "???"; entry.color = RANK_ANON_COLOR; entry.admin = false;
+        }
         if (!byRoom.has(p.roomId)) byRoom.set(p.roomId, []);
         byRoom.get(p.roomId).push(entry);
       }
