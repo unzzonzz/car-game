@@ -62,7 +62,7 @@ const WORLD = {
 
 /* 로비 : 접속하자마자 차를 몰 수 있는 웜 화이트 월드. 게이트에 들어가면 모드 입장.
  *  게이트 = 플랫 컬러 패치(아치형 배치), 0.8초 머무르면 확정. 클릭/탭으로도 입장 가능. */
-const LOBBY_SPAWN = { x: 1800, y: 2150 };
+const LOBBY_SPAWN = { x: 1800, y: 1920 }; // 게이트 줄(y1560)에 더 가깝게 (시작점~게이트 거리 좁힘)
 
 /* =============================================================================
  *  색상 팔레트 (디자인 시스템) — 캔버스로 그리는 주요 색을 한 곳에 모은다.
@@ -4299,6 +4299,20 @@ function setupAuth() {
   enterSubmit(["loginId", "loginPw"], sendLogin);
   enterSubmit(["signupId", "signupNick", "signupPw"], sendSignup);
   enterSubmit(["accCurPw", "accNewPw"], sendChangePassword);
+
+  // 비밀번호 input Caps Lock 감지 : 켜져 있으면 바로 아래 .caps-warn 을 보여준다
+  document.querySelectorAll('input[type="password"]').forEach((inp) => {
+    const warn = inp.nextElementSibling;
+    if (!warn || !warn.classList.contains("caps-warn")) return;
+    const sync = (e) => {
+      const on = typeof e.getModifierState === "function" && e.getModifierState("CapsLock");
+      warn.style.display = on ? "flex" : "none";
+    };
+    inp.addEventListener("keydown", sync);
+    inp.addEventListener("keyup", sync);
+    inp.addEventListener("blur", () => { warn.style.display = "none"; });
+  });
+
   updateAuthUI();
 }
 

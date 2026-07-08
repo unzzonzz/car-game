@@ -607,6 +607,19 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 }
 .auth-form input:focus { border-color: var(--muted-2); }
 .auth-form input::placeholder { color: #c6c0b2; }
+
+/* 비밀번호 Caps Lock 경고 : 켜져 있으면 input 바로 아래에 표시 (JS 가 flex/none 토글) */
+.caps-warn {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  margin: -8px 8px 12px;
+  font-family: 'Jua', sans-serif;
+  font-size: 12.5px;
+  color: var(--terracotta);
+  text-align: left;
+}
+.caps-warn svg { width: 15px; height: 15px; flex-shrink: 0; }
 .auth-btn {
   width: 100%;
   padding: 15px;
