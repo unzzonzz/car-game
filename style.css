@@ -1392,6 +1392,10 @@ body.customizing #chat { opacity: 0; pointer-events: none; }
 .acc-pw input::placeholder { color: #c6c0b2; }
 .acc-pw .auth-btn { width: 100%; margin-top: 2px; }
 .acc-pw-msg { min-height: 18px; margin-top: 10px; font-family: 'Jua', sans-serif; font-size: 13px; text-align: center; }
+/* 로그아웃 버튼(계정 팝업) : 코랄 고스트로 구분, 닫기와 묶어 배치 */
+#accLogoutBtn { color: var(--coral); background: transparent; border-color: var(--coral); }
+#accLogoutBtn:hover { background: var(--coral); color: var(--white); border-color: var(--coral); }
+#accLogoutBtn + .auth-close { margin-top: 10px; }
 
 /* 설정 팝업 — 계정 팝업과 동일한 오버레이/카드 스타일 */
 #settingsModal {

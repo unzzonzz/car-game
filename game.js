@@ -4146,6 +4146,7 @@ function setupLobbyUI() {
     else showAuthModal();
   });
   document.getElementById("accClose").addEventListener("click", hideAccountModal);
+  document.getElementById("accLogoutBtn").addEventListener("click", () => { hideAccountModal(); sendLogout(); }); // 로그아웃(계정 팝업)
   document.getElementById("accountModal").addEventListener("pointerdown", (e) => {
     if (e.target.id === "accountModal") { SFX.click(); hideAccountModal(); } // 딤 클릭(버튼 아님)
   });
@@ -4199,7 +4200,6 @@ function setupLobbyUI() {
     SFX.click();
   });
   document.getElementById("lobDash").addEventListener("click", showDashboard);
-  document.getElementById("lobLogout").addEventListener("click", () => { sendLogout(); });
   document.getElementById("lobRank").addEventListener("click", () => { SFX.resume(); showRankings(); });
   document.getElementById("rankClose").addEventListener("click", hideRankings);
   document.getElementById("rankPrev").addEventListener("click", () => { if (rankView.page > 0) { rankView.page--; renderRankings(); } });
@@ -4347,9 +4347,8 @@ function updateAuthUI() {
   document.getElementById("authOpenBtn").style.display = inn ? "none" : "block";
   document.getElementById("loggedIn").style.display = inn ? "block" : "none";
   document.getElementById("dashBtn").style.display = "none"; // 구 대시보드 버튼 → 로비 원형 버튼으로 대체
-  // 로비 원형 버튼 : 비로그인 = 계정+디스코드만, 로그인 = 4개 전부
+  // 로비 원형 버튼 : 비로그인 = 계정+디스코드만, 로그인 = 대시보드도 표시
   document.getElementById("lobDash").style.display = inn ? "flex" : "none";
-  document.getElementById("lobLogout").style.display = inn ? "flex" : "none";
   // 로그인 상태면 닉네임 입력/라벨을 아예 숨긴다(계정 닉네임 사용). 비로그인 시 표시.
   document.getElementById("nameInput").style.display = inn ? "none" : "block";
   document.getElementById("nameLabel").style.display = inn ? "none" : "block";
@@ -4370,37 +4369,12 @@ function updateAuthUI() {
 
 let dashTimer = null;
 function updateDashboard() {
-  document.getElementById("dashWins").textContent = account.proWins;
-  document.getElementById("dashPlays").textContent = account.proPlays;
   // 접속 시간 = 서버가 보낸 실시간 평생값 + 수신 후 경과분 (라이브, 이중계산 없음)
   const sinceSync = account.totalTimeAt ? (Date.now() - account.totalTimeAt) : 0;
   const s = Math.floor((account.totalTime + sinceSync) / 1000);
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   document.getElementById("dashTime").textContent =
     (h ? h + "시간 " : "") + m + "분 " + sec + "초";
-  // A-1/A-2/A-3 개인 최고 기록
-  const a1 = document.getElementById("dashA1");
-  if (a1) a1.textContent = account.bestA1Ms ? fmtRaceTime(account.bestA1Ms) : "-";
-  const a2 = document.getElementById("dashA2");
-  if (a2) a2.textContent = account.bestA2Ms ? fmtRaceTime(account.bestA2Ms) : "-";
-  const a3 = document.getElementById("dashA3");
-  if (a3) a3.textContent = account.bestA3Ms ? fmtRaceTime(account.bestA3Ms) : "-";
-  // B-1 개인 최고 기록
-  const best = document.getElementById("dashBest");
-  if (best) best.textContent = account.bestMs ? fmtRaceTime(account.bestMs) : "-";
-  // B-2 개인 최고 기록
-  const bestHard = document.getElementById("dashBestHard");
-  if (bestHard) bestHard.textContent = account.bestHardMs ? fmtRaceTime(account.bestHardMs) : "-";
-  // B-3 개인 최고 기록
-  const bestSerp = document.getElementById("dashBestSerp");
-  if (bestSerp) bestSerp.textContent = account.bestSerpMs ? fmtRaceTime(account.bestSerpMs) : "-";
-  // C-1/C-2/C-3 개인 최고 기록
-  const c1 = document.getElementById("dashC1");
-  if (c1) c1.textContent = account.bestC1Ms ? fmtRaceTime(account.bestC1Ms) : "-";
-  const c2 = document.getElementById("dashC2");
-  if (c2) c2.textContent = account.bestC2Ms ? fmtRaceTime(account.bestC2Ms) : "-";
-  const c3 = document.getElementById("dashC3");
-  if (c3) c3.textContent = account.bestC3Ms ? fmtRaceTime(account.bestC3Ms) : "-";
 }
 function showAccountModal() {
   document.getElementById("accId").textContent = account.userId || "-";
