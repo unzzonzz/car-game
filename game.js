@@ -53,6 +53,8 @@ const WORLD = {
   c1: { w: 10000, h: 6000, type: "track", track: null },      // 연습 C-1 (하드코어)
   c2: { w: 10000, h: 6000, type: "track", track: null },      // 연습 C-2 (헤어핀)
   c3: { w: 10000, h: 6000, type: "track", track: null },      // 연습 C-3 (테크니컬)
+  retro1: { w: 10000, h: 6000, type: "track", track: null },  // 레트로 초보자 (옛 자유 코스)
+  retro2: { w: 18000, h: 11500, type: "track", track: null }, // 레트로 어려움 (옛 하드 코스)
   pro: { w: 10000, h: 6000, type: "track", track: null },     // 프로 레이싱(다른 서킷)
   lobby: { w: 3600, h: 3600, type: "lobby" },                 // 로비(메인 화면) — 로컬 전용
   test: { w: 6000, h: 3400, type: "stadium", track: null },   // 테스트 : 가로로 긴 운동장 트랙 (새 플랫 디자인)
@@ -84,12 +86,14 @@ const PALETTE = {
   yellow:      "#f2c94c", // 커스텀
   purple:      "#7a55d6", // 연습
   terracotta:  "#c75b4a", // 주행 테스트
+  retro:       "#2fa39a", // 레트로 (틸)
   ink:         "#3a3a3a", // 차고 / 진한 텍스트
 };
 
 // 게이트 : 가로 한 줄의 "그룹 메뉴". 통과하면 그룹별 맵 카드 팝업이 열린다.
 //  차고 게이트는 팝업 대신 차 색상 커스텀(32색 링 픽커)을 연다.
 const LOBBY_GATES = [
+  { group: "retro",    label: "레트로",  color: PALETTE.retro,      x: 840, y: 1560, w: 250, h: 150 },
   { group: "arcade",   label: "아케이드", color: PALETTE.coral,      x: 1160, y: 1560, w: 250, h: 150 },
   { group: "racing",   label: "레이싱",  color: PALETTE.blue,       x: 1480, y: 1560, w: 250, h: 150 },
   { group: "plaza",    label: "광장",    color: PALETTE.green,      x: 1800, y: 1560, w: 250, h: 150 },
@@ -166,6 +170,15 @@ const MAP_GROUPS = {
       { name: "C-3", desc: "촘촘한 급코너 기술 코스", mode: "c3" },
     ],
   },
+  // 레트로 = 예전 코스 2종. 기록은 옛 컬럼(bestTime/bestTimeHard)을 그대로 쓴다.
+  retro: {
+    title: "레트로",
+    desc: "예전 그대로의 클래식 코스",
+    maps: [
+      { name: "초보자 코스", desc: "넓은 옛 자유 코스", mode: "retro1" },
+      { name: "어려움 코스", desc: "길고 좁은 옛 하드 코스", mode: "retro2" },
+    ],
+  },
 };
 const mapPopup = { open: false, group: null, root: null }; // root = 게이트에 대응하는 최상위 그룹(재무장용)
 
@@ -189,7 +202,7 @@ const CAR_COLORS = [
 ];
 const CUSTOM_RING_R = 175; // 링 반지름(월드 px)
 const custom = { active: false, cx: 0, cy: 0, selAnim: null }; // selAnim = 픽커(선택 링) 슬라이드 애니메이션
-const modeCounts = { a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, pro: 0, test: 0, total: 0 };
+const modeCounts = { a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, retro1: 0, retro2: 0, pro: 0, test: 0, total: 0 };
 
 // 현재 모드/월드/게임 상태 (실제 시작은 하단 enterLobby() 가 로비로 설정)
 let gameMode = "lobby";      // "lobby" | "racing" | "hard" | "serp" | "pro" | "test"
@@ -730,6 +743,24 @@ const PRACTICE_C3 = { ...C_BASE,
   R: a => 1 + 0.17 * Math.sin(3 * a + 2.6) + 0.15 * Math.sin(4 * a + 0.9)
         + 0.13 * Math.sin(6 * a + 1.3) + 0.08 * Math.sin(7 * a + 2.1) };
 
+/* 레트로(옛) 코스 — 기록은 옛 컬럼 그대로 재활용(초보자=bestTime, 어려움=bestTimeHard).
+ *  초보자 : 옛 "자유" 레시피(넓은 폭 230, 10000×6000). 어려움 : 옛 하드 컨트롤포인트(18000×11500, 폭 112). */
+const FREE_RECIPE = {
+  w: 10000, h: 6000, halfWidth: 230, kerb: 26, stretch: 1.7,
+  R: a => 1 + 0.16 * Math.sin(2 * a + 0.6) + 0.30 * Math.sin(3 * a + 0.4)
+        + 0.18 * Math.sin(5 * a + 1.3) + 0.10 * Math.sin(7 * a + 0.2),
+};
+const HARD_POINTS = [
+  { x: 1300, y: 1400 }, { x: 3300, y: 1400 }, { x: 5700, y: 1400 }, { x: 7200, y: 1500 },
+  { x: 8350, y: 2050 }, { x: 8900, y: 3150 }, { x: 8200, y: 4300 }, { x: 6450, y: 4450 },
+  { x: 5400, y: 4950 }, { x: 6600, y: 5650 }, { x: 8300, y: 5350 }, { x: 9500, y: 5000 },
+  { x: 10800, y: 3700 }, { x: 10300, y: 5400 }, { x: 11100, y: 5150 }, { x: 12400, y: 6350 },
+  { x: 13800, y: 6200 }, { x: 15050, y: 7400 }, { x: 16200, y: 9000 }, { x: 14500, y: 10350 },
+  { x: 12000, y: 10650 }, { x: 9200, y: 10150 }, { x: 6900, y: 9250 }, { x: 5000, y: 9850 },
+  { x: 3550, y: 10600 }, { x: 2250, y: 9700 }, { x: 3850, y: 8750 }, { x: 2250, y: 7800 },
+  { x: 1150, y: 6650 }, { x: 2400, y: 5350 }, { x: 1400, y: 4050 }, { x: 2450, y: 2750 },
+];
+
 /* 커스텀(프로) 방 코스 = 연습 코스 6종(A-1~B-3)을 그대로 사용. 서버가 인덱스(0~5)를 정해
  *  같은 방의 모든 플레이어가 같은 맵을 보게 한다. server.js 의 NAMED_COURSES 와 개수를 맞춰야 한다. */
 const PRO_COURSES = [PRACTICE_A1, PRACTICE_A2, PRACTICE_A3, PRACTICE_B1, PRACTICE_B2, PRACTICE_B3, PRACTICE_C1, PRACTICE_C2, PRACTICE_C3];
@@ -753,6 +784,10 @@ function generateTrack() {
   WORLD.c1.track     = makeTrack(PRACTICE_C1); // 연습 C-1 (하드코어)
   WORLD.c2.track     = makeTrack(PRACTICE_C2); // 연습 C-2 (헤어핀)
   WORLD.c3.track     = makeTrack(PRACTICE_C3); // 연습 C-3 (테크니컬)
+  WORLD.retro1.track = makeTrack(FREE_RECIPE); // 레트로 초보자 (옛 자유 코스)
+  WORLD.retro2.track = makeHardTrack(HARD_POINTS, { // 레트로 어려움 (옛 하드 코스)
+    halfWidth: 112, kerb: 16, samplesPerSegment: 28, startPointIndex: 1, tension: 0.34,
+  });
   WORLD.pro.track = buildProTrack(0);          // 프로 기본값 (서버 인덱스로 교체됨)
 }
 
@@ -963,7 +998,8 @@ function isFlatTrackMode() {
   return gameMode === "test" || gameMode === "racing" || gameMode === "hard"
       || gameMode === "serp" || gameMode === "pro"
       || gameMode === "a1" || gameMode === "a2" || gameMode === "a3"
-      || gameMode === "c1" || gameMode === "c2" || gameMode === "c3";
+      || gameMode === "c1" || gameMode === "c2" || gameMode === "c3"
+      || gameMode === "retro1" || gameMode === "retro2";
 }
 
 
@@ -1349,7 +1385,8 @@ function updateLap(car) {
 function isTimeAttackMode() {
   return gameMode === "a1" || gameMode === "a2" || gameMode === "a3"
       || gameMode === "racing" || gameMode === "hard" || gameMode === "serp"
-      || gameMode === "c1" || gameMode === "c2" || gameMode === "c3";
+      || gameMode === "c1" || gameMode === "c2" || gameMode === "c3"
+      || gameMode === "retro1" || gameMode === "retro2";
 }
 
 // 타임어택 상태 초기화 (모드 진입/이탈 시)
@@ -1901,6 +1938,7 @@ function drawLobbyGround() {
 // 게이트 서브라벨 : 그룹에 속한 모드들의 접속 인원 합, 또는 안내 문구
 function gateSub(g) {
   switch (g.group) {
+    case "retro": return `${(modeCounts.retro1 || 0) + (modeCounts.retro2 || 0)}명 접속 중`; // 레트로 = 초보자+어려움
     case "arcade": return "준비 중"; // 술래잡기/스모 모두 준비 중
     case "racing": return "준비 중"; // 일반전/경쟁전 모두 준비 중
     case "plaza": return "준비 중";
@@ -2686,11 +2724,13 @@ function connect() {
       modeCounts.c1 = msg.c1 || 0;
       modeCounts.c2 = msg.c2 || 0;
       modeCounts.c3 = msg.c3 || 0;
+      modeCounts.retro1 = msg.retro1 || 0;
+      modeCounts.retro2 = msg.retro2 || 0;
       modeCounts.pro = msg.pro || 0;
       modeCounts.test = msg.test || 0;
       modeCounts.total = typeof msg.total === "number"
         ? msg.total
-        : modeCounts.a1 + modeCounts.a2 + modeCounts.a3 + modeCounts.racing + modeCounts.hard + modeCounts.serp + modeCounts.c1 + modeCounts.c2 + modeCounts.c3 + modeCounts.pro;
+        : modeCounts.a1 + modeCounts.a2 + modeCounts.a3 + modeCounts.racing + modeCounts.hard + modeCounts.serp + modeCounts.c1 + modeCounts.c2 + modeCounts.c3 + modeCounts.retro1 + modeCounts.retro2 + modeCounts.pro;
       const on = document.getElementById("lobOnline");
       if (on) on.textContent = `온라인 ${modeCounts.total}`;
       updateMapPopupCounts(); // 맵 팝업이 열려 있으면 카드별 인원도 갱신
@@ -4166,6 +4206,7 @@ const RANK_COURSES = [
   ["A-1", "a1"], ["A-2", "a2"], ["A-3", "a3"],
   ["B-1", "racing"], ["B-2", "hard"], ["B-3", "serp"],
   ["C-1", "c1"], ["C-2", "c2"], ["C-3", "c3"],
+  ["초보자", "retro1"], ["어려움", "retro2"], // 레트로(옛 기록 재활용)
 ];
 const RANK_PER_PAGE = 8; // 한 페이지에 보이는 순위 행 수
 const rankView = { mode: "a1", entries: [], page: 0, built: false };
