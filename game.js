@@ -76,7 +76,7 @@ const SOCCER = {
   grabFollow: 14,                // 그랩 공의 "각도" 추종 속도(클수록 앞에 붙는 느낌↑, 회전 스윙↓). 미세한 give 유지
   grabBreakAng: 20 * Math.PI / 180, // 그랩 공이 앞에서 이 각도 이상 옆으로 벌어지면 그랩 끊김(급회전=놓침)
 };
-const ball = { x: SOCCER.cx, y: SOCCER.cy, vx: 0, vy: 0, grabbed: false, spots: [] };
+const ball = { x: SOCCER.cx, y: SOCCER.cy, vx: 0, vy: 0, grabbed: false, grabCd: 0, spots: [] };
 
 /* =============================================================================
  *  색상 팔레트 (디자인 시스템) — 캔버스로 그리는 주요 색을 한 곳에 모은다.
@@ -1926,7 +1926,7 @@ function ballCarContact(dt) {
     const qx = clamp(lx,-hl,hl), qy = clamp(ly,-hw,hw);
     let ex = lx-qx, ey = ly-qy, d = Math.hypot(ex, ey);
     if (d > r) continue;                                      // 이 지점 접촉 없음 → 다음 스텝
-    if (keys.j) {                                             // J 누른 채 → 그랩 : 앞에 딱 붙여 시작(뒤로 지나쳐도 앞으로 수집)
+    if (keys.j && performance.now() >= ball.grabCd) {         // J 누른 채(+쿨다운 아님) → 그랩 : 앞에 딱 붙여 시작
       ball.x = CAR.x + c*carFront(); ball.y = CAR.y + s*carFront();
       ball.grabbed = true; SFX.click(); return;
     }
@@ -1979,15 +1979,15 @@ function dribbleBall(dt) {
   if (dt > 0) { ball.vx = (nx - ball.x)/dt; ball.vy = (ny - ball.y)/dt; } // 놓을 때 쓸 momentum
   ball.x = nx; ball.y = ny;
   rollBall(dt);
-  if (clampGrabbedBall()) { releaseBall(); return; }          // 경계/벽 닿으면 밖으로 안 나가고 그랩 끊김
+  clampGrabbedBall();                                         // 안전망(벽 안으로). 실제 벽 버팀/빗겨 끊김은 updateSoccerCar 가 처리.
   const S = SOCCER, gL = S.cx-S.goalW/2, gR = S.cx+S.goalW/2;  // 드리블로 골
   if (ball.x > gL && ball.x < gR && (ball.y < S.top || ball.y > S.bottom)) goalScored();
 }
 
-// 그랩 해제 : 현재(추종) 속도를 momentum 으로 유지한 채 자유 공으로.
-function releaseBall() {
+// 그랩 해제 : 현재(추종) 속도를 momentum 으로 유지한 채 자유 공으로. cd(ms)면 그동안 재그랩 금지(오실레이션 방지).
+function releaseBall(cd = 0) {
   if (!ball.grabbed) return;
-  ball.grabbed = false; clampBall(); SFX.click();
+  ball.grabbed = false; ball.grabCd = performance.now() + cd; clampBall(); SFX.click();
 }
 
 // 그랩 공을 필드 안으로 밀어넣고, 벽에 닿았으면 true(→그랩 끊김). 골 입구는 통과.
@@ -2009,6 +2009,24 @@ function updateSoccerCar(car) {
   if (car.x > S.right - h)  { car.x = S.right - h;  car.vx = -car.vx*0.3; hit = true; }
   if (car.y < S.top + h)    { car.y = S.top + h;    car.vy = -car.vy*0.3; hit = true; }
   if (car.y > S.bottom - h) { car.y = S.bottom - h; car.vy = -car.vy*0.3; hit = true; }
+  // 그랩 중 : 공(차 앞)이 필드 밖으로 못 나가게 차를 뒤로 잡아둔다.
+  //  - 수직으로 밀면 : 차가 벽 앞에서 버티고(관통/괴음 없음) 공은 벽에 붙어 대기.
+  //  - 비스듬히 밀면 : 공이 벽 접선으로 빠지며 그랩 끊김(잠깐 재그랩 금지).
+  if (ball.grabbed) {
+    const f = carFront(), c = Math.cos(car.angle), s = Math.sin(car.angle), r = S.ballR;
+    const bfx = car.x + c*f, bfy = car.y + s*f;                 // 공(앞) 예상 위치
+    const gL = S.cx-S.goalW/2, gR = S.cx+S.goalW/2, inGoalX = bfx > gL && bfx < gR;
+    let bnx = 0, bny = 0;                                       // 버틴 벽의 바깥 법선
+    if (bfx < S.left + r)       { car.x += (S.left + r) - bfx;  bnx = -1; }
+    else if (bfx > S.right - r) { car.x -= bfx - (S.right - r); bnx = 1; }
+    if (!inGoalX && bfy < S.top + r)         { car.y += (S.top + r) - bfy;    bny = -1; }
+    else if (!inGoalX && bfy > S.bottom - r) { car.y -= bfy - (S.bottom - r); bny = 1; }
+    if (bnx || bny) {
+      const dot = c*bnx + s*bny;                                // 정면 수직=1, 빗길수록 작아짐
+      if (dot < 0.82) { ball.vx = car.vx; ball.vy = car.vy; releaseBall(160); } // 빗겨 밀기 → 옆으로 빠지며 끊김
+      else { const vIn = car.vx*bnx + car.vy*bny; if (vIn > 0) { car.vx -= bnx*vIn; car.vy -= bny*vIn; hit = true; } } // 수직 버팀 : 벽쪽 속도 죽여 떨림 방지
+    }
+  }
   if (hit) decompose(car);
 }
 
