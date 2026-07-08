@@ -1778,32 +1778,10 @@ function drawRaceHud() {
   const now = performance.now();
   const cx = viewW / 2, cy = viewH * 0.30;
 
-  // ---- 랭크전 카운트다운 : 작은 글씨 (10초, 그동안 난입 가능) ----
-  if (race.isRank && race.state === "countdown" && race.countdownEnd > now) {
-    const secs = Math.ceil((race.countdownEnd - now) / 1000);
-    const step = 11 - secs; // 비프용 진행 카운터 (초가 줄 때마다 증가)
-    if (secs <= 3 && step > sfxCountLit) { sfxCountLit = step; SFX.beep(); } // 마지막 3초만 비프
-    const label = `${secs}초 후 시작`;
-    ctx.save();
-    ctx.font = "400 15px Jua, sans-serif";
-    ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    const w = ctx.measureText(label).width + 34, h = 32;
-    ctx.shadowColor = "rgba(58,54,46,0.14)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 4;
-    ctx.fillStyle = "#ffffff";
-    roundRect(cx - w / 2, cy - h / 2, w, h, h / 2);
-    ctx.fill();
-    ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
-    ctx.strokeStyle = "#ece8df"; ctx.lineWidth = 1;
-    roundRect(cx - w / 2, cy - h / 2, w, h, h / 2);
-    ctx.stroke();
-    ctx.fillStyle = "#6b675e";
-    ctx.fillText(label, cx, cy + 1);
-    ctx.restore();
-    return; // 5-라이트 카드 대신 작은 글씨만
-  }
-
   // ---- 카운트다운 : 흰 카드 위 5개 라이트가 코랄로 하나씩 점등 (소등 = 출발) ----
-  if (race.state === "countdown" && race.countdownEnd > now) {
+  //  서버 카운트다운은 슬라이드 전환 여유를 포함하므로, 남은 5초부터만 그린다
+  //  → 전환이 걷힌 뒤에 신호등이 시작된다 (커스텀/랭크 공통).
+  if (race.state === "countdown" && race.countdownEnd > now && race.countdownEnd - now <= 5000) {
     const remain = race.countdownEnd - now;
     const lit = clamp(5 - Math.floor(remain / 1000), 0, 5);
     if (lit > sfxCountLit) { sfxCountLit = lit; if (lit > 0) SFX.beep(); } // 새 불 점등마다 비프
@@ -3379,7 +3357,7 @@ function updateRaceUI() {
   btn.textContent = race.myReady ? "준비 취소" : "준비";
   btn.classList.toggle("ready", race.myReady);
   document.getElementById("lobbyHint").textContent = race.isRank
-    ? `3명이 모이면 10초 후 자동 시작 (현재 ${race.list.length}명)`
+    ? `3명이 모이면 자동 시작 (현재 ${race.list.length}명)`
     : "모두 준비하면 자동으로 시작됩니다 (최소 2명)";
 
   // 순위판 : 순위 · 이름 · 현재 랩 기록 · 현재랩/전체랩

@@ -809,16 +809,18 @@ setInterval(broadcastCounts, 1000);
 //  바퀴/진행도는 클라가 보고, 서버는 순위/타이머/방 상태를 관리한다.
 // =============================================================================
 const PRO_MAX = 7;
-const COUNTDOWN_MS = 5000;
+// 카운트다운 = 슬라이드 전환(~1.7초) + 신호등 5초.
+//  클라는 남은 시간 5초부터 신호등을 그리므로, 전환이 걷힌 뒤에 첫 불이 켜진다.
+const COUNTDOWN_MS = 6700;
 const END_TIMER_MS = 10000;
 const NAMED_COURSES = 9;        // 선택 가능한 코스 수 (game.js PRO_COURSES = A-1~C-3, 인덱스 0..8)
 const TIME_LIMITS = [0, 60000, 120000, 180000, 300000]; // 무제한/1/2/3/5분(ms)
 
 // --- 랭크전 : 디스코드 신청(rankAllowed) 유저만, 자동 매치메이킹 방 ---
-//  3명 모이면 10초 카운트다운(그동안 5명까지 난입), 준비 없음. 맵 = A-1~B-3 랜덤.
+//  3명 모이면 신호등 카운트다운(그동안 5명까지 난입), 준비 없음. 맵 = A-1~B-3 랜덤.
 const RANK_MIN = 3;
 const RANK_MAX = 5;
-const RANK_COUNTDOWN_MS = 10000;
+const RANK_COUNTDOWN_MS = COUNTDOWN_MS; // 커스텀과 동일한 신호등 카운트다운 (전환 후 5초 신호등)
 const RANK_TIME_LIMIT_MS = 300000; // 완주자 없어도 5분이면 종료
 const RANK_COURSES = 6;            // A-1~B-3 (인덱스 0..5)
 const RANK_LAPS = 3;
@@ -1006,7 +1008,7 @@ function endRoomRace(roomId) {
 //  랭크전 — 자동 매치메이킹 (디스코드 신청 유저만)
 // -----------------------------------------------------------------------------
 //  - 입장 = 자리 있는 랭크방(대기/카운트다운·5명 미만)에 자동 배정, 없으면 새 방.
-//  - 3명 모이면 10초 카운트다운(그동안 난입 가능), 3명 미만이 되면 취소.
+//  - 3명 모이면 신호등 카운트다운(그동안 난입 가능), 3명 미만이 되면 취소.
 //  - 종료 = 점수 반영(시작 인원 기준) → 결과 통지 → 방 해산. 준비/재대기 없음.
 // =============================================================================
 function joinRank(pid, p) {
@@ -1036,7 +1038,7 @@ function joinRank(pid, p) {
     rooms.set(best.id, best);
   }
   enterRoom(pid, p, best.id);
-  maybeStartCountdown(best.id); // 3번째 입장이면 10초 카운트다운 시작
+  maybeStartCountdown(best.id); // 3번째 입장이면 신호등 카운트다운 시작
   console.log(`[>] player ${pid} matched into rank room ${best.id} (${roomMembers(best.id).length}/${RANK_MAX})`);
 }
 
