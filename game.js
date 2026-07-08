@@ -277,6 +277,7 @@ const account = {
   proWins: 0, proPlays: 0, loginTime: 0,
   rankScore: 100,     // 랭크전 점수 (기본 100)
   rankAllowed: false, // 랭크전 참가 허용 (디스코드 신청 → 서버 컬럼)
+  rankWins: 0, rankPlays: 0, // 랭크전 전적 (승리/플레이)
   totalTime: 0,   // 평생 누적 접속 시간(ms) — 서버가 보낸 "실시간" 값
   totalTimeAt: 0, // 위 값을 수신한 클라 시각(performance 아님) — 라이브 증가 기준
   bestA1Ms: 0,    // A-1 개인 최고 기록(ms) — 서버 bestA1
@@ -2935,6 +2936,8 @@ function connect() {
       account.lastLogin = msg.lastLogin || 0; // 직전 접속 시각(0=처음)
       account.rankScore = typeof msg.rankScore === "number" ? msg.rankScore : 100;
       account.rankAllowed = !!msg.rankAllowed;
+      account.rankWins = msg.rankWins || 0;
+      account.rankPlays = msg.rankPlays || 0;
       account.loginTime = Date.now();
       playerName = msg.nickname;
       try { localStorage.setItem("carGameToken", msg.token); } catch {}
@@ -2996,6 +2999,8 @@ function connect() {
       }
       if (typeof msg.rankScore === "number") account.rankScore = msg.rankScore;
       if (typeof msg.rankAllowed === "boolean") account.rankAllowed = msg.rankAllowed;
+      if (typeof msg.rankWins === "number") account.rankWins = msg.rankWins;
+      if (typeof msg.rankPlays === "number") account.rankPlays = msg.rankPlays;
       updateDashboard();
     } else if (msg.type === "counts") {
       // 모드별 참가 인원 → 로비 게이트 숫자 + 온라인 표시 갱신
@@ -4425,6 +4430,7 @@ function sendLogout() {
   if (net.connected && net.ws.readyState === WebSocket.OPEN) net.ws.send(JSON.stringify({ type: "logout", token: tk }));
   account.loggedIn = false; account.isAdmin = false; account.userId = null;
   account.proWins = 0; account.proPlays = 0;
+  account.rankScore = 100; account.rankAllowed = false; account.rankWins = 0; account.rankPlays = 0;
   account.totalTime = 0; account.totalTimeAt = 0; account.bestA1Ms = 0; account.bestA2Ms = 0; account.bestA3Ms = 0; account.bestMs = 0; account.bestHardMs = 0; account.bestSerpMs = 0; account.bestC1Ms = 0; account.bestC2Ms = 0; account.bestC3Ms = 0; account.loginTime = 0;
   // 로그아웃 즉시 게스트 이름으로 전환 (저장된 게스트 이름 있으면 그것, 없으면 "게스트")
   let guest = "";
@@ -4481,8 +4487,17 @@ function updateDashboard() {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   document.getElementById("dashTime").textContent =
     (h ? h + "시간 " : "") + m + "분 " + sec + "초";
-  const rs = document.getElementById("dashRankScore");
-  if (rs) rs.textContent = `${account.rankScore}점`;
+  // 랭크 점수/전적 : 랭크전 허용된 계정에만 표시 (미허용이면 행 자체를 숨김)
+  const allowed = account.rankAllowed;
+  const scoreRow = document.getElementById("dashRankScoreRow");
+  const recordRow = document.getElementById("dashRankRecordRow");
+  if (scoreRow) scoreRow.style.display = allowed ? "flex" : "none";
+  if (recordRow) recordRow.style.display = allowed ? "flex" : "none";
+  if (allowed) {
+    document.getElementById("dashRankScore").textContent = `${account.rankScore}점`;
+    const losses = Math.max(0, account.rankPlays - account.rankWins);
+    document.getElementById("dashRankRecord").textContent = `${account.rankPlays}전 ${account.rankWins}승 ${losses}패`;
+  }
 }
 
 // 랭크전 결과 팝업 : 승패 + 점수 변화 + 현재 점수

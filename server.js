@@ -254,6 +254,7 @@ function loginPlayer(p, userId) {
     color: u.color || null, settings: u.settings || null, // 계정에 저장된 차 색 + 설정 복원
     lastLogin: u.lastLogin, // 마지막 활동 시각
     rankScore: rankScoreOf(u), rankAllowed: rankAllowedOf(u, userId), // 랭크전 점수/참가 허용
+    rankWins: u.rankWins || 0, rankPlays: u.rankPlays || 0,           // 랭크전 전적
   });
 }
 
@@ -282,7 +283,7 @@ function sendStats(p) {
   if (!p.account) return;
   const u = users[p.account.userId];
   if (!u) return;
-  send(p, { type: "stats", proWins: u.proWins || 0, proPlays: u.proPlays || 0, bestA1Ms: u.bestA1 || 0, bestA2Ms: u.bestA2 || 0, bestA3Ms: u.bestA3 || 0, bestMs: u.bestB1 || 0, bestHardMs: u.bestB2 || 0, bestSerpMs: u.bestB3 || 0, bestC1Ms: u.bestC1 || 0, bestC2Ms: u.bestC2 || 0, bestC3Ms: u.bestC3 || 0, totalTime: liveTotalTime(p), lastLogin: u.lastLogin || 0, rankScore: rankScoreOf(u), rankAllowed: rankAllowedOf(u, p.account.userId) });
+  send(p, { type: "stats", proWins: u.proWins || 0, proPlays: u.proPlays || 0, bestA1Ms: u.bestA1 || 0, bestA2Ms: u.bestA2 || 0, bestA3Ms: u.bestA3 || 0, bestMs: u.bestB1 || 0, bestHardMs: u.bestB2 || 0, bestSerpMs: u.bestB3 || 0, bestC1Ms: u.bestC1 || 0, bestC2Ms: u.bestC2 || 0, bestC3Ms: u.bestC3 || 0, totalTime: liveTotalTime(p), lastLogin: u.lastLogin || 0, rankScore: rankScoreOf(u), rankAllowed: rankAllowedOf(u, p.account.userId), rankWins: u.rankWins || 0, rankPlays: u.rankPlays || 0 });
 }
 
 // --- 정적 파일 서버 ---------------------------------------------------------
