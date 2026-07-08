@@ -964,6 +964,9 @@ window.addEventListener("keydown", (e) => {
     case "KeyD": keys.d = true; break;
     case "Space": keys.space = true; e.preventDefault(); break;
     case "KeyM": if (!e.repeat) toggleMute(); break; // 음소거 토글 (길게 눌러도 1회)
+    case "KeyR": // 타임어택 모드에서 R : 기록 시작/다시 (출발선 뒤로 → 재계측). 버튼과 동일
+      if (!e.repeat && gameState === "playing" && isTimeAttackMode()) { SFX.click(); startAttack(); }
+      break;
   }
 });
 window.addEventListener("keyup", (e) => {
