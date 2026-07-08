@@ -3718,7 +3718,7 @@ function openMapPopup(groupKey) {
   document.getElementById("mapModalTitle").textContent = grp.title;
   document.getElementById("mapModalDesc").textContent = grp.desc;
   const back = document.getElementById("mapModalBack"); // 하위 그룹이면 "뒤로", 최상위면 숨김
-  if (back) { back.style.display = grp.back ? "block" : "none"; back.onclick = grp.back ? () => openMapPopup(grp.back) : null; }
+  if (back) { back.style.display = grp.back ? "flex" : "none"; back.onclick = grp.back ? () => openMapPopup(grp.back) : null; }
   const grid = document.getElementById("mapGrid");
   grid.innerHTML = "";
   for (const m of grp.maps) {
