@@ -74,6 +74,7 @@ const SOCCER = {
   wallRest: 0.55,                // 벽 반발계수
   grab: 5,                       // 잡았을 때 차 앞 간격(px)
   grabFollow: 8,                 // 그랩 공의 "각도" 추종 속도(작을수록 회전 시 크게 스윙=아슬아슬, 스냅 X)
+  grabBreakAng: 45 * Math.PI / 180, // 그랩 공이 앞에서 이 각도 이상 옆으로 벌어지면 그랩 끊김(급회전=놓침)
 };
 const ball = { x: SOCCER.cx, y: SOCCER.cy, vx: 0, vy: 0, grabbed: false, spots: [] };
 
@@ -1959,7 +1960,8 @@ function dribbleBall(dt) {
   const k = 1 - Math.exp(-SOCCER.grabFollow*dt);              // 프레임레이트 무관 각도 추종
   let ang = Math.atan2(ball.y - CAR.y, ball.x - CAR.x);        // 공의 현재 각(차 중심 기준)
   if (Math.hypot(ball.x - CAR.x, ball.y - CAR.y) < 1) ang = CAR.angle;
-  let dA = CAR.angle - ang; dA = Math.atan2(Math.sin(dA), Math.cos(dA)); // 최단 회전량
+  let dA = CAR.angle - ang; dA = Math.atan2(Math.sin(dA), Math.cos(dA)); // 최단 회전량(=옆으로 벌어진 각)
+  if (Math.abs(dA) > SOCCER.grabBreakAng) { releaseBall(); return; } // 너무 옆으로 가면 그랩 끊김(놓침)
   ang += dA * k;                                              // 각도만 살살 추종(뒤처짐=스윙)
   const nx = CAR.x + Math.cos(ang)*f, ny = CAR.y + Math.sin(ang)*f;
   if (dt > 0) { ball.vx = (nx - ball.x)/dt; ball.vy = (ny - ball.y)/dt; } // 놓을 때 쓸 momentum
