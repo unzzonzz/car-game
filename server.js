@@ -620,8 +620,9 @@ wss.on("connection", (ws) => {
       // 전역 채팅 — 메뉴/로비 등 미입장자도 보내고 받을 수 있다.
       const text = sanitizeChat(msg.text);
       if (!text) return;
-      // 관리자 랭크 명령 (/랭크허용·/랭크해제·/랭크명단) : 공개 채팅에 안 올라가고 본인에게만 결과 회신
+      // 관리자 명령 : 공개 채팅에 안 올라가고 본인에게만 결과 회신
       if (p.isAdmin && text.startsWith("/랭크")) { handleRankCommand(p, text); return; }
+      if (p.isAdmin && text.startsWith("/어디")) { handleWhereCommand(p, text); return; } // 유저 활동 조회
       const name = p.account ? p.account.nickname : (p.active ? p.name : sanitizeName(msg.name));
       const chatMsg = { type: "chat", id, name, text, t: Date.now(), admin: !!p.isAdmin };
       chatHistory.push(chatMsg);
@@ -951,6 +952,17 @@ function leaveRoom(pid, p) {
   }
   if (room.hostId === pid) room.hostId = remain[0].id; // 호스트 위임
   if (room.state === "countdown" && remain.length < 1) { room.state = "lobby"; room.countdownAt = 0; }
+  // 랭크전 : 카운트다운 중 이탈 = 즉시 탈주 패배 감점 (스테이지에서 맵/상대 보고 나가는 닷지 방지)
+  if (room.type === "rank" && room.state === "countdown" && p.account && users[p.account.userId]) {
+    const u = users[p.account.userId];
+    const n = Math.max(RANK_MIN, Math.min(RANK_MAX, remain.length + 1)); // 이탈 직전 인원 기준
+    const delta = (RANK_DELTA[n] || RANK_DELTA[RANK_MIN])[1];
+    u.rankScore = Math.max(0, rankScoreOf(u) + delta);
+    u.rankPlays = (u.rankPlays || 0) + 1;
+    persistUser(p.account.userId);
+    send(p, { type: "rankResult", win: false, delta, score: u.rankScore, n, dodge: true });
+    sendStats(p);
+  }
   // 랭크전 : 카운트다운 중 3명 미만이 되면 취소 → 다시 대기
   if (room.type === "rank" && room.state === "countdown" && remain.length < RANK_MIN) {
     room.state = "lobby"; room.countdownAt = 0;
@@ -1095,6 +1107,58 @@ function handleRankCommand(p, text) {
   let out = done.length ? `${on ? "허용" : "해제"} 완료 ${done.length}명: ${done.join(", ")}` : "";
   if (missing.length) out += `${out ? " / " : ""}없는 아이디: ${missing.join(", ")}`;
   reply(out);
+}
+
+// 유저의 현재 활동 라벨 (관리자 /어디 조회용)
+const MODE_LABEL = {
+  survival: "서바이벌", test: "주행 테스트",
+  a1: "연습 A-1", a2: "연습 A-2", a3: "연습 A-3",
+  racing: "연습 B-1", hard: "연습 B-2", serp: "연습 B-3",
+  c1: "연습 C-1", c2: "연습 C-2", c3: "연습 C-3",
+  retro1: "레트로 초보자 코스", retro2: "레트로 어려움 코스",
+};
+function activityOf(p) {
+  if (!p.active) return "로비";
+  if (p.mode === "pro") {
+    const kind = p.rankMode ? "경쟁전" : "커스텀";
+    if (p.roomId == null) return "커스텀 방 목록";
+    const room = rooms.get(p.roomId);
+    if (!room) return kind;
+    if (room.state === "racing") return `${kind} 레이스 중`;
+    if (room.state === "countdown") return `${kind} 시작 대기`;
+    return `${kind} 대기실`;
+  }
+  return MODE_LABEL[p.mode] || p.mode;
+}
+
+// 관리자 /어디 : 유저가 지금 뭘 하는지 조회. 인자 없으면 전체 온라인 현황.
+//  /어디            → 접속자 전원의 활동
+//  /어디 아이디1 …   → 해당 계정들의 활동 (미접속=오프라인)
+function handleWhereCommand(p, text) {
+  const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
+  const ids = text.split(/\s+/).slice(1);
+  const lines = [];
+  if (!ids.length) {
+    for (const [, q] of players) {
+      const who = q.account ? `${q.account.userId}(${q.account.nickname})` : `게스트${q.name ? " " + q.name : ""}`;
+      lines.push(`${who}: ${activityOf(q)}`);
+    }
+    if (!lines.length) { reply("접속자가 없습니다."); return; }
+  } else {
+    for (const id of ids) {
+      let found = null;
+      for (const [, q] of players) if (q.account && q.account.userId === id) { found = q; break; }
+      if (found) lines.push(`${id}: ${activityOf(found)}`);
+      else lines.push(`${id}: ${users[id] ? "오프라인" : "없는 아이디"}`);
+    }
+  }
+  // 채팅 한 줄이 너무 길지 않게 ~160자씩 끊어 보낸다
+  let cur = "";
+  for (const line of lines) {
+    if (cur && cur.length + line.length + 3 > 160) { reply(cur); cur = line; }
+    else cur = cur ? cur + " / " + line : line;
+  }
+  if (cur) reply(cur);
 }
 
 // 랭크전 종료 : 우승자(완주 우선 순위 1위) 확정 → 점수 → 결과 통지 → 방 해산

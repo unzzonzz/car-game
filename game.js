@@ -4482,7 +4482,7 @@ function updateDashboard() {
 // 랭크전 결과 팝업 : 승패 + 점수 변화 + 현재 점수
 function showRankResult(msg) {
   const outcome = document.getElementById("rankResultOutcome");
-  outcome.textContent = msg.win ? "우승!" : "패배";
+  outcome.textContent = msg.win ? "우승!" : (msg.dodge ? "탈주 패배" : "패배");
   outcome.className = msg.win ? "win" : "lose";
   const d = msg.delta || 0;
   document.getElementById("rankResultDelta").textContent = (d > 0 ? `+${d}` : `${d}`) + "점";
