@@ -1435,7 +1435,7 @@ function updateAttack(car) {
   const now = performance.now();
   const ph = trackPhase(car.x, car.y, world.track);
   if (attack.state === "armed") {
-    if (Math.abs(car.lf) > 5 * KMH_TO_PXS) { // 움직이기 시작 → 계측 시작
+    if (Math.abs(car.lf) > 0.5 * KMH_TO_PXS) { // 속도가 조금이라도 생기면 즉시 계측 시작 (R+W 동시에도 안 굴러감)
       attack.state = "running";
       attack.startTime = now;
       attack.checkpoint = false;
