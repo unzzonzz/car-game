@@ -619,6 +619,8 @@ wss.on("connection", (ws) => {
       // 전역 채팅 — 메뉴/로비 등 미입장자도 보내고 받을 수 있다.
       const text = sanitizeChat(msg.text);
       if (!text) return;
+      // 관리자 랭크 명령 (/랭크허용·/랭크해제·/랭크명단) : 공개 채팅에 안 올라가고 본인에게만 결과 회신
+      if (p.isAdmin && text.startsWith("/랭크")) { handleRankCommand(p, text); return; }
       const name = p.account ? p.account.nickname : (p.active ? p.name : sanitizeName(msg.name));
       const chatMsg = { type: "chat", id, name, text, t: Date.now(), admin: !!p.isAdmin };
       chatHistory.push(chatMsg);
@@ -1051,6 +1053,35 @@ function applyRankScores(room, winnerId) {
     for (const [, p2] of players) if (p2.account && p2.account.userId === s.uid) { sendStats(p2); break; }
   }
   return out;
+}
+
+// 관리자 랭크 명령 : 채팅창에서 신청 승인/해제를 즉시 처리 (서버 재시작 불필요, 여러 명 한 번에)
+//  /랭크허용 아이디1 아이디2 …  /랭크해제 아이디1 아이디2 …  /랭크명단
+function handleRankCommand(p, text) {
+  const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
+  const parts = text.split(/\s+/);
+  const cmd = parts[0], ids = parts.slice(1);
+  if (cmd === "/랭크명단") {
+    const allowed = Object.keys(users).filter((id) => users[id].rankAllowed === true);
+    reply(allowed.length ? `랭크 허용 ${allowed.length}명: ${allowed.join(", ")}` : "랭크 허용된 계정이 없습니다.");
+    return;
+  }
+  const on = cmd === "/랭크허용";
+  if (!on && cmd !== "/랭크해제") { reply("명령어: /랭크허용 아이디…  /랭크해제 아이디…  /랭크명단"); return; }
+  if (!ids.length) { reply(`사용법: ${cmd} 아이디1 아이디2 …`); return; }
+  const done = [], missing = [];
+  for (const id of ids) {
+    const u = users[id];
+    if (!u) { missing.push(id); continue; }
+    u.rankAllowed = on;
+    persistUser(id);
+    done.push(id);
+    // 접속 중이면 클라 상태(경쟁전 카드/대시보드)도 즉시 갱신
+    for (const [, p2] of players) if (p2.account && p2.account.userId === id) { sendStats(p2); break; }
+  }
+  let out = done.length ? `${on ? "허용" : "해제"} 완료 ${done.length}명: ${done.join(", ")}` : "";
+  if (missing.length) out += `${out ? " / " : ""}없는 아이디: ${missing.join(", ")}`;
+  reply(out);
 }
 
 // 랭크전 종료 : 우승자(완주 우선 순위 1위) 확정 → 점수 → 결과 통지 → 방 해산
