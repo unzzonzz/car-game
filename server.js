@@ -620,8 +620,8 @@ wss.on("connection", (ws) => {
       // 전역 채팅 — 메뉴/로비 등 미입장자도 보내고 받을 수 있다.
       const text = sanitizeChat(msg.text);
       if (!text) return;
-      // 관리자 명령 : 공개 채팅에 안 올라가고 본인에게만 결과 회신
-      if (p.isAdmin && text.startsWith("/랭크")) { handleRankCommand(p, text); return; }
+      // 관리자 명령 : 공개 채팅에 안 올라가고 본인에게만 결과 회신 (/경쟁전… 이 표준, 구 /랭크… 도 동작)
+      if (p.isAdmin && (text.startsWith("/경쟁전") || text.startsWith("/랭크"))) { handleRankCommand(p, text); return; }
       if (p.isAdmin && text.startsWith("/어디")) { handleWhereCommand(p, text); return; } // 유저 활동 조회
       const name = p.account ? p.account.nickname : (p.active ? p.name : sanitizeName(msg.name));
       const chatMsg = { type: "chat", id, name, text, t: Date.now(), admin: !!p.isAdmin };
@@ -1031,7 +1031,7 @@ function joinRank(pid, p) {
   if (!p.account) { send(p, { type: "rankReject", reason: "로그인이 필요합니다." }); return; }
   const u = users[p.account.userId];
   if (!u || !rankAllowedOf(u, p.account.userId)) {
-    send(p, { type: "rankReject", reason: "디스코드에서 랭크전 참가 신청 후 이용할 수 있습니다." });
+    send(p, { type: "rankReject", reason: "디스코드에서 경쟁전 참가 신청 후 이용할 수 있습니다." });
     return;
   }
   p.mode = "pro"; p.active = true; p.roomId = null; p.rankMode = true;
@@ -1047,7 +1047,7 @@ function joinRank(pid, p) {
   if (!best) {
     const trackIndex = Math.floor(Math.random() * RANK_COURSES); // 맵 = A-1~B-3 랜덤
     best = {
-      id: nextRoomId++, name: "랭크전", hostId: 0, state: "lobby", type: "rank",
+      id: nextRoomId++, name: "경쟁전", hostId: 0, state: "lobby", type: "rank",
       laps: RANK_LAPS, course: trackIndex, trackIndex, timeLimitMs: RANK_TIME_LIMIT_MS, maxPlayers: RANK_MAX,
       countdownAt: 0, raceEndAt: 0, raceStartAt: 0, starters: [], startN: 0,
     };
@@ -1085,14 +1085,14 @@ function applyRankScores(room, winnerId) {
 function handleRankCommand(p, text) {
   const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
   const parts = text.split(/\s+/);
-  const cmd = parts[0], ids = parts.slice(1);
-  if (cmd === "/랭크명단") {
+  const cmd = parts[0].replace("/랭크", "/경쟁전"), ids = parts.slice(1); // 구 /랭크… 별칭 → /경쟁전… 으로 정규화
+  if (cmd === "/경쟁전명단") {
     const allowed = Object.keys(users).filter((id) => users[id].rankAllowed === true);
-    reply(allowed.length ? `랭크 허용 ${allowed.length}명: ${allowed.join(", ")}` : "랭크 허용된 계정이 없습니다.");
+    reply(allowed.length ? `경쟁전 허용 ${allowed.length}명: ${allowed.join(", ")}` : "경쟁전 허용된 계정이 없습니다.");
     return;
   }
-  const on = cmd === "/랭크허용";
-  if (!on && cmd !== "/랭크해제") { reply("명령어: /랭크허용 아이디…  /랭크해제 아이디…  /랭크명단"); return; }
+  const on = cmd === "/경쟁전허용";
+  if (!on && cmd !== "/경쟁전해제") { reply("명령어: /경쟁전허용 아이디…  /경쟁전해제 아이디…  /경쟁전명단"); return; }
   if (!ids.length) { reply(`사용법: ${cmd} 아이디1 아이디2 …`); return; }
   const done = [], missing = [];
   for (const id of ids) {

@@ -138,7 +138,7 @@ const MAP_GROUPS = {
     desc: "다른 플레이어들과 경쟁하는 레이싱",
     maps: [
       { name: "일반전", desc: "표준 규칙으로 달리는 레이스", mode: null },
-      { name: "경쟁전", desc: "실력을 겨루는 랭크 레이스", rank: true },
+      { name: "경쟁전", desc: "점수를 걸고 겨루는 레이스", rank: true },
       { name: "캐주얼", desc: "특별한 규칙의 이색 레이스", mode: null },
     ],
   },
@@ -3047,13 +3047,13 @@ function connect() {
       race.isRank = false; race.state = "none";
       lobby.holdGate = LOBBY_GATES.find((x) => x.group === "racing") || null;
       updateRaceUI();
-      alert(msg.reason || "랭크전에 입장할 수 없습니다.");
+      alert(msg.reason || "경쟁전에 입장할 수 없습니다.");
     } else if (msg.type === "rankResult") {
       // 랭크전 종료 결과 (점수 반영) → 로비 복귀 + 결과 팝업
       account.rankScore = typeof msg.score === "number" ? msg.score : account.rankScore;
       race.isRank = false;
       const show = () => showRankResult(msg);
-      if (gameMode === "pro") wipeTo(() => { toMenu(); show(); }, { title: "랭크전 종료", desc: msg.win ? "우승했습니다!" : "다음엔 더 잘할 수 있어요" });
+      if (gameMode === "pro") wipeTo(() => { toMenu(); show(); }, { title: "경쟁전 종료", desc: msg.win ? "우승했습니다!" : "다음엔 더 잘할 수 있어요" });
       else show();
       updateDashboard();
     } else if (msg.type === "roomList") {
@@ -3169,7 +3169,7 @@ function handleRaceMessage(msg) {
   race.endEnd = msg.endMs > 0 ? performance.now() + msg.endMs : 0;
 
   const stageTitle = race.isRank
-    ? { title: "랭크전", desc: "잠시 후 레이스가 시작됩니다" }
+    ? { title: "경쟁전", desc: "잠시 후 레이스가 시작됩니다" }
     : { title: "커스텀 레이싱", desc: "잠시 후 레이스가 시작됩니다" };
   if (prevState !== "countdown" && race.state === "countdown") {
     sfxCountLit = -1; // 새 카운트다운 비프 준비
@@ -3323,7 +3323,7 @@ function updateRaceUI() {
       : `${courseLabel(race.course)} · ${race.laps}바퀴 · 시간제한 ${timeLabel(race.timeLimit)} · 최대 ${race.maxPlayers}명`;
   }
   const title = document.getElementById("lobbyTitle");
-  if (title) title.textContent = race.isRank ? "랭크전 대기실" : (race.roomName ? `${race.roomName}` : "커스텀 대기실");
+  if (title) title.textContent = race.isRank ? "경쟁전 대기실" : (race.roomName ? `${race.roomName}` : "커스텀 대기실");
 
   // 로비 플레이어 목록
   const lobbyList = document.getElementById("lobbyList");
