@@ -629,6 +629,7 @@ wss.on("connection", (ws) => {
       // 관리자 명령 : 공개 채팅에 안 올라가고 본인에게만 결과 회신 (/경쟁전… 이 표준, 구 /랭크… 도 동작)
       if (p.isAdmin && (text.startsWith("/경쟁전") || text.startsWith("/랭크"))) { handleRankCommand(p, text); return; }
       if (p.isAdmin && text.startsWith("/어디")) { handleWhereCommand(p, text); return; } // 유저 활동 조회
+      if (p.isAdmin && text.startsWith("/온라인")) { handleOnlineCommand(p); return; }   // 온라인 명단
       const name = p.account ? p.account.nickname : (p.active ? p.name : sanitizeName(msg.name));
       const chatMsg = { type: "chat", id, name, text, t: Date.now(), admin: !!p.isAdmin };
       chatHistory.push(chatMsg);
@@ -1187,6 +1188,20 @@ function handleWhereCommand(p, text) {
     else cur = cur ? cur + " / " + line : line;
   }
   if (cur) reply(cur);
+}
+
+// 관리자 /온라인 : 접속자 명단만 간단히 (활동까지 보려면 /어디)
+function handleOnlineCommand(p) {
+  const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
+  const names = [];
+  for (const [, q] of players) names.push(q.account ? q.account.nickname : `게스트${q.name ? " " + q.name : ""}`);
+  if (!names.length) { reply("접속자가 없습니다."); return; }
+  let cur = `온라인 ${names.length}명: `;
+  for (const n of names) {
+    if (cur.length + n.length + 2 > 160) { reply(cur.replace(/, $/, "")); cur = ""; }
+    cur += n + ", ";
+  }
+  reply(cur.replace(/, $/, ""));
 }
 
 // 랭크전 종료 : 우승자(완주 우선 순위 1위) 확정 → 점수 → 결과 통지 → 방 해산
