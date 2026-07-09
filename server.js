@@ -1086,32 +1086,44 @@ function applyRankScores(room, winnerId) {
   return out;
 }
 
+// 닉네임(대소문자 무시)으로 계정 아이디 찾기 — 없으면 아이디 직접 입력으로 폴백.
+//  닉 중복 방지 이전의 옛 중복 닉이 있으면 여러 개가 나올 수 있어 배열로 반환한다.
+function findUserIdsByName(name) {
+  const q = String(name || "").toLowerCase();
+  const byNick = Object.keys(users).filter((id) => (users[id].nickname || "").toLowerCase() === q);
+  if (byNick.length) return byNick;
+  return users[name] ? [name] : [];
+}
+
 // 관리자 랭크 명령 : 채팅창에서 신청 승인/해제를 즉시 처리 (서버 재시작 불필요, 여러 명 한 번에)
-//  /랭크허용 아이디1 아이디2 …  /랭크해제 아이디1 아이디2 …  /랭크명단
+//  /경쟁전허용 닉네임1 닉네임2 …  /경쟁전해제 닉네임 …  /경쟁전명단  (닉네임 기준, 아이디도 폴백 허용)
 function handleRankCommand(p, text) {
   const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
   const parts = text.split(/\s+/);
-  const cmd = parts[0].replace("/랭크", "/경쟁전"), ids = parts.slice(1); // 구 /랭크… 별칭 → /경쟁전… 으로 정규화
+  const cmd = parts[0].replace("/랭크", "/경쟁전"), names = parts.slice(1); // 구 /랭크… 별칭 → /경쟁전… 으로 정규화
   if (cmd === "/경쟁전명단") {
-    const allowed = Object.keys(users).filter((id) => users[id].rankAllowed === true);
+    const allowed = Object.keys(users).filter((id) => users[id].rankAllowed === true).map((id) => users[id].nickname || id);
     reply(allowed.length ? `경쟁전 허용 ${allowed.length}명: ${allowed.join(", ")}` : "경쟁전 허용된 계정이 없습니다.");
     return;
   }
   const on = cmd === "/경쟁전허용";
-  if (!on && cmd !== "/경쟁전해제") { reply("명령어: /경쟁전허용 아이디…  /경쟁전해제 아이디…  /경쟁전명단"); return; }
-  if (!ids.length) { reply(`사용법: ${cmd} 아이디1 아이디2 …`); return; }
-  const done = [], missing = [];
-  for (const id of ids) {
-    const u = users[id];
-    if (!u) { missing.push(id); continue; }
+  if (!on && cmd !== "/경쟁전해제") { reply("명령어: /경쟁전허용 닉네임…  /경쟁전해제 닉네임…  /경쟁전명단"); return; }
+  if (!names.length) { reply(`사용법: ${cmd} 닉네임1 닉네임2 …`); return; }
+  const done = [], missing = [], dup = [];
+  for (const name of names) {
+    const matches = findUserIdsByName(name);
+    if (!matches.length) { missing.push(name); continue; }
+    if (matches.length > 1) { dup.push(`${name}(${matches.join(",")})`); continue; } // 옛 중복 닉 → 아이디로 지정 요청
+    const id = matches[0], u = users[id];
     u.rankAllowed = on;
     persistUser(id);
-    done.push(id);
+    done.push(u.nickname || id);
     // 접속 중이면 클라 상태(경쟁전 카드/대시보드)도 즉시 갱신
     for (const [, p2] of players) if (p2.account && p2.account.userId === id) { sendStats(p2); break; }
   }
   let out = done.length ? `${on ? "허용" : "해제"} 완료 ${done.length}명: ${done.join(", ")}` : "";
-  if (missing.length) out += `${out ? " / " : ""}없는 아이디: ${missing.join(", ")}`;
+  if (missing.length) out += `${out ? " / " : ""}없는 닉네임: ${missing.join(", ")}`;
+  if (dup.length) out += `${out ? " / " : ""}닉 중복(아이디로 지정하세요): ${dup.join(", ")}`;
   reply(out);
 }
 
@@ -1139,23 +1151,33 @@ function activityOf(p) {
 
 // 관리자 /어디 : 유저가 지금 뭘 하는지 조회. 인자 없으면 전체 온라인 현황.
 //  /어디            → 접속자 전원의 활동
-//  /어디 아이디1 …   → 해당 계정들의 활동 (미접속=오프라인)
+//  /어디 닉네임 …    → 해당 계정들의 활동 (미접속=오프라인, 아이디 폴백, 온라인 게스트 이름도 조회)
 function handleWhereCommand(p, text) {
   const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
-  const ids = text.split(/\s+/).slice(1);
+  const names = text.split(/\s+/).slice(1);
   const lines = [];
-  if (!ids.length) {
+  if (!names.length) {
     for (const [, q] of players) {
-      const who = q.account ? `${q.account.userId}(${q.account.nickname})` : `게스트${q.name ? " " + q.name : ""}`;
+      const who = q.account ? `${q.account.nickname}(${q.account.userId})` : `게스트${q.name ? " " + q.name : ""}`;
       lines.push(`${who}: ${activityOf(q)}`);
     }
     if (!lines.length) { reply("접속자가 없습니다."); return; }
   } else {
-    for (const id of ids) {
-      let found = null;
-      for (const [, q] of players) if (q.account && q.account.userId === id) { found = q; break; }
-      if (found) lines.push(`${id}: ${activityOf(found)}`);
-      else lines.push(`${id}: ${users[id] ? "오프라인" : "없는 아이디"}`);
+    for (const name of names) {
+      const matches = findUserIdsByName(name);
+      if (matches.length) {
+        for (const id of matches) {
+          let found = null;
+          for (const [, q] of players) if (q.account && q.account.userId === id) { found = q; break; }
+          lines.push(`${users[id].nickname || id}: ${found ? activityOf(found) : "오프라인"}`);
+        }
+        continue;
+      }
+      // 계정에 없는 이름 → 온라인 게스트 이름으로 조회 (게스트 이름은 중복 가능 → 전부 표시)
+      const guests = [];
+      for (const [, q] of players) if (!q.account && (q.name || "").toLowerCase() === String(name).toLowerCase()) guests.push(q);
+      if (guests.length) { for (const g of guests) lines.push(`게스트 ${g.name}: ${activityOf(g)}`); continue; }
+      lines.push(`${name}: 없는 닉네임`);
     }
   }
   // 채팅 한 줄이 너무 길지 않게 ~160자씩 끊어 보낸다
