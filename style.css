@@ -702,6 +702,36 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 #rankResultOutcome.win { color: var(--green); }
 #rankResultOutcome.lose { color: var(--coral); }
 
+/* 이벤트 선물 팝업 : 랭크 결과와 같은 오버레이 + 운영자 메세지 인용 박스 */
+#giftModal {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(58, 54, 46, 0.28);
+  z-index: 46;
+}
+#giftModal.show { display: flex; }
+#giftLine {
+  font-family: 'Jua', sans-serif;
+  font-size: 18px;
+  color: var(--ink);
+  margin: 4px 0 14px;
+}
+#giftMsg {
+  font-family: 'Quicksand', sans-serif;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--muted);
+  background: rgba(58, 54, 46, 0.06);
+  border-radius: 12px;
+  padding: 12px 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: left;
+}
+
 /* 로비 랭킹 모달 : 대시보드와 같은 오버레이. 모든 코스 순위 + 페이지네이션 */
 #rankModal {
   position: absolute;

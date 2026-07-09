@@ -224,6 +224,19 @@ const CAR_COLORS = [
   "#4F8EE8","#4A73E0","#4A5FD6","#5D54D8","#7A55D6","#9855D1","#B355C9","#C955B4",
   "#DA5697","#E0577A","#FFFFFF","#E9E4D8","#B8B2A6","#7A756B","#4A4E57","#2F2F2F",
 ];
+// 우주 스킨 : 이 색을 고르면 단색 대신 "딥 스페이스 페인트"(성운+떠다니는 별)로 렌더된다.
+//  색 문자열 자체가 스킨 ID 라서 서버 릴레이/저장(savePrefs)이 그대로 동작한다.
+//  기본 스킨이 아니라 이벤트 선물 수령자만 소유 — 소유 계정으로 로그인한 동안만 스와치에 등장.
+const SPACE_SKIN = "#0b1026";
+function applySkinOwnership() {
+  const i = CAR_COLORS.indexOf(SPACE_SKIN);
+  if (account.spaceSkin && i < 0) CAR_COLORS.push(SPACE_SKIN); // 33번째 스와치 — 링 배치는 배열 길이 기준이라 자동 반영
+  else if (!account.spaceSkin && i >= 0) {
+    CAR_COLORS.splice(i, 1);
+    if (myColor().toLowerCase() === SPACE_SKIN) setCarColor("#e8604c"); // 미소유 상태로 전환 → 기본 코랄로 복구
+  }
+}
+
 const CUSTOM_RING_R = 175; // 링 반지름(월드 px)
 const custom = { active: false, cx: 0, cy: 0, selAnim: null }; // selAnim = 픽커(선택 링) 슬라이드 애니메이션
 const modeCounts = { a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, retro1: 0, retro2: 0, pro: 0, test: 0, rank: 0, total: 0 };
@@ -290,6 +303,8 @@ const account = {
   bestC2Ms: 0,    // C-2 개인 최고 기록(ms) — 서버 bestC2
   bestC3Ms: 0,    // C-3 개인 최고 기록(ms) — 서버 bestC3
   lastLogin: 0,   // 직전 접속 시각(ms epoch, 0=처음)
+  gift: null,     // 미수령 이벤트 선물 {msg} — 수령 전까지 로비에 올 때마다 팝업
+  spaceSkin: false, // 우주 스킨 소유 (이벤트 선물 수령) — 소유자만 차고 스와치에 표시
 };
 
 /* =============================================================================
@@ -961,6 +976,7 @@ window.addEventListener("keydown", e => {
     ["accountModal", hideAccountModal],
     ["dashboard", hideDashboard],
     ["rankResultModal", hideRankResult],
+    ["giftModal", hideGiftModal], // 수령 안 하고 닫기 — 다음 로비 진입 때 다시 뜬다
     ["rankModal", hideRankings],
     ["authModal", hideAuthModal],
   ];
@@ -2245,7 +2261,8 @@ function hitCustomSwatch(wx, wy) {
 }
 function drawCustomRing() {
   if (!custom.active) return;
-  // 팔레트 : 정적 스와치 (애니메이션 없음)
+  // 팔레트 : 정적 스와치 (우주 스킨 스와치만 미니 별이 반짝임)
+  const tNow = performance.now() / 1000;
   for (let i = 0; i < CAR_COLORS.length; i++) {
     const p = customSwatchPos(i);
     ctx.beginPath();
@@ -2255,6 +2272,18 @@ function drawCustomRing() {
     ctx.lineWidth = 1;
     ctx.strokeStyle = "rgba(0,0,0,0.08)"; // 밝은 스와치(흰색 등) 경계
     ctx.stroke();
+    if (CAR_COLORS[i] === SPACE_SKIN) { // 우주 스와치 : 어두운 원판 위 미니 별 3개
+      ctx.save();
+      ctx.beginPath(); ctx.arc(p.x, p.y, 14, 0, Math.PI * 2); ctx.clip();
+      ctx.fillStyle = "rgba(124,77,255,0.35)";
+      ctx.beginPath(); ctx.arc(p.x - 5, p.y + 4, 8, 0, 7); ctx.fill();
+      ctx.fillStyle = "#ffffff";
+      for (const [ox, oy, r, ph] of [[-4, -4, 1.7, 0], [5, 1, 1.3, 2], [0, 7, 1.1, 4]]) {
+        ctx.globalAlpha = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(tNow * 2 + ph));
+        ctx.beginPath(); ctx.arc(p.x + ox, p.y + oy, r, 0, 7); ctx.fill();
+      }
+      ctx.restore(); ctx.globalAlpha = 1;
+    }
   }
   // 픽커 링 : 선택 표시 하나만 — 색을 바꾸면 원호를 따라 새 스와치로 슬라이드
   const a = currentPickerAngle();
@@ -2575,6 +2604,98 @@ function carShapeTransform(x, y, rot, s) {
   ctx.translate(-95, -132);
 }
 
+/* 우주 스킨 페인트 — carShapeTransform 공간(바디 x38~152, y16~248)에서 바디 클립 후 그린다.
+ *  딥 스페이스 그라데이션 + 은은한 성운 3점 + 떠다니며 반짝이는 별 + 십자 스파클.
+ *  별은 시드 고정(모든 차 동일 별자리)이고 위상만 시간으로 흘러 개체마다 자연스럽게 어긋난다. */
+const SPACE_STARS = (() => {
+  let seed = 20260709; // 고정 시드 → 세션/플레이어 간 동일한 별자리
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  const stars = [];
+  for (let i = 0; i < 13; i++) {
+    stars.push({
+      x: 42 + rnd() * 106, y: 22 + rnd() * 222,        // 바디 안 기본 위치
+      r: 1.8 + rnd() * 2.8,                            // 반지름(쉐입 단위)
+      dx: (rnd() - 0.5) * 14, dy: -4 - rnd() * 9,      // 드리프트 속도(단위/s, 살짝 위로 떠다님)
+      tw: 1.2 + rnd() * 2.6, ph: rnd() * Math.PI * 2,  // 반짝임 속도/위상
+      warm: rnd() < 0.25,                              // 25% 는 웜톤(금색) 별
+    });
+  }
+  const dust = []; // 깊이감용 초미세 별가루 (정적, 은은한 반짝임만)
+  for (let i = 0; i < 26; i++) {
+    dust.push({ x: 42 + rnd() * 106, y: 22 + rnd() * 222, r: 0.7 + rnd() * 0.9, tw: 0.8 + rnd() * 1.8, ph: rnd() * Math.PI * 2 });
+  }
+  return { stars, dust };
+})();
+let spaceGrad = null, spaceNebulas = null; // 지연 생성 캐시 (쉐입-로컬 좌표라 정적)
+function drawSpacePaint() {
+  const t = performance.now() / 1000;
+  ctx.save();
+  ctx.clip(CARP.body);
+  // 1) 딥 스페이스 그라데이션 (앞쪽이 미세하게 밝은 남색 → 뒤쪽 심연)
+  if (!spaceGrad) {
+    spaceGrad = ctx.createLinearGradient(0, 16, 0, 248);
+    spaceGrad.addColorStop(0, "#141b40");
+    spaceGrad.addColorStop(0.45, "#0b1026");
+    spaceGrad.addColorStop(1, "#060916");
+  }
+  ctx.fillStyle = spaceGrad;
+  ctx.fillRect(30, 8, 132, 248);
+  // 2) 성운 : 보라/청록/마젠타 저알파 래디얼 3점
+  if (!spaceNebulas) {
+    const mk = (x, y, r, c) => {
+      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, c); g.addColorStop(1, "rgba(0,0,0,0)");
+      return { g, x, y, r };
+    };
+    spaceNebulas = [
+      mk(72, 78, 58, "rgba(124,77,255,0.22)"),   // 보라
+      mk(122, 196, 64, "rgba(56,189,248,0.16)"), // 청록
+      mk(96, 138, 84, "rgba(217,70,160,0.10)"),  // 마젠타
+    ];
+  }
+  for (const n of spaceNebulas) {
+    ctx.fillStyle = n.g;
+    ctx.fillRect(n.x - n.r, n.y - n.r, n.r * 2, n.r * 2);
+  }
+  // 3) 별가루 : 정적 초미세 별 (깊이감) — 은은한 반짝임만
+  ctx.fillStyle = "#dbe6ff";
+  for (const d of SPACE_STARS.dust) {
+    ctx.globalAlpha = 0.25 + 0.4 * (0.5 + 0.5 * Math.sin(t * d.tw + d.ph));
+    ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, 7); ctx.fill();
+  }
+  // 4) 별 : 느리게 떠다니며(바디 안 랩어라운드) 반짝임 + 작은 글로우
+  for (const s of SPACE_STARS.stars) {
+    const x = 40 + (((s.x - 40 + s.dx * t) % 112) + 112) % 112;
+    const y = 18 + (((s.y - 18 + s.dy * t) % 228) + 228) % 228;
+    const tw = 0.5 + 0.5 * Math.sin(t * s.tw + s.ph);
+    const a = 0.3 + 0.7 * tw * tw;
+    const r = s.r * (0.8 + 0.35 * tw);
+    ctx.globalAlpha = a * 0.2;  // 글로우(작고 옅게 — 크면 안개/흙탕처럼 보임)
+    ctx.fillStyle = s.warm ? "#ffe7b8" : "#cfe1ff";
+    ctx.beginPath(); ctx.arc(x, y, r * 1.9, 0, 7); ctx.fill();
+    ctx.globalAlpha = a;        // 코어
+    ctx.fillStyle = s.warm ? "#ffedc9" : "#ffffff";
+    ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+  }
+  // 4) 십자 스파클 2개 : 밝게 빛나는 큰 별 (천천히 회전 + 맥동)
+  ctx.fillStyle = "#ffffff";
+  for (const [sx, sy, base, spd, ph] of [[68, 200, 9, 0.9, 0], [126, 60, 7, 1.3, 2.1]]) {
+    const pu = 0.5 + 0.5 * Math.sin(t * spd + ph);
+    const R = base * (0.7 + 0.5 * pu), w = R * 0.22;
+    ctx.globalAlpha = 0.55 + 0.45 * pu;
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(Math.sin(t * 0.4 + ph) * 0.35);
+    ctx.beginPath(); // 4갈래 반짝이 (오목 다이아 4개)
+    ctx.moveTo(0, -R); ctx.quadraticCurveTo(w, -w, R, 0); ctx.quadraticCurveTo(w, w, 0, R);
+    ctx.quadraticCurveTo(-w, w, -R, 0); ctx.quadraticCurveTo(-w, -w, 0, -R);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
 function drawCar(car, color = "#e8604c") {
   const L = car.length || CAR.length;
   const s = ((L + 10) / 232) * 1.15;  // 시각 크기 1.15배 (충돌 크기는 그대로)
@@ -2611,7 +2732,19 @@ function drawCar(car, color = "#e8604c") {
   };
   drawMirror(29, -0.28);
   drawMirror(161, 0.28);
-  // 바디
+  // 바디 : 우주 스킨이면 딥 스페이스 페인트(성운+떠다니는 별) — 실루엣 안은 온전히 우주.
+  //  창문/대시보드/좌석/엔진 데크 등 디테일은 생략하되, 헤드라이트만 남겨 차의 방향성을 살린다.
+  if (color === SPACE_SKIN) {
+    drawSpacePaint();
+    ctx.fillStyle = "#3a3f47";
+    ctx.beginPath(); ctx.ellipse(62, 40, 12, 8, -0.31, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(128, 40, 12, 8, 0.31, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#f6efe0";
+    ctx.beginPath(); ctx.arc(59, 38, 3.2, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(131, 38, 3.2, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    return;
+  }
   ctx.fillStyle = color; ctx.fill(CARP.body);
   // ctx.strokeStyle = outline; ctx.lineWidth = 3.5; ctx.stroke(CARP.body);
 
@@ -2942,7 +3075,22 @@ function connect() {
       try { localStorage.setItem("carGameToken", msg.token); } catch {}
       hideAuthModal();
       updateAuthUI();
+      account.spaceSkin = !!msg.spaceSkin;
+      applySkinOwnership(); // 우주 스킨 소유자면 스와치 추가 (색 복원보다 먼저)
       applyAccountPrefs(msg.color, msg.settings); // 계정에 저장된 차 색/설정 복원
+      account.gift = msg.gift || null;
+      if (account.gift) showGiftModal(); // 미수령 이벤트 선물 → 접속하자마자 팝업
+    } else if (msg.type === "gift") {
+      // 접속 중에 운영자 이벤트 선물 도착 — 로비면 즉시 팝업, 주행 중이면 로비 복귀 때 표시
+      account.gift = { msg: msg.msg || "" };
+      if (gameMode === "lobby") showGiftModal();
+    } else if (msg.type === "giftClaimed") {
+      account.gift = null;
+      account.spaceSkin = !!msg.spaceSkin;
+      applySkinOwnership(); // 수령 즉시 차고 스와치에 등장
+      if (typeof msg.color === "string" && /^#[0-9a-fA-F]{6}$/.test(msg.color)) setCarColor(msg.color);
+      hideGiftModal();
+      SFX.record(); // 수령 팡파레
     } else if (msg.type === "authError") {
       if (!msg.silent) alert(msg.reason || "인증 실패");
       else { try { localStorage.removeItem("carGameToken"); } catch {} } // 만료 토큰 정리
@@ -3990,6 +4138,7 @@ function enterLobby() {
   updateFreeUI();
   setTimeHud("");
   updateProTimer();
+  if (account.gift) showGiftModal(); // 미수령 이벤트 선물 → 수령 전까지 로비마다 안내
 }
 
 /* 로비 대기 상태로 복귀 (ESC) : 리스폰 없이 "그 자리에서" 줌인 + 메뉴 오버레이 전체 표시 */
@@ -4407,7 +4556,7 @@ function setupLobbyUI() {
       }
       return; // 커스텀 중엔 게이트 클릭 무시
     }
-    if (lobby.ui === "idle") return; // 줌 인(대기 오버레이) 상태에선 클릭으로 게이트 안 열림 — 움직여 줌아웃 후에만
+    // 대기(줌 인) 상태에서도 화면에 보이는 게이트는 클릭으로 바로 열린다 — 멀리서 차고 클릭 등
     for (const g of LOBBY_GATES) {
       if (Math.abs(wx - g.x) < g.w / 2 && Math.abs(wy - g.y) < g.h / 2) {
         if (g.group === "garage") openCustom();
@@ -4501,6 +4650,8 @@ function sendLogout() {
   account.proWins = 0; account.proPlays = 0;
   account.rankScore = 100; account.rankAllowed = false; account.rankWins = 0; account.rankPlays = 0;
   account.totalTime = 0; account.totalTimeAt = 0; account.bestA1Ms = 0; account.bestA2Ms = 0; account.bestA3Ms = 0; account.bestMs = 0; account.bestHardMs = 0; account.bestSerpMs = 0; account.bestC1Ms = 0; account.bestC2Ms = 0; account.bestC3Ms = 0; account.loginTime = 0;
+  account.gift = null; account.spaceSkin = false;
+  applySkinOwnership(); // 우주 스킨 스와치 제거 + 쓰던 중이면 기본색 복구
   // 로그아웃 즉시 게스트 이름으로 전환 (저장된 게스트 이름 있으면 그것, 없으면 "게스트")
   let guest = "";
   try { guest = (localStorage.getItem("carGameName") || "").trim().slice(0, 12); } catch {}
@@ -4582,6 +4733,22 @@ function showRankResult(msg) {
 }
 function hideRankResult() {
   document.getElementById("rankResultModal").classList.remove("show");
+}
+
+// 이벤트 선물 팝업 : 이벤트 이름은 노출하지 않고 운영자 메세지만 보여준다.
+//  수령 버튼을 눌러야 서버가 선물을 적용 — ESC 로 닫아도 다음 로비 진입 때 다시 뜬다.
+function showGiftModal() {
+  if (!account.gift) return;
+  const m = document.getElementById("giftMsg");
+  m.textContent = account.gift.msg || "";
+  m.style.display = account.gift.msg ? "" : "none";
+  document.getElementById("giftModal").classList.add("show");
+}
+function hideGiftModal() {
+  document.getElementById("giftModal").classList.remove("show");
+}
+function claimGift() {
+  if (net.ws && net.ws.readyState === WebSocket.OPEN) net.ws.send(JSON.stringify({ type: "claimGift" }));
 }
 function showAccountModal() {
   document.getElementById("accId").textContent = account.userId || "-";
@@ -4718,6 +4885,7 @@ function setupAuth() {
   document.getElementById("dashBtn").addEventListener("click", showDashboard);
   document.getElementById("dashClose").addEventListener("click", hideDashboard);
   document.getElementById("rankResultClose").addEventListener("click", hideRankResult);
+  document.getElementById("giftClaimBtn").addEventListener("click", claimGift);
   // 계정 폼 : Enter 로 바로 전송
   const enterSubmit = (ids, fn) => ids.forEach((id) => {
     const el = document.getElementById(id);

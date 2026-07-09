@@ -143,6 +143,9 @@ const PRO_RECIPE_COUNT = 9;
 // =============================================================================
 const ADMIN_ID = "unzzonzz";
 const GOLD = "#ffd94d";
+// 관리자 /이벤트 선물 목록 : 이름(공백 제거) → 수령 시 적용 내용. 새 이벤트는 여기에 추가.
+const SPACE_SKIN_COLOR = "#0b1026"; // 클라 SPACE_SKIN 과 동일해야 함 (33번째 스와치)
+const GIFT_ITEMS = { "우주스킨": { item: "spaceSkin" } };
 const USERS_FILE = path.join(__dirname, "users.json");
 
 // 영속 저장 : 환경변수가 있으면 Upstash Redis, 없으면 로컬 users.json 파일로 폴백.
@@ -255,6 +258,8 @@ function loginPlayer(p, userId) {
     lastLogin: u.lastLogin, // 마지막 활동 시각
     rankScore: rankScoreOf(u), rankAllowed: rankAllowedOf(u, userId), // 랭크전 점수/참가 허용
     rankWins: u.rankWins || 0, rankPlays: u.rankPlays || 0,           // 랭크전 전적
+    gift: u.gift ? { msg: u.gift.msg } : null, // 미수령 이벤트 선물 → 접속 즉시 팝업
+    spaceSkin: !!u.spaceSkin, // 우주 스킨 소유 (수령 완료) — 소유자만 차고 스와치 표시
   });
 }
 
@@ -678,6 +683,9 @@ wss.on("connection", (ws) => {
       if (p.isAdmin && (text.startsWith("/경쟁전") || text.startsWith("/랭크"))) { handleRankCommand(p, text); return; }
       if (p.isAdmin && text.startsWith("/어디")) { handleWhereCommand(p, text); return; } // 유저 활동 조회
       if (p.isAdmin && text.startsWith("/온라인")) { handleOnlineCommand(p); return; }   // 온라인 명단
+      if (p.isAdmin && text.startsWith("/이벤트")) { handleEventCommand(p, text); return; } // 이벤트 선물 발송
+      // 관리자의 알 수 없는 /명령 은 공개 채팅에 새지 않게 삼킨다 (오타/구버전 명령 보호).
+      if (p.isAdmin && text.startsWith("/")) { send(p, { type: "chat", id: 0, name: "시스템", text: `알 수 없는 명령어: ${text.split(/\s+/)[0]}`, t: Date.now() }); return; }
       const name = p.account ? p.account.nickname : (p.active ? p.name : sanitizeName(msg.name));
       const chatMsg = { type: "chat", id, name, text, t: Date.now(), admin: !!p.isAdmin };
       chatHistory.push(chatMsg);
@@ -711,6 +719,16 @@ wss.on("connection", (ws) => {
         sendStats(p);              // 대시보드 최고기록 갱신
         broadcastRecords(p.mode);  // 해당 모드 TOP10 갱신
       }
+
+    } else if (msg.type === "claimGift") {
+      // 이벤트 선물 수령 : 저장된 선물을 계정에 적용하고 제거 (수령 버튼을 눌러야 적용)
+      if (!p.account) return;
+      const u = users[p.account.userId];
+      if (!u || !u.gift) return;
+      if (u.gift.item === "spaceSkin") { u.spaceSkin = true; u.color = SPACE_SKIN_COLOR; p.color = u.color; } // 소유 등록 + 차 색 = 우주 스킨
+      delete u.gift;
+      persistUser(p.account.userId);
+      send(p, { type: "giftClaimed", color: u.color || null, spaceSkin: !!u.spaceSkin });
 
     } else if (msg.type === "state") {
       applyState(p, msg); // (구버전/폴백) JSON state — 신규 클라는 바이너리로 보냄
@@ -1250,6 +1268,34 @@ function handleOnlineCommand(p) {
     cur += n + ", ";
   }
   reply(cur.replace(/, $/, ""));
+}
+
+// 관리자 /이벤트 : 유저에게 이벤트 선물 발송 — 받는 유저는 수령 전까지 접속/로비마다 팝업을 본다.
+//  /이벤트 닉네임 선물이름 메세지…   (선물 이름의 공백 허용 : 공백을 제거해 GIFT_ITEMS 와 매칭)
+function handleEventCommand(p, text) {
+  const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
+  const parts = text.split(/\s+/).slice(1);
+  if (parts.length < 2) { reply(`사용법: /이벤트 닉네임 선물이름 메세지 (선물: ${Object.keys(GIFT_ITEMS).join(", ")})`); return; }
+  const name = parts[0];
+  const matches = findUserIdsByName(name);
+  if (!matches.length) { reply(`없는 닉네임: ${name} (게스트에겐 보낼 수 없습니다)`); return; }
+  if (matches.length > 1) { reply(`닉 중복(아이디로 지정하세요): ${name}(${matches.join(",")})`); return; }
+  // 선물 이름 : 남은 토큰을 앞에서부터 공백 없이 이어 붙이며 등록된 이름과 최장 일치
+  const rest = parts.slice(1);
+  let gift = null, used = 0;
+  for (let i = 0, acc = ""; i < rest.length && i < 4; i++) {
+    acc += rest[i];
+    if (GIFT_ITEMS[acc]) { gift = GIFT_ITEMS[acc]; used = i + 1; }
+  }
+  if (!gift) { reply(`알 수 없는 선물: ${rest.join(" ")} (가능: ${Object.keys(GIFT_ITEMS).join(", ")})`); return; }
+  const giftMsg = rest.slice(used).join(" ").slice(0, 200);
+  const id = matches[0], u = users[id];
+  const replaced = !!u.gift; // 미수령 선물이 이미 있으면 새 선물로 교체
+  u.gift = { item: gift.item, msg: giftMsg, at: Date.now() };
+  persistUser(id);
+  // 접속 중이면 즉시 팝업
+  for (const [, q] of players) if (q.account && q.account.userId === id) send(q, { type: "gift", msg: giftMsg });
+  reply(`${u.nickname || id}님에게 선물을 보냈습니다.${replaced ? " (미수령 선물을 교체)" : ""}`);
 }
 
 // 랭크전 종료 : 우승자(완주 우선 순위 1위) 확정 → 점수 → 결과 통지 → 방 해산
