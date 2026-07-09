@@ -468,7 +468,13 @@ wss.on("connection", (ws) => {
       if (!/^[A-Za-z0-9_]{3,20}$/.test(idv)) { send(p, { type: "authError", reason: "아이디는 영문/숫자 3~20자여야 합니다." }); return; }
       if (users[idv]) { send(p, { type: "authError", reason: "이미 존재하는 아이디입니다." }); return; }
       if (!validPassword(msg.password)) { send(p, { type: "authError", reason: PW_RULE_MSG }); return; }
-      users[idv] = { id: idv, nickname: sanitizeName(msg.nickname), password: String(msg.password), proWins: 0, proPlays: 0 };
+      // 닉네임 : 빈 값 금지 + 계정 간 중복 금지 (대소문자 무시. 게스트 이름은 제한 없음)
+      //  sanitizeName 은 빈 입력을 "Player" 로 바꾸므로, 빈 값 검사는 원본 입력으로 한다
+      if (!String(msg.nickname || "").trim()) { send(p, { type: "authError", reason: "닉네임을 입력하세요." }); return; }
+      const nick = sanitizeName(msg.nickname);
+      const nickTaken = Object.values(users).some((u) => (u.nickname || "").toLowerCase() === nick.toLowerCase());
+      if (nickTaken) { send(p, { type: "authError", reason: "이미 사용 중인 닉네임입니다." }); return; }
+      users[idv] = { id: idv, nickname: nick, password: String(msg.password), proWins: 0, proPlays: 0 };
       persistUser(idv);
       loginPlayer(p, idv);
       return;
