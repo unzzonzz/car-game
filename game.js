@@ -1683,7 +1683,7 @@ function updateCamera(car, dt) {
  *  렌더링
  * ========================================================================== */
 const canvas = document.getElementById("game");
-const ctx = canvas.getContext("2d");
+const ctx = canvas.getContext("2d", { alpha: false }); // 불투명 캔버스 — 페이지 합성 비용 제거 (매 프레임 전체를 칠하므로 안전)
 const minimap = document.getElementById("minimap");
 const mctx = minimap.getContext("2d");
 const speedEl = document.getElementById("speed");
@@ -2354,15 +2354,29 @@ function drawSkid() {
   const now = performance.now();
   ctx.lineCap = "butt"; // 이웃 선분과 겹쳐 어두워지지 않게 (끝점이 정확히 이어짐)
   ctx.lineWidth = 4.5;  // 타이어 폭 느낌
+  // 뷰포트 컬링 범위 (월드 좌표, 여유 120px — 화면 흔들림 오프셋까지 커버)
+  const vx0 = camera.x - 120, vy0 = camera.y - 120;
+  const vx1 = camera.x + viewW / camera.zoom + 120, vy1 = camera.y + viewH / camera.zoom + 120;
+  // 배칭 : (색, 알파 버킷 0~10) 별로 한 path 에 모아 stroke 횟수를 최대 1400 → ~10회로
+  const buckets = new Map(); // key -> {path, alpha, color}
   for (const m of skidMarks) {
     const age = now - m.born;
     if (age >= SKID_HOLD + SKID_FADE) continue; // 만료 (아래에서 일괄 정리)
-    ctx.globalAlpha = age <= SKID_HOLD ? 1 : 1 - (age - SKID_HOLD) / SKID_FADE;
-    ctx.strokeStyle = m.color;
-    ctx.beginPath();
-    ctx.moveTo(m.x0, m.y0);
-    ctx.lineTo(m.x1, m.y1);
-    ctx.stroke();
+    if ((m.x0 < vx0 && m.x1 < vx0) || (m.x0 > vx1 && m.x1 > vx1) ||
+        (m.y0 < vy0 && m.y1 < vy0) || (m.y0 > vy1 && m.y1 > vy1)) continue; // 화면 밖
+    const a = age <= SKID_HOLD ? 1 : 1 - (age - SKID_HOLD) / SKID_FADE;
+    const q = Math.round(a * 10); // 알파 10단계 양자화 (페이드 시각 차이 미미)
+    if (q <= 0) continue;
+    const key = m.color + q;
+    let b = buckets.get(key);
+    if (!b) { b = { path: new Path2D(), alpha: q / 10, color: m.color }; buckets.set(key, b); }
+    b.path.moveTo(m.x0, m.y0);
+    b.path.lineTo(m.x1, m.y1);
+  }
+  for (const b of buckets.values()) {
+    ctx.globalAlpha = b.alpha;
+    ctx.strokeStyle = b.color;
+    ctx.stroke(b.path);
   }
   ctx.globalAlpha = 1;
   // 만료된 자국 정리 : born 오름차순이므로 앞에서부터 잘라낸다
@@ -2653,10 +2667,12 @@ function roundRect(x, y, w, h, r, c = ctx) {
   c.closePath();
 }
 
+let lastSpeedText = "";
 function drawSpeed(car) {
-  // 체감 속도를 km/h 정수로 표시 (후진도 크기로 표시)
+  // 체감 속도를 km/h 정수로 표시 (후진도 크기로 표시). 값이 변한 프레임에만 DOM 갱신.
   const kmh = Math.round(Math.abs(car.lf) * PXS_TO_KMH);
-  speedEl.textContent = `${kmh} km/h`;
+  const text = `${kmh} km/h`;
+  if (text !== lastSpeedText) { lastSpeedText = text; speedEl.textContent = text; }
 }
 
 // mm:ss.cs 형식 (예: 01:30.02)
@@ -2667,9 +2683,10 @@ function fmtRaceTime(ms) {
   const cs = Math.floor((ms % 1000) / 10);
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
 }
-// #time HUD (프로 남은시간 / 타임어택). 표시할 게 없으면 비운다.
+// #time HUD (프로 남은시간 / 타임어택). 표시할 게 없으면 비운다. 변한 프레임에만 DOM 갱신.
 const timeEl = document.getElementById("time");
-function setTimeHud(text) { timeEl.textContent = text || ""; }
+let lastTimeHud = null;
+function setTimeHud(text) { const t = text || ""; if (t !== lastTimeHud) { lastTimeHud = t; timeEl.textContent = t; } }
 // #time 을 3번 깜빡이게 (타임어택 종료 시). 애니메이션 끝나면 클래스 제거해 원복.
 timeEl.addEventListener("animationend", () => timeEl.classList.remove("blink"));
 function blinkTime() {
@@ -2871,12 +2888,15 @@ function connect() {
   };
 
   net.ws.onmessage = (ev) => {
-    // 바이너리 프레임 = 고빈도 스냅샷 (JSON 파싱 없이 바로 디코딩)
+    // 바이너리 프레임 = 고빈도 스냅샷 (JSON 파싱 없이 바로 디코딩). v3 우선, v2(구서버) 폴백.
     if (ev.data instanceof ArrayBuffer) {
-      if (new Uint8Array(ev.data, 0, 1)[0] === MSG_SNAPSHOT) {
-        const dec = decodeSnapshot(ev.data);
-        applySnapshot(dec.st, dec.players);
-      }
+      try {
+        const t = new Uint8Array(ev.data, 0, 1)[0];
+        if (t === MSG_SNAPSHOT3 || t === MSG_SNAPSHOT) {
+          const dec = decodeSnapshot(ev.data);
+          applySnapshot(dec.st, dec.players);
+        }
+      } catch (e) { /* 손상/버전 불일치 패킷 폐기 */ }
       return;
     }
     let msg;
@@ -3474,7 +3494,7 @@ function setupChat() {
 /* =============================================================================
  *  바이너리 프로토콜 (클라) — state 인코딩 송신 / snapshot 디코딩 수신 (빅엔디안). 나머지 JSON.
  * ========================================================================== */
-const MSG_STATE = 1, MSG_SNAPSHOT = 2;
+const MSG_STATE = 1, MSG_SNAPSHOT = 2, MSG_SNAPSHOT3 = 3; // 3 = v3(플레이어별 age 포함)
 const A2I = 32767 / Math.PI; // 각도 ↔ int16 스케일
 const clampI16 = (v) => (v < -32768 ? -32768 : v > 32767 ? 32767 : v);
 const normAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -3483,13 +3503,15 @@ function rgbToHex(r, g, b) { return "#" + (((1 << 24) | ((r & 255) << 16) | ((g 
 const _td = new TextDecoder();
 
 // state 인코딩 (car + 부가정보 → ArrayBuffer). extra:{drifting,teleport,collide,color,pro:{lap,prog,lapMs}|null}
+//  v3 : 좌표 int32 1/4px + (pro 블록 뒤) 송신시각 u32 + viewDelay u8.
+//  ※ 구서버는 이 포맷을 못 읽는다 — 배포는 반드시 "git pull && pm2 restart" 한 번에(서버·클라 동시 교체).
 function encodeState(car, extra) {
   const hasPro = !!extra.pro;
-  const buf = new ArrayBuffer(hasPro ? 22 : 15);
+  const buf = new ArrayBuffer(hasPro ? 31 : 24); // v3 : 좌표 int32 1/4px + 송신시각 u32 + viewDelay u8
   const dv = new DataView(buf); let o = 0;
   dv.setUint8(o, MSG_STATE); o += 1;
-  dv.setInt16(o, clampI16(Math.round(car.x))); o += 2;
-  dv.setInt16(o, clampI16(Math.round(car.y))); o += 2;
+  dv.setInt32(o, Math.round(car.x * 4)); o += 4;
+  dv.setInt32(o, Math.round(car.y * 4)); o += 4;
   dv.setInt16(o, Math.round(normAngle(car.angle) * A2I)); o += 2;
   dv.setInt16(o, clampI16(Math.round(car.vx))); o += 2;
   dv.setInt16(o, clampI16(Math.round(car.vy))); o += 2;
@@ -3500,59 +3522,97 @@ function encodeState(car, extra) {
     dv.setUint16(o, clamp(Math.round(extra.pro.prog * 1000), 0, 65535)); o += 2;
     dv.setUint32(o, clamp(Math.round(extra.pro.lapMs), 0, 4294967295)); o += 4;
   }
+  dv.setUint32(o, Math.floor(performance.now()) >>> 0); o += 4; // 송신 시각 — 서버가 업링크 지터 제거에 사용
+  dv.setUint8(o, clamp(Math.round(interpDelay / 4), 0, 255)); o += 1; // viewDelay
   return buf;
 }
-// snapshot 디코딩 (ArrayBuffer → {st, players})
+// snapshot 디코딩 (ArrayBuffer → {st, players}). v3(타입 3)=age 포함, v2(타입 2)=구서버 폴백(age 0).
 function decodeSnapshot(ab) {
-  const dv = new DataView(ab), u8 = new Uint8Array(ab); let o = 1;
+  const dv = new DataView(ab), u8 = new Uint8Array(ab);
+  const v3 = u8[0] === MSG_SNAPSHOT3; let o = 1;
   const st = dv.getFloat64(o); o += 8;
   const count = dv.getUint16(o); o += 2;
   const players = [];
   for (let i = 0; i < count; i++) {
     const id = dv.getUint32(o); o += 4;
-    const x = dv.getInt16(o); o += 2;
-    const y = dv.getInt16(o); o += 2;
+    let x, y;
+    if (v3) { x = dv.getInt32(o) / 4; o += 4; y = dv.getInt32(o) / 4; o += 4; } // 1/4px 정밀도
+    else { x = dv.getInt16(o); o += 2; y = dv.getInt16(o); o += 2; }
     const angle = dv.getInt16(o) / A2I; o += 2;
     const vx = dv.getInt16(o); o += 2;
     const vy = dv.getInt16(o); o += 2;
     const f = dv.getUint8(o); o += 1;
     const r = dv.getUint8(o), g = dv.getUint8(o + 1), b = dv.getUint8(o + 2); o += 3;
+    let age = 0;
+    if (v3) { age = dv.getUint8(o); o += 1; } // 255 = 스톨 센티널
     const nl = dv.getUint8(o); o += 1;
     let name = ""; if (nl > 0) { name = _td.decode(u8.subarray(o, o + nl)); o += nl; }
-    players.push({ id, x, y, angle, vx, vy, drifting: !!(f & 1), teleport: !!(f & 2), invuln: !!(f & 4), admin: !!(f & 8), color: rgbToHex(r, g, b), name });
+    players.push({ id, x, y, angle, vx, vy, age, drifting: !!(f & 1), teleport: !!(f & 2), invuln: !!(f & 4), admin: !!(f & 8), color: rgbToHex(r, g, b), name });
   }
   return { st, players };
 }
 
-// 스냅샷 적용 (JSON/바이너리 공통) — 적응형 지연 + 원격 버퍼(에르밋 보간용) 갱신
+// 스냅샷 적용 — 적응형 지연(지터·age 추적) + 원격 버퍼(진짜 샘플 시각 기준) 갱신.
+//  · 샘플 시각 t = st - age : 서버 재브로드캐스트 중복은 t 가 같아 자동 드롭(정지+2배점프 진동 제거)
+//  · age 255 = 스톨 센티널 : push 하지 않고 속도 0으로 그 자리에 동결(유령 외삽 방지)
+//  · 지터 = (도착 간격 - 서버 st 간격) : 송신 리듬과 분리된 순수 네트워크 지터만 측정.
+//    단발 스파이크는 외삽이 흡수하게 무시하고, 4초 내 재발할 때만 버퍼를 키운다(스파이크 재발 규칙).
+//    로컬 프레임 스톨(GC/탭 전환) 중 도착 간격은 표본에서 제외.
 function applySnapshot(st, players) {
   if (typeof st !== "number") return;
   net.hasServerTime = true;
   if (st > net.serverNewest) net.serverNewest = st;
   const nowA = performance.now();
-  if (lastSnapAt) {
-    const gap = nowA - lastSnapAt;
-    snapGapMax = Math.max(gap, snapGapMax * 0.95);
-    const target = clamp(snapGapMax * 1.5 + 10, INTERP_BASE, INTERP_MAX);
-    interpDelay += (target - interpDelay) * 0.08;
+  if (lastSnapAt && lastSnapSt && !document.hidden && lastFrameDtMs < 100) {
+    const j = Math.max(0, (nowA - lastSnapAt) - (st - lastSnapSt)); // 순수 지터(ms)
+    // 슬라이딩 윈도우(1초 슬롯 x6)에 슬롯별 최대치 기록
+    if (nowA - jitSlotT >= 1000) {
+      const n = Math.min(6, Math.floor((nowA - jitSlotT) / 1000));
+      for (let i = 0; i < n; i++) { jitWin.shift(); jitWin.push(0); }
+      jitSlotT = nowA;
+    }
+    if (j > jitWin[5]) jitWin[5] = j;
   }
-  lastSnapAt = nowA;
+  lastSnapAt = nowA; lastSnapSt = st;
   const seen = new Set();
+  let ageSeen = 0;
   for (const p of players) {
     if (p.id === net.id) continue; // 내 차는 로컬 물리로 그린다
     seen.add(p.id);
     let r = remotePlayers.get(p.id);
-    if (!r) { r = { x: p.x, y: p.y, angle: p.angle, snap: true, buf: [] }; remotePlayers.set(p.id, r); }
+    if (!r) { r = { x: p.x, y: p.y, angle: p.angle, snap: true, buf: [], evw: 0 }; remotePlayers.set(p.id, r); }
     r.invuln = p.invuln; r.name = p.name; r.admin = p.admin; r.color = p.color; r.drifting = p.drifting;
+    if (p.age === 255) { // 스톨 : 마지막 실샘플에 자연 동결 (텔레포트 플래그는 놓치지 않고 존중)
+      if (p.teleport) { r.buf = [{ t: st - 254, x: p.x, y: p.y, angle: p.angle, vx: 0, vy: 0 }]; r.snap = true; }
+      r.evx = 0; r.evy = 0; r.evw = 0; continue;
+    }
     const vx = p.vx || 0, vy = p.vy || 0;
     r.evx = vx; r.evy = vy;
-    if (p.teleport) { r.buf = [{ t: st, x: p.x, y: p.y, angle: p.angle, vx, vy }]; r.snap = true; }
+    // age < 60ms(정상 위상/지터)만 버퍼 산정에 반영 — 스톨로 커지는 age 램프가
+    // 모든 접속자의 interpDelay 를 끌어올리는 것 방지(그 구간은 외삽이 흡수)
+    if (p.age > ageSeen && p.age < 60) ageSeen = p.age;
+    const t = st - p.age; // 진짜 샘플 시각
+    if (p.teleport) { r.buf = [{ t, x: p.x, y: p.y, angle: p.angle, vx, vy }]; r.snap = true; r.evw = 0; }
     else {
       const last = r.buf[r.buf.length - 1];
-      if (!last || st > last.t) r.buf.push({ t: st, x: p.x, y: p.y, angle: p.angle, vx, vy });
-      while (r.buf.length > 30) r.buf.shift();
+      if (!last || t > last.t) {
+        // 각속도 추정 (외삽·피드포워드용) : 마지막 두 실샘플의 최단호/시간차
+        if (last) {
+          let da = p.angle - last.angle; while (da > Math.PI) da -= Math.PI * 2; while (da < -Math.PI) da += Math.PI * 2;
+          r.evw = clamp(da / ((t - last.t) / 1000), -8, 8);
+        }
+        r.buf.push({ t, x: p.x, y: p.y, angle: p.angle, vx, vy });
+        while (r.buf.length > 30) r.buf.shift();
+      }
     }
   }
+  // 상대 업링크 위상/지연(age)도 버퍼 깊이에 가산해야 그 플레이어가 만성 외삽에 빠지지 않는다
+  ageMax = Math.max(ageSeen, ageMax * 0.995);
+  // 윈도우 "2번째 최대" 슬롯 = 단발 스파이크는 무시(외삽이 흡수), 재발 버스트만 버퍼에 반영
+  let m1 = 0, m2 = 0;
+  for (const v of jitWin) { if (v > m1) { m2 = m1; m1 = v; } else if (v > m2) m2 = v; }
+  const target = clamp(m2 * 1.3 + ageMax + 14, INTERP_BASE, INTERP_MAX);
+  interpDelay += (target - interpDelay) * (target > interpDelay ? 0.3 : 0.02); // 상승 빠르게, 하강 천천히
   for (const id of remotePlayers.keys()) { if (!seen.has(id)) remotePlayers.delete(id); }
 }
 
@@ -3580,36 +3640,44 @@ function netSend(car, now) {
 }
 
 // 렌더를 서버 시각보다 이만큼 과거로 늦춰(재생 시계), 그 사이 도착한 스냅샷을
-// 확보해두고 "서버 송신 시각(일정 간격)" 기준으로 두 스냅샷을 보간한다.
-// → 도착 지터/버스트가 있어도 일정 속도로 매끈하게 움직인다.
-// 적응형 보간 지연 : 스냅샷 도착 지터를 재서 버퍼 깊이를 자동 조절한다.
-//  망이 매끈하면 지연을 최소로(저지연), 지터/랙이 심하면 자동으로 키워 끊김을 막는다.
-const INTERP_BASE = 40;   // 최소 지연(ms) — 아주 매끈한 망
-const INTERP_MAX = 220;   // 최대 지연(ms) — 지터/랙 심할 때 상한
+// 확보해두고 "진짜 샘플 시각(st-age)" 기준으로 두 스냅샷을 보간한다.
+// 적응형 보간 지연 : 순수 네트워크 지터(도착간격-송신간격) + 상대 업링크 age 를 재서 자동 조절.
+const INTERP_BASE = 45;   // 최소 지연(ms) — 매끈한 망
+const INTERP_MAX = 250;   // 최대 지연(ms) — 지터/랙 심할 때 상한
 let interpDelay = 60;     // 현재 적용 중인 지연(ms), 매 스냅샷마다 동적 조절
 let lastSnapAt = 0;       // 직전 스냅샷 도착 시각(클라 시계)
-let snapGapMax = 33;      // 최근 최대 도착 간격(감쇠) — 지터 추정치
-const MAX_EXTRAP = 180;   // ms : 패킷이 늦으면 마지막 속도로 이 시간까지 외삽(지터 흡수 → 안 끊김)
+let lastSnapSt = 0;       // 직전 스냅샷 서버 시각(st) — 지터 = 도착간격-st간격
+const jitWin = [0, 0, 0, 0, 0, 0]; // 1초 슬롯 6개 : 슬롯별 순수 지터 최대치 (슬라이딩 윈도우)
+let jitSlotT = 0;         // 현재(마지막) 슬롯 시작 시각
+let ageMax = 0;           // 관측된 플레이어 state age 상한(감쇠) — 버퍼 깊이에 가산
+let lastFrameDtMs = 16;   // 직전 프레임 dt(ms) — 로컬 스톨 중 지터 표본 제외용
+const MAX_EXTRAP = 250;   // ms : 패킷이 늦으면 감쇠 속도로 이 시간까지 외삽(지터 흡수 → 안 끊김)
+const EXTRAP_DECAY = 4;   // 외삽 속도 감쇠율(1/s) — v = v0·e^(-λ·ahead), 위치는 폐형식 적분
 
-// 원격 차량 : "버퍼 에르밋 스플라인 보간 + 출력 이징" (부드러움의 두 축을 결합).
-//  · 서버시각(st)+속도를 담은 스냅샷 버퍼의 두 샘플 사이를 "속도인지 3차 에르밋"으로 보간
-//    → 곡선도 코너 없이 매끈(선형보간의 폴리곤 코너 제거), 실제 경로를 정확히 따라감.
-//  · 그 목표를 프레임독립 지수 이징으로 따라가 재생시계/도착 지터를 저역통과 필터링 → 마이크로스터터 억제.
-//  · 버퍼가 마르면 마지막 속도로 MAX_EXTRAP 까지 외삽 → 끊김/멈춤 방지. (검증: 지터 유무 모두 기존보다 매끈)
-const SMOOTH_K = 16; // 출력 이징 세기(클수록 반응↑·필터↓, 작을수록 더 부드럽지만 지연↑)
+/* 원격 차량 렌더 파이프라인 (v3) — "내 차만큼 자연스러운" 3단 구성.
+ *  1) rate 제어 재생 시계 : playT 는 매 프레임 dt×rate 로만 "연속" 전진. rate 는 버퍼 여유 오차에
+ *     비례(가속 +3% / 감속 -10% 비대칭)해 시계가 절대 점프하지 않는다 → 고속에서의 미세 흔들림 원천 제거.
+ *     하드 리싱크는 "신선한 데이터가 있는데 크게 뒤처진" 한 방향만(스냅샷 두절 중에는 발동 금지).
+ *  2) 속도인지 에르밋 보간(+해석적 도함수) / 폐형식 감쇠 외삽(각속도 포함).
+ *  3) 속도 피드포워드 스무딩 : r += (목표-r)·e + v·dt·(1-e), e=1-e^(-K·dt).
+ *     정상상태 지연이 정확히 0(오차가 (1-e)배씩만 감쇠)이라 경로를 그대로 따라가면서,
+ *     외삽→보간 복귀 등의 목표 불연속만 τ≈55ms 로 걸러낸다. 각도에도 각속도로 동일 적용. */
+const SMOOTH_K = 18;
 function updateRemotes(dt) {
   if (net.serverNewest === 0 && !net.hasServerTime) { return; }
-  // 재생 시계 : 실시간으로 전진 + (서버최신 - interpDelay)로 완만히 수렴
+  const nowA = performance.now();
   const target = net.serverNewest - interpDelay;
   if (net.playT === null) net.playT = target;
   else {
-    net.playT += dt * 1000;
-    net.playT += (target - net.playT) * Math.min(dt * 3, 0.08);
+    const err = target - net.playT; // +: 뒤처짐(따라잡기), -: 여유 부족(늦추기)
+    const rate = 1 + clamp(err, -100, 30) * 0.001; // 가속 최대 +3%, 감속 최대 -10%
+    net.playT += dt * 1000 * rate;
     if (net.playT > net.serverNewest + MAX_EXTRAP) net.playT = net.serverNewest + MAX_EXTRAP;
-    if (net.serverNewest - net.playT > interpDelay + 400) net.playT = target; // 크게 뒤처지면 리싱크
+    // 단방향 하드 리싱크 : 스냅샷이 실제로 오고 있는데(200ms 내 도착) 300ms+ 뒤처진 경우만
+    if (err > 300 && nowA - lastSnapAt < 200) net.playT = target;
   }
   const renderT = net.playT;
-  const ease = 1 - Math.exp(-SMOOTH_K * dt); // 프레임독립 이징 계수(시계/지터 필터)
+  const ease = 1 - Math.exp(-SMOOTH_K * dt); // 프레임독립·무조건 안정 (e=1-e^(-K·dt))
 
   for (const [id, r] of remotePlayers) {
     const buf = r.buf;
@@ -3617,32 +3685,40 @@ function updateRemotes(dt) {
     // renderT 를 감싸는 두 스냅샷만 남기고 소비된 옛 샘플 정리(1개는 유지)
     while (buf.length >= 2 && buf[1].t <= renderT) buf.shift();
 
-    let tx, ty, ta;
+    let tx, ty, ta, tvx, tvy, tw; // 목표 위치/각 + 목표 속도/각속도(피드포워드)
     if (buf.length >= 2 && renderT >= buf[0].t) {
-      // 속도인지 3차 에르밋 스플라인 (양 끝 위치+속도로 C1 연속 곡선 → 매끈)
+      // 속도인지 3차 에르밋 스플라인 + 해석적 도함수
       const A = buf[0], B = buf[1], span = B.t - A.t;
       const u = span > 0 ? clamp((renderT - A.t) / span, 0, 1) : 1;
       const sps = span / 1000, u2 = u * u, u3 = u2 * u;
       const h00 = 2 * u3 - 3 * u2 + 1, h10 = u3 - 2 * u2 + u, h01 = -2 * u3 + 3 * u2, h11 = u3 - u2;
       tx = h00 * A.x + h10 * A.vx * sps + h01 * B.x + h11 * B.vx * sps;
       ty = h00 * A.y + h10 * A.vy * sps + h01 * B.y + h11 * B.vy * sps;
+      const g00 = 6 * u2 - 6 * u, g10 = 3 * u2 - 4 * u + 1, g01 = -g00, g11 = 3 * u2 - 2 * u; // dh/du
+      const inv = sps > 0 ? 1 / sps : 0;
+      tvx = (g00 * A.x + g01 * B.x) * inv + g10 * A.vx + g11 * B.vx;
+      tvy = (g00 * A.y + g01 * B.y) * inv + g10 * A.vy + g11 * B.vy;
       let d = B.angle - A.angle; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
       ta = A.angle + d * u;
+      tw = sps > 0 ? clamp(d / sps, -8, 8) : 0;
     } else {
-      // 버퍼 고갈(renderT 가 최신보다 앞섬) → 마지막 위치에서 보고된 속도로 짧게 외삽
+      // 버퍼 고갈(renderT 가 최신보다 앞섬) → 감쇠 속도 폐형식 외삽 (위치=∫v0·e^(-λτ), 각도 동일)
       const s = buf[buf.length - 1];
       const ahead = clamp(renderT - s.t, 0, MAX_EXTRAP) / 1000;
-      tx = s.x + (r.evx || 0) * ahead;
-      ty = s.y + (r.evy || 0) * ahead;
-      ta = s.angle;
+      const k = Math.exp(-EXTRAP_DECAY * ahead), gain = (1 - k) / EXTRAP_DECAY;
+      tx = s.x + (r.evx || 0) * gain;
+      ty = s.y + (r.evy || 0) * gain;
+      ta = s.angle + (r.evw || 0) * gain;
+      tvx = (r.evx || 0) * k; tvy = (r.evy || 0) * k; tw = (r.evw || 0) * k;
     }
 
     if (r.snap) { r.x = tx; r.y = ty; r.angle = ta; r.snap = false; } // 첫 등장/텔레포트 → 즉시 스냅
     else {
-      r.x += (tx - r.x) * ease;      // 이징 = 재생시계/지터 저역통과 필터
-      r.y += (ty - r.y) * ease;
+      // 속도 피드포워드 스무딩 : 정상상태 지연 0 + 불연속만 필터
+      r.x += (tx - r.x) * ease + tvx * dt * (1 - ease);
+      r.y += (ty - r.y) * ease + tvy * dt * (1 - ease);
       let d = ta - r.angle; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
-      r.angle += d * ease;
+      r.angle += d * ease + tw * dt * (1 - ease);
     }
     // 드리프트 중인 원격 차량의 타이어 자국
     if (r.drifting) pushSkid(r, r.x, r.y, r.angle, SKID_COLOR);
@@ -3673,6 +3749,19 @@ window.addEventListener("pagehide", () => {
   try { if (net.ws && net.ws.readyState === WebSocket.OPEN) net.ws.close(); } catch {}
 });
 
+// 탭 숨김 = rAF 정지로 물리도 멈춤 → 남들 화면에 "정지"로 보이도록 속도 0 state 를 즉시 송신
+//  (잔존 속도가 에르밋 탄젠트/외삽에 들어가 생기는 리플 방지)
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) return;
+  if (gameMode === "lobby" || gameMode === "soccer") return;
+  if (!net.connected || !net.ws || net.ws.readyState !== WebSocket.OPEN) return;
+  try {
+    net.ws.send(encodeState({ x: CAR.x, y: CAR.y, angle: CAR.angle, vx: 0, vy: 0 }, {
+      drifting: false, teleport: false, collide: COLLISION_ENABLED && othersVisible(), color: myColor(), pro: null,
+    }));
+  } catch {}
+});
+
 
 /* =============================================================================
  *  메인 루프
@@ -3683,6 +3772,7 @@ function frame(now) {
   // 프레임 간 실제 경과시간(dt). 폭발 방지를 위해 상한 클램프.
   let dt = (now - lastTime) / 1000;
   lastTime = now;
+  lastFrameDtMs = dt * 1000; // 원본 dt(ms) — 로컬 스톨 중 지터 표본 제외용
   dt = Math.min(dt, CONFIG.MAX_DT);
 
   // 메뉴 화면(미입장)에선 물리/네트워크를 멈춘다 (메뉴 오버레이가 화면을 덮음)

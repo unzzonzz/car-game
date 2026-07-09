@@ -322,7 +322,7 @@ const server = http.createServer((req, res) => {
  *  바이너리 프로토콜 — 고빈도 메시지(클라→서버 state / 서버→클라 snapshot)만 바이너리(빅엔디안).
  *   나머지(chat/auth/room/race 등)는 JSON. state≈22B(JSON ~110), snapshot≈27B/명(JSON ~140) → ~5배↓.
  * ========================================================================== */
-const MSG_STATE = 1, MSG_SNAPSHOT = 2;
+const MSG_STATE = 1, MSG_SNAPSHOT = 2, MSG_SNAPSHOT3 = 3; // 3 = v3(플레이어별 age 포함)
 const A2I = 32767 / Math.PI; // 각도 ↔ int16 스케일
 const clampI16 = (v) => (v < -32768 ? -32768 : v > 32767 ? 32767 : v);
 const normAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -331,37 +331,58 @@ function rgbToHex(r, g, b) { return "#" + (((1 << 24) | ((r & 255) << 16) | ((g 
 function sendBin(p, buf) { if (p.ws.readyState === p.ws.OPEN) p.ws.send(buf); }
 
 // 클라 → 서버 state 디코딩 (Buffer → 필드 객체)
+//  v3(24/31B) : 좌표 int32 1/4px(양자화 노이즈 4배↓) + 송신시각 u32(업링크 지터 제거) + viewDelay u8(랙 보상).
+//  v2(15/22B) : 구클라 — 좌표 int16 1px. 길이로 판별.
 function decodeState(buf) {
-  let o = 1;
-  const x = buf.readInt16BE(o); o += 2;
-  const y = buf.readInt16BE(o); o += 2;
+  const v3 = buf.length === 24 || buf.length === 31;
+  let o = 1, x, y;
+  if (v3) { x = buf.readInt32BE(o) / 4; o += 4; y = buf.readInt32BE(o) / 4; o += 4; }
+  else { x = buf.readInt16BE(o); o += 2; y = buf.readInt16BE(o); o += 2; }
   const angle = buf.readInt16BE(o) / A2I; o += 2;
   const vx = buf.readInt16BE(o); o += 2;
   const vy = buf.readInt16BE(o); o += 2;
   const f = buf.readUInt8(o); o += 1;
   const r = buf.readUInt8(o), g = buf.readUInt8(o + 1), b = buf.readUInt8(o + 2); o += 3;
-  const s = { x, y, angle, vx, vy, drifting: !!(f & 1), teleport: !!(f & 2), collide: !!(f & 4), color: rgbToHex(r, g, b) };
+  const s = { x, y, angle, vx, vy, drifting: !!(f & 1), teleport: !!(f & 2), collide: !!(f & 4), color: rgbToHex(r, g, b), protoV: v3 ? 3 : 2 };
   if (f & 8) { s.lap = buf.readUInt8(o); o += 1; s.prog = buf.readUInt16BE(o) / 1000; o += 2; s.lapMs = buf.readUInt32BE(o); o += 4; }
+  if (v3) {
+    s.clientT = buf.readUInt32BE(o); o += 4;    // 클라 송신 시각(클라 시계) — 샘플 시각 복원용
+    s.viewDelay = buf.readUInt8(o) * 4; o += 1; // 수신측 보간 지연 보고
+  }
   return s;
 }
-// 서버 → 클라 snapshot 인코딩 (entries → Buffer). per player 19B + 이름 UTF-8.
-function encodeSnapshot(st, entries) {
+// 서버 → 클라 snapshot 인코딩 (entries → Buffer).
+//  v3(타입 3) : 플레이어별 age u8 추가 = 브로드캐스트 시각 - 그 state 수신 시각.
+//   → 클라가 진짜 샘플 시각(st-age)을 복원해 보간(재브로드캐스트 중복도 t 동일로 자동 제거).
+//   age 255 = "오래된 상태(스톨)" 센티널 — 클라는 push 하지 않고 그 자리에 동결시킨다.
+//  v2(타입 2) : 구클라용 기존 포맷(age 없음). 배포 전환기 혼재 대응.
+function encodeSnapshot(st, entries, v3) {
   const nbs = entries.map((e) => Buffer.from(e.name || "", "utf8").subarray(0, 60));
-  let size = 11; for (const nb of nbs) size += 19 + nb.length;
+  const per = v3 ? 24 : 19; // v3 : 좌표 int32 1/4px + age u8
+  let size = 11; for (const nb of nbs) size += per + nb.length;
   const buf = Buffer.allocUnsafe(size); let o = 0;
-  buf.writeUInt8(MSG_SNAPSHOT, o); o += 1;
+  buf.writeUInt8(v3 ? MSG_SNAPSHOT3 : MSG_SNAPSHOT, o); o += 1;
   buf.writeDoubleBE(st, o); o += 8;
   buf.writeUInt16BE(entries.length, o); o += 2;
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i], nb = nbs[i];
     buf.writeUInt32BE(e.id >>> 0, o); o += 4;
-    buf.writeInt16BE(clampI16(Math.round(e.x)), o); o += 2;
-    buf.writeInt16BE(clampI16(Math.round(e.y)), o); o += 2;
+    if (v3) {
+      buf.writeInt32BE(Math.round(e.x * 4), o); o += 4;
+      buf.writeInt32BE(Math.round(e.y * 4), o); o += 4;
+    } else {
+      buf.writeInt16BE(clampI16(Math.round(e.x)), o); o += 2;
+      buf.writeInt16BE(clampI16(Math.round(e.y)), o); o += 2;
+    }
     buf.writeInt16BE(Math.round(normAngle(e.angle) * A2I), o); o += 2;
     buf.writeInt16BE(clampI16(Math.round(e.vx || 0)), o); o += 2;
     buf.writeInt16BE(clampI16(Math.round(e.vy || 0)), o); o += 2;
     buf.writeUInt8((e.drifting ? 1 : 0) | (e.teleport ? 2 : 0) | (e.invuln ? 4 : 0) | (e.admin ? 8 : 0), o); o += 1;
     const [r, g, b] = hexToRgb(e.color); buf.writeUInt8(r, o); buf.writeUInt8(g, o + 1); buf.writeUInt8(b, o + 2); o += 3;
+    if (v3) {
+      const age = st - (e.stateAt || st);
+      buf.writeUInt8(age >= 255 ? 255 : Math.min(254, Math.max(0, Math.floor(age))), o); o += 1;
+    }
     buf.writeUInt8(nb.length, o); o += 1; nb.copy(buf, o); o += nb.length;
   }
   return buf;
@@ -371,8 +392,11 @@ function encodeSnapshot(st, entries) {
 function applyState(p, m) {
   if (!p.active) return;
   if (Date.now() < (p.graceUntil || 0)) return;
-  const x = Number(m.x), y = Number(m.y), ang = Number(m.angle);
+  let x = Number(m.x), y = Number(m.y);
+  const ang = Number(m.angle);
   if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(ang)) return; // NaN 주입 차단
+  // 좌표 상한 클램프 : 거대 좌표(JSON state 조작)가 int32 스냅샷 인코딩(x*4)을 터뜨리지 않게
+  x = Math.max(-1e6, Math.min(1e6, x)); y = Math.max(-1e6, Math.min(1e6, y));
 
   // --- 이동 정합성 감시 : 순간이동/초고속이면 플래그(랩·기록 인정 보류) ---
   const now = Date.now();
@@ -396,7 +420,28 @@ function applyState(p, m) {
   let vx = Number(m.vx) || 0, vy = Number(m.vy) || 0;
   const sp = Math.hypot(vx, vy);
   if (sp > MAX_LEGIT_PXS) { const k = MAX_LEGIT_PXS / sp; vx *= k; vy *= k; }
-  p.state = { x, y, angle: ang, drifting: !!m.drifting, teleport: !!m.teleport, vx, vy };
+  // teleport 는 원샷 플래그 : 브로드캐스트가 소거하기 전까지 후속 패킷이 덮어쓰지 않게 래치
+  p.state = { x, y, angle: ang, drifting: !!m.drifting, teleport: !!m.teleport || !!(p.state && p.state.teleport), vx, vy };
+  // 샘플 시각 복원 : 클라 송신 시각 + min-필터 시계 오프셋 → 업링크 지터가 타임라인에 안 들어간다.
+  //  · 오프셋 상승 +0.6ms/패킷(시계 드리프트/이상치 회복), 하강 -2ms/패킷(새 최소 발견 시 급락 대신 완만 — hist 단조성 보호)
+  //  · clientT 역행(새로고침/재접속) 또는 30초 이상 격차 → 리셋
+  //  · stateAt 하한 now-200ms : clientT 를 느리게 보내 age 255 를 위장하는 "스텔스 프리즈" 차단
+  if (typeof m.clientT === "number") {
+    const off = now - m.clientT;
+    if (p.clockOff === undefined || Math.abs(off - p.clockOff) > 30000 ||
+        (p.lastClientT !== undefined && m.clientT < p.lastClientT - 1000)) p.clockOff = off;
+    else p.clockOff = Math.min(p.clockOff + 0.6, Math.max(off, p.clockOff - 2));
+    p.lastClientT = m.clientT;
+    p.stateAt = Math.max(now - 200, Math.min(now, m.clientT + p.clockOff));
+  } else {
+    p.stateAt = now; // 구클라 : 도착 시각으로 폴백
+  }
+  p.protoV = m.protoV || 2;            // 클라 프로토콜 버전 (스냅샷 포맷 선택)
+  if (typeof m.viewDelay === "number") p.viewDelay = Math.min(250, m.viewDelay); // 수신측 보간 지연(랙 보상용)
+  // 위치 히스토리 (랙 보상 되감기용, ~400ms 보관) — 스냅샷과 같은 샘플 시각 타임라인 사용
+  if (!p.hist) p.hist = [];
+  p.hist.push({ t: p.stateAt, x, y, angle: ang });
+  while (p.hist.length > 2 && p.hist[0].t < now - 400) p.hist.shift();
   p.collide = !!m.collide && !flagged; // 충돌 대상 여부(플래그된 차는 충돌 제외)
 
   // 프로 레이싱 : 랩/완주는 서버가 게이팅 (클라가 보낸 lap 을 그대로 믿지 않는다)
@@ -452,9 +497,12 @@ wss.on("connection", (ws) => {
 
   ws.on("message", (raw, isBinary) => {
     // 바이너리 프레임 = 고빈도 state (JSON 파싱 없이 바로 디코딩)
+    //  try/catch : 길이가 다른 구/신버전·손상 패킷이 프로세스를 죽이지 않게 방어
     if (isBinary) {
-      const pb = players.get(id);
-      if (pb && raw.length && raw[0] === MSG_STATE) applyState(pb, decodeState(raw));
+      try {
+        const pb = players.get(id);
+        if (pb && raw.length >= 15 && raw[0] === MSG_STATE) applyState(pb, decodeState(raw));
+      } catch (e) { /* 손상/버전 불일치 패킷 폐기 */ }
       return;
     }
     let msg;
@@ -1261,6 +1309,27 @@ function killPlayer(victimId, victim, killerId) {
   victim.state = null;
 }
 
+// 랙 보상 : 히스토리에서 t 시각의 위치를 선형 보간해 복원 (없으면 현재 state)
+//  공격자는 상대를 "보간 지연만큼 과거"로 보고 판정하므로, 피격자를 그만큼 되감아 판정해야
+//  공격자 화면과 일치한다. 되감기 상한 120ms — 과도한 되감기(고지연/조작 보고)로 인한 억울사 방지.
+const REWIND_CAP_MS = 120;
+function histAt(p, t) {
+  const h = p.hist;
+  if (!h || !h.length) return p.state;
+  if (t >= h[h.length - 1].t) return h[h.length - 1];
+  if (t <= h[0].t) return h[0];
+  for (let i = h.length - 1; i > 0; i--) {
+    const A = h[i - 1], B = h[i];
+    if (t >= A.t && t <= B.t) {
+      const u = B.t > A.t ? (t - A.t) / (B.t - A.t) : 1;
+      let d = B.angle - A.angle; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
+      return { x: A.x + (B.x - A.x) * u, y: A.y + (B.y - A.y) * u, angle: A.angle + d * u };
+    }
+  }
+  return p.state;
+}
+const rewindOf = (p) => Math.min(p.viewDelay || 70, REWIND_CAP_MS);
+
 // 충돌 판정 1틱 (서바이벌 모드만)
 function runCollisions() {
   // 판정 대상 : 활성 + 서바이벌 + 무적 아님
@@ -1283,8 +1352,9 @@ function runCollisions() {
       const A = live[i], B = live[j];
       if (dead.has(A.id) || dead.has(B.id)) continue;
 
-      const aHitB = sweptHeadHit(A.p.prevHead, A.p.curHead, B.p.state);
-      const bHitA = sweptHeadHit(B.p.prevHead, B.p.curHead, A.p.state);
+      // 랙 보상 : 각 공격자의 화면 시점(보간 지연 과거)으로 피격자를 되감아 판정
+      const aHitB = sweptHeadHit(A.p.prevHead, A.p.curHead, histAt(B.p, now - rewindOf(A.p)));
+      const bHitA = sweptHeadHit(B.p.prevHead, B.p.curHead, histAt(A.p, now - rewindOf(B.p)));
 
       if (aHitB && bHitA) {
         // 머리끼리 정면충돌 → 둘 다 터진다 (서로가 killer)
@@ -1338,6 +1408,7 @@ setInterval(() => {
       invuln: now < (p.invulnUntil || 0),
       admin: !!p.isAdmin, // 관리자 금색 차 표시용
       color: p.color,     // 커스텀 차 색 (미설정 시 undefined → 클라가 id 색 폴백)
+      stateAt: p.stateAt || now, // 이 state 의 진짜 샘플 시각 → v3 age
     };
     if (p.mode === "pro") {
       if (p.roomId != null) {
@@ -1353,12 +1424,22 @@ setInterval(() => {
     }
   }
 
+  // 그룹당 버전별 1회만 인코딩해 재사용 (수신자마다 재인코딩하던 O(수신자×그룹) 제거)
+  const encCache = new Map(); // arr -> {v3?:Buffer, v2?:Buffer}
+  const encFor = (arr, v3) => {
+    let c = encCache.get(arr);
+    if (!c) { c = {}; encCache.set(arr, c); }
+    const k = v3 ? "v3" : "v2";
+    if (!c[k]) c[k] = encodeSnapshot(now, arr, v3);
+    return c[k];
+  };
+  const EMPTY = [];
   for (const [, p] of players) {
     if (!p.active) continue;
     let arr;
-    if (p.mode === "pro") arr = (p.roomId != null) ? (byRoom.get(p.roomId) || []) : [];
+    if (p.mode === "pro") arr = (p.roomId != null) ? (byRoom.get(p.roomId) || EMPTY) : EMPTY;
     else arr = byMode[p.mode];
-    sendBin(p, encodeSnapshot(now, arr)); // 바이너리 스냅샷 (JSON 대비 ~5배↓)
+    sendBin(p, encFor(arr, (p.protoV || 2) === 3)); // 구클라(v2)에도 기존 포맷 병행 → 전환기 혼재 안전
   }
 
   for (const [, p] of players) {
