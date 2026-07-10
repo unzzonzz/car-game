@@ -4720,12 +4720,12 @@ function updateDashboard() {
   }
 }
 
-// 랭크전 결과 팝업 : 승패 + 점수 변화 + 현재 점수
+// 랭크전 결과 팝업 : 등수 + 점수 변화 + 현재 점수 (색 = 점수 변동 방향)
 function showRankResult(msg) {
   const outcome = document.getElementById("rankResultOutcome");
-  outcome.textContent = msg.win ? "우승!" : (msg.dodge ? "탈주 패배" : "패배");
-  outcome.className = msg.win ? "win" : "lose";
   const d = msg.delta || 0;
+  outcome.textContent = msg.dodge ? "탈주 패배" : (msg.win ? "1등!" : (msg.place ? `${msg.place}등` : "패배"));
+  outcome.className = msg.dodge ? "lose" : (d > 0 ? "win" : (d < 0 ? "lose" : "draw"));
   document.getElementById("rankResultDelta").textContent = (d > 0 ? `+${d}` : `${d}`) + "점";
   document.getElementById("rankResultScore").textContent = `${msg.score}점`;
   document.getElementById("rankResultModal").classList.add("show");

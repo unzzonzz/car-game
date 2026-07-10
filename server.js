@@ -899,7 +899,14 @@ const RANK_TIME_LIMIT_MS = 300000; // 완주자 없어도 5분이면 종료
 const RANK_COURSES = 6;            // A-1~B-3 (인덱스 0..5)
 const RANK_LAPS = 3;
 const RANK_BASE = 100;             // 기본 점수
-const RANK_DELTA = { 3: [10, -7], 4: [15, -5], 5: [20, -3] }; // 인원별 [승리, 패배]
+// 등수별 점수 : +10 ~ -10 을 등수 간격대로 균등 분배 (제로섬 — 방 전체 합이 0, 최대 변동 10점)
+//  3명: +10/0/-10, 4명: +10/+3/-3/-10, 5명: +10/+5/0/-5/-10. 탈주(카운트다운/중도)는 최하위 취급(-10).
+const RANK_PTS_MAX = 10;
+function rankDelta(n, place) {
+  n = Math.max(RANK_MIN, Math.min(RANK_MAX, n));
+  const p = Math.max(1, Math.min(n, place));
+  return Math.round(RANK_PTS_MAX * (n + 1 - 2 * p) / (n - 1));
+}
 const RANK_ANON_COLOR = "#b8b2a6"; // 시작 전 익명 차/원 색 (웜 그레이)
 // 레이스 시작 전(대기/카운트다운)엔 서로 누군지 모르게 이름/색/관리자 표시를 가린다.
 //  → 잘하는 사람 보고 나가는 닷지 방지. 시작(racing)되면 공개되고, 그 뒤로 나가면 실점.
@@ -1019,7 +1026,7 @@ function leaveRoom(pid, p) {
   if (!room) return;
   const remain = roomMembers(rid);
   if (remain.length === 0) {
-    // 랭크전 레이스 중 전원 탈주 = 전원 패배 처리 (탈주로 감점 회피 방지)
+    // 랭크전 레이스 중 전원 탈주 = 전원 최하위(-10) 처리 (탈주로 감점 회피 방지)
     if (room.type === "rank" && room.state === "racing") applyRankScores(room, null);
     rooms.delete(rid); broadcastRoomList(); return;
   }
@@ -1029,7 +1036,7 @@ function leaveRoom(pid, p) {
   if (room.type === "rank" && room.state === "countdown" && p.account && users[p.account.userId]) {
     const u = users[p.account.userId];
     const n = Math.max(RANK_MIN, Math.min(RANK_MAX, remain.length + 1)); // 이탈 직전 인원 기준
-    const delta = (RANK_DELTA[n] || RANK_DELTA[RANK_MIN])[1];
+    const delta = rankDelta(n, n); // 탈주 = 최하위(-10)
     u.rankScore = Math.max(0, rankScoreOf(u) + delta);
     u.rankPlays = (u.rankPlays || 0) + 1;
     persistUser(p.account.userId);
@@ -1131,22 +1138,24 @@ function joinRank(pid, p) {
   console.log(`[>] player ${pid} matched into rank room ${best.id} (${roomMembers(best.id).length}/${RANK_MAX})`);
 }
 
-// 점수 반영 : 시작 멤버 전원에게 인원별 승/패 점수. 중도 탈주자도 패배 처리(감점 회피 방지).
-//  room.scored 로 이중 반영 방지. 반환 = id → {delta, score} (결과 통지용).
-function applyRankScores(room, winnerId) {
+// 점수 반영 : 시작 멤버 전원에게 등수별 점수(rankDelta). 중도 탈주자는 최하위 처리(감점 회피 방지).
+//  placeMap = id → 등수 (null 이면 전원 탈주 = 전원 최하위). room.scored 로 이중 반영 방지.
+//  반환 = id → {delta, score, place} (결과 통지용).
+function applyRankScores(room, placeMap) {
   const out = new Map();
   if (room.scored) return out;
   room.scored = true;
-  const [wDelta, lDelta] = RANK_DELTA[Math.max(RANK_MIN, Math.min(RANK_MAX, room.startN))] || RANK_DELTA[RANK_MIN];
+  const n = Math.max(RANK_MIN, Math.min(RANK_MAX, room.startN || RANK_MIN));
   for (const s of room.starters || []) {
     const u = users[s.uid];
     if (!u) continue;
-    const delta = s.id === winnerId ? wDelta : lDelta;
+    const place = placeMap && placeMap.has(s.id) ? placeMap.get(s.id) : n; // 탈주자 = 최하위
+    const delta = rankDelta(n, place);
     u.rankScore = Math.max(0, rankScoreOf(u) + delta); // 0점 아래로는 안 내려감
     u.rankPlays = (u.rankPlays || 0) + 1;
-    if (s.id === winnerId) u.rankWins = (u.rankWins || 0) + 1;
+    if (place === 1) u.rankWins = (u.rankWins || 0) + 1;
     persistUser(s.uid);
-    out.set(s.id, { delta, score: u.rankScore });
+    out.set(s.id, { delta, score: u.rankScore, place });
     // 중도 탈주자도 접속 중이면 대시보드 점수 즉시 갱신
     for (const [, p2] of players) if (p2.account && p2.account.userId === s.uid) { sendStats(p2); break; }
   }
@@ -1302,10 +1311,12 @@ function handleEventCommand(p, text) {
 function endRankRace(roomId, room) {
   const ranked = rankedRoom(roomId);
   const winnerId = ranked.length ? ranked[0].id : null;
-  const deltas = applyRankScores(room, winnerId);
+  // 남아있는 멤버는 완주/진행도 순 등수, 중도 탈주자는 placeMap 에 없음 → 최하위
+  const placeMap = new Map(ranked.map((e) => [e.id, e.rank]));
+  const deltas = applyRankScores(room, placeMap);
   for (const { id, p } of roomMembers(roomId)) {
     const d = deltas.get(id);
-    if (d) send(p, { type: "rankResult", win: id === winnerId, delta: d.delta, score: d.score, n: room.startN });
+    if (d) send(p, { type: "rankResult", win: id === winnerId, place: d.place, delta: d.delta, score: d.score, n: room.startN });
     if (p.account) sendStats(p); // 대시보드 점수 갱신
     p.roomId = null; p.active = false; p.state = null; p.rankMode = false; p.ready = false;
   }

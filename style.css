@@ -701,6 +701,7 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 }
 #rankResultOutcome.win { color: var(--green); }
 #rankResultOutcome.lose { color: var(--coral); }
+#rankResultOutcome.draw { color: var(--muted); } /* 중간 등수(점수 변동 0) */
 
 /* 이벤트 선물 팝업 : 랭크 결과와 같은 오버레이 + 운영자 메세지 인용 박스 */
 #giftModal {
