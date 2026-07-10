@@ -335,6 +335,26 @@ const MIME = {
   ".json": "application/json",
 };
 
+// game.js 는 IIFE 로 감싸 서빙 : 게임 변수(CAR/net 등)가 콘솔 전역에서 아예 안 보이게 한다.
+//  → "콘솔에 한 줄 쳐서" 하는 핵을 차단. (억지책 — 본 방어는 서버 권위 검증/제재)
+//  `node server.js --dev-raw` 로 켜면 원본 그대로 서빙 (로컬 콘솔 디버깅용).
+//  캐시는 mtime 기준 무효화 — 재시작 없이 game.js 만 교체하는 배포에도 안전.
+const DEV_RAW_JS = process.argv.includes("--dev-raw");
+const GAME_JS_PATH = path.join(__dirname, "game.js");
+let gameJsCache = null; // { mtimeMs, buf }
+function wrappedGameJs(cb) {
+  fs.stat(GAME_JS_PATH, (err, st) => {
+    if (err) return cb(err);
+    if (gameJsCache && gameJsCache.mtimeMs === st.mtimeMs) return cb(null, gameJsCache.buf);
+    fs.readFile(GAME_JS_PATH, (err2, src) => {
+      if (err2) return cb(err2);
+      const buf = Buffer.concat([Buffer.from("(() => {\n"), src, Buffer.from("\n})();\n")]);
+      gameJsCache = { mtimeMs: st.mtimeMs, buf };
+      cb(null, buf);
+    });
+  });
+}
+
 const server = http.createServer((req, res) => {
   let urlPath = req.url === "/" ? "/index.html" : req.url.split("?")[0];
   const filePath = path.join(__dirname, path.normalize(urlPath));
@@ -343,6 +363,14 @@ const server = http.createServer((req, res) => {
   if (!filePath.startsWith(__dirname)) {
     res.writeHead(403);
     return res.end("Forbidden");
+  }
+
+  if (!DEV_RAW_JS && urlPath === "/game.js") {
+    return wrappedGameJs((err, buf) => {
+      if (err) { res.writeHead(404); return res.end("Not found"); }
+      res.writeHead(200, { "Content-Type": MIME[".js"] });
+      res.end(buf);
+    });
   }
 
   fs.readFile(filePath, (err, data) => {
