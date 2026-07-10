@@ -684,6 +684,7 @@ wss.on("connection", (ws) => {
       if (p.isAdmin && text.startsWith("/어디")) { handleWhereCommand(p, text); return; } // 유저 활동 조회
       if (p.isAdmin && text.startsWith("/온라인")) { handleOnlineCommand(p); return; }   // 온라인 명단
       if (p.isAdmin && text.startsWith("/이벤트")) { handleEventCommand(p, text); return; } // 이벤트 선물 발송
+      if (p.isAdmin && text.startsWith("/점수초기화")) { handleScoreResetCommand(p, text); return; } // 경쟁전 점수 리셋
       // 관리자의 알 수 없는 /명령 은 공개 채팅에 새지 않게 삼킨다 (오타/구버전 명령 보호).
       if (p.isAdmin && text.startsWith("/")) { send(p, { type: "chat", id: 0, name: "시스템", text: `알 수 없는 명령어: ${text.split(/\s+/)[0]}`, t: Date.now() }); return; }
       const name = p.account ? p.account.nickname : (p.active ? p.name : sanitizeName(msg.name));
@@ -1277,6 +1278,39 @@ function handleOnlineCommand(p) {
     cur += n + ", ";
   }
   reply(cur.replace(/, $/, ""));
+}
+
+// 관리자 /점수초기화 : 경쟁전 점수를 기본(100)으로 리셋. 전적(승/판)은 유지.
+//  /점수초기화 전체        → 모든 계정
+//  /점수초기화 닉네임 …    → 해당 계정만 (아이디 폴백 허용)
+function handleScoreResetCommand(p, text) {
+  const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
+  const names = text.split(/\s+/).slice(1);
+  if (!names.length) { reply("사용법: /점수초기화 전체  또는  /점수초기화 닉네임1 닉네임2 …"); return; }
+  const resetOne = (id) => {
+    delete users[id].rankScore; // rankScoreOf 폴백 = 기본 100점
+    persistUser(id);
+    // 접속 중이면 대시보드 점수 즉시 갱신
+    for (const [, p2] of players) if (p2.account && p2.account.userId === id) { sendStats(p2); break; }
+  };
+  if (names.length === 1 && names[0] === "전체") {
+    let cnt = 0;
+    for (const id in users) if (typeof users[id].rankScore === "number") { resetOne(id); cnt++; }
+    reply(cnt ? `전체 점수 초기화 완료: ${cnt}명 → 100점 (전적은 유지)` : "초기화할 점수가 없습니다 (전원 기본 100점).");
+    return;
+  }
+  const done = [], missing = [], dup = [];
+  for (const name of names) {
+    const matches = findUserIdsByName(name);
+    if (!matches.length) { missing.push(name); continue; }
+    if (matches.length > 1) { dup.push(`${name}(${matches.join(",")})`); continue; } // 옛 중복 닉 → 아이디로 지정 요청
+    resetOne(matches[0]);
+    done.push(users[matches[0]].nickname || matches[0]);
+  }
+  let out = done.length ? `점수 초기화 완료 ${done.length}명 → 100점: ${done.join(", ")}` : "";
+  if (missing.length) out += `${out ? " / " : ""}없는 닉네임: ${missing.join(", ")}`;
+  if (dup.length) out += `${out ? " / " : ""}닉 중복(아이디로 지정하세요): ${dup.join(", ")}`;
+  reply(out);
 }
 
 // 관리자 /이벤트 : 유저에게 이벤트 선물 발송 — 받는 유저는 수령 전까지 접속/로비마다 팝업을 본다.
