@@ -1293,6 +1293,9 @@ function activityOf(p) {
   return MODE_LABEL[p.mode] || p.mode;
 }
 
+// 게스트 표시 이름 : 기본 이름("게스트")이거나 이름이 없으면 "게스트" 한 번만 (— "게스트 게스트" 방지)
+function guestLabel(name) { return name && name !== "게스트" ? `게스트 ${name}` : "게스트"; }
+
 // 관리자 /어디 : 유저가 지금 뭘 하는지 조회. 인자 없으면 전체 온라인 현황.
 //  /어디            → 접속자 전원의 활동
 //  /어디 닉네임 …    → 해당 계정들의 활동 (미접속=오프라인, 아이디 폴백, 온라인 게스트 이름도 조회)
@@ -1302,7 +1305,7 @@ function handleWhereCommand(p, text) {
   const lines = [];
   if (!names.length) {
     for (const [, q] of players) {
-      const who = q.account ? `${q.account.nickname}(${q.account.userId})` : `게스트${q.name ? " " + q.name : ""}`;
+      const who = q.account ? `${q.account.nickname}(${q.account.userId})` : guestLabel(q.name);
       lines.push(`${who}: ${activityOf(q)}`);
     }
     if (!lines.length) { reply("접속자가 없습니다."); return; }
@@ -1320,7 +1323,7 @@ function handleWhereCommand(p, text) {
       // 계정에 없는 이름 → 온라인 게스트 이름으로 조회 (게스트 이름은 중복 가능 → 전부 표시)
       const guests = [];
       for (const [, q] of players) if (!q.account && (q.name || "").toLowerCase() === String(name).toLowerCase()) guests.push(q);
-      if (guests.length) { for (const g of guests) lines.push(`게스트 ${g.name}: ${activityOf(g)}`); continue; }
+      if (guests.length) { for (const g of guests) lines.push(`${guestLabel(g.name)}: ${activityOf(g)}`); continue; }
       lines.push(`${name}: 없는 닉네임`);
     }
   }
@@ -1337,7 +1340,7 @@ function handleWhereCommand(p, text) {
 function handleOnlineCommand(p) {
   const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
   const names = [];
-  for (const [, q] of players) names.push(q.account ? q.account.nickname : `게스트${q.name ? " " + q.name : ""}`);
+  for (const [, q] of players) names.push(q.account ? q.account.nickname : guestLabel(q.name));
   if (!names.length) { reply("접속자가 없습니다."); return; }
   let cur = `온라인 ${names.length}명: `;
   for (const n of names) {
