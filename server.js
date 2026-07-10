@@ -60,8 +60,7 @@ function resetMotion(p) {
   p.lastLapT = Date.now();   // 마지막으로 랩을 인정한 시각
 }
 // 비정상 이동 감지 → 잠시 랩/기록 인정 보류 + 로그 (첫 위반과 20회마다만 출력)
-//  누적되면(콘솔 핵으로 계속 날아다니는 경우) 온라인 관리자에게 알리고 자동 추방한다.
-const AUTO_KICK_FLAGS = 10; // 세션 내 위반 누적이 여기 닿으면 자동 추방 (지속 초고속 ≈ 3~4초)
+//  자동 추방은 하지 않는다(무고 추방 문제로 제거) — 관리자에게만 알리고, 제재는 /추방·/차단으로 수동 판단.
 function flagCheat(p, now, reason) {
   p.flagUntil = now + FLAG_HOLD_MS;
   p.cheatFlags = (p.cheatFlags || 0) + 1;
@@ -69,13 +68,7 @@ function flagCheat(p, now, reason) {
     console.warn(`[anticheat] player "${p.name || "?"}" flagged (${reason}) x${p.cheatFlags}`);
   }
   const label = reason === "jump" ? "순간이동" : reason === "speed" ? "초고속" : "기록 조작";
-  if (p.cheatFlags === 3) notifyAdmins(`[감지] ${p.name || "?"}: ${label} 의심 (누적 ${p.cheatFlags}회)`);
-  if (p.cheatFlags >= AUTO_KICK_FLAGS) {
-    notifyAdmins(`[자동 추방] ${p.name || "?"}: 비정상 이동 누적 ${p.cheatFlags}회`);
-    console.warn(`[anticheat] auto-kick "${p.name || "?"}" (${reason}) x${p.cheatFlags}`);
-    p.cheatFlags = 0;
-    kickPlayer(p, "비정상 이동이 감지되어 연결이 종료되었습니다.");
-  }
+  if (p.cheatFlags === 3 || p.cheatFlags === 30) notifyAdmins(`[감지] ${p.name || "?"}: ${label} 의심 (누적 ${p.cheatFlags}회)`);
 }
 // 강제 퇴장 : 사유 통지 후 연결 종료 (클라는 30초 뒤에야 재접속 시도)
 function kickPlayer(p, reason) {
@@ -465,8 +458,11 @@ function applyState(p, m) {
   x = Math.max(-1e6, Math.min(1e6, x)); y = Math.max(-1e6, Math.min(1e6, y));
 
   // --- 이동 정합성 감시 : 순간이동/초고속이면 플래그(랩·기록 인정 보류) ---
+  //  패킷 공백 1초+ (탭 전환/화면 꺼짐/네트워크 정지) 뒤 첫 패킷은 이동으로 보지 않고
+  //  기준점만 갱신한다 — 복귀 순간의 큰 변위가 "순간이동"으로 오인되는 무고 플래그 방지.
+  //  (핵은 패킷을 계속 보내면서 움직이므로 이 예외로 빠져나갈 수 없다)
   const now = Date.now();
-  if (p.lastPos) {
+  if (p.lastPos && now - p.lastPos.t <= 1000) {
     const seg = Math.hypot(x - p.lastPos.x, y - p.lastPos.y);
     if (seg > JUMP_CAP) flagCheat(p, now, "jump"); // 단발 순간이동
     if (p.spdT0 === 0) p.spdT0 = p.lastPos.t;
@@ -476,6 +472,8 @@ function applyState(p, m) {
       if (p.spdAcc / (winMs / 1000) > SPEED_LIMIT) flagCheat(p, now, "speed");
       p.spdAcc = 0; p.spdT0 = now;
     }
+  } else if (p.lastPos) {
+    p.spdAcc = 0; p.spdT0 = 0; // 공백 복귀 : 속도 창도 리셋 (오염된 구간 평균 방지)
   }
   p.lastPos = { x, y, t: now };
   const flagged = now < (p.flagUntil || 0);
