@@ -748,6 +748,7 @@ wss.on("connection", (ws) => {
       if (p.isAdmin && text.startsWith("/이벤트")) { handleEventCommand(p, text); return; } // 이벤트 선물 발송
       if (p.isAdmin && text.startsWith("/점수초기화")) { handleScoreResetCommand(p, text); return; } // 경쟁전 점수 리셋
       if (p.isAdmin && text.startsWith("/기록삭제")) { handleRecordDeleteCommand(p, text); return; } // 코스 최고기록 삭제
+      if (p.isAdmin && text.startsWith("/닉변")) { handleRenameCommand(p, text); return; }         // 계정 닉네임 변경
       if (p.isAdmin && text.startsWith("/추방")) { handleKickCommand(p, text); return; }          // 온라인 강제 퇴장
       if (p.isAdmin && text.startsWith("/차단해제")) { handleBanCommand(p, text, false); return; } // 계정 차단 해제
       if (p.isAdmin && text.startsWith("/차단명단")) { handleBanListCommand(p); return; }          // 차단 목록
@@ -1450,6 +1451,34 @@ function handleRecordDeleteCommand(p, text) {
   if (!deleted.length && !out) out = "삭제할 기록이 없습니다.";
   if (unknown.length) out += `${out ? " / " : ""}모르는 코스: ${unknown.join(", ")} (A-1~C-3, 레트로1, 레트로2, 전체)`;
   reply(out);
+}
+
+// 관리자 /닉변 : 계정 닉네임 변경 — 파일/DB 직접 수정 금지(서버 메모리 캐시가 덮어씀), 반드시 이 명령으로.
+//  /닉변 대상닉네임|아이디 새닉네임   (새 닉은 12자 제한 + 계정 간 중복 금지, 회원가입과 동일 규칙)
+function handleRenameCommand(p, text) {
+  const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
+  const parts = text.split(/\s+/);
+  if (parts.length < 3) { reply("사용법: /닉변 대상닉네임 새닉네임"); return; }
+  const target = parts[1];
+  const matches = findUserIdsByName(target);
+  if (!matches.length) { reply(`없는 닉네임: ${target}`); return; }
+  if (matches.length > 1) { reply(`닉 중복(아이디로 지정하세요): ${target}(${matches.join(",")})`); return; }
+  const id = matches[0], u = users[id];
+  if (!String(parts[2] || "").trim()) { reply("새 닉네임을 입력하세요."); return; }
+  const nick = sanitizeName(parts[2]);
+  const taken = Object.keys(users).some((uid) => uid !== id && (users[uid].nickname || "").toLowerCase() === nick.toLowerCase());
+  if (taken) { reply(`이미 사용 중인 닉네임입니다: ${nick}`); return; }
+  const old = u.nickname || id;
+  u.nickname = nick;
+  persistUser(id);
+  // 접속 중이면 서버 쪽 표시(채팅/순위/릴레이 이름)도 즉시 반영 + 본인에게 안내
+  for (const [, q] of players) {
+    if (q.account && q.account.userId === id) {
+      q.account.nickname = nick; q.name = nick;
+      send(q, { type: "chat", id: 0, name: "시스템", text: `닉네임이 "${nick}"(으)로 변경되었습니다. 새로고침하면 화면에 적용됩니다.`, t: Date.now() });
+    }
+  }
+  reply(`닉변 완료: ${old} → ${nick}`);
 }
 
 // 관리자 /점수초기화 : 경쟁전 점수를 기본(100)으로 리셋. 전적(승/판)은 유지.
