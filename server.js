@@ -1244,7 +1244,7 @@ function findUserIdsByName(name) {
 //  /경쟁전허용 닉네임1 닉네임2 …  /경쟁전해제 닉네임 …  /경쟁전명단  (닉네임 기준, 아이디도 폴백 허용)
 function handleRankCommand(p, text) {
   const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
-  const parts = text.split(/\s+/);
+  const parts = parseArgs(text);
   const cmd = parts[0].replace("/랭크", "/경쟁전"), names = parts.slice(1); // 구 /랭크… 별칭 → /경쟁전… 으로 정규화
   if (cmd === "/경쟁전명단") {
     const allowed = Object.keys(users).filter((id) => users[id].rankAllowed === true).map((id) => users[id].nickname || id);
@@ -1297,12 +1297,22 @@ function activityOf(p) {
 // 게스트 표시 이름 : 기본 이름("게스트")이거나 이름이 없으면 "게스트" 한 번만 (— "게스트 게스트" 방지)
 function guestLabel(name) { return name && name !== "게스트" ? `게스트 ${name}` : "게스트"; }
 
+// 관리자 명령 인자 파싱 : 큰따옴표로 감싸면 띄어쓰기 포함 닉네임도 한 인자로 취급.
+//  예) /닉변 "김 승찬" "새 닉네임"   /추방 "우주 최강"   (따옴표 없으면 기존처럼 공백 분리)
+function parseArgs(text) {
+  const out = [];
+  const re = /"([^"]*)"|(\S+)/g;
+  let m;
+  while ((m = re.exec(text))) out.push(m[1] !== undefined ? m[1] : m[2]);
+  return out;
+}
+
 // 관리자 /어디 : 유저가 지금 뭘 하는지 조회. 인자 없으면 전체 온라인 현황.
 //  /어디            → 접속자 전원의 활동
 //  /어디 닉네임 …    → 해당 계정들의 활동 (미접속=오프라인, 아이디 폴백, 온라인 게스트 이름도 조회)
 function handleWhereCommand(p, text) {
   const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
-  const names = text.split(/\s+/).slice(1);
+  const names = parseArgs(text).slice(1);
   const lines = [];
   if (!names.length) {
     for (const [, q] of players) {
@@ -1354,7 +1364,7 @@ function handleOnlineCommand(p) {
 // 관리자 /추방 : 접속 중인 유저를 즉시 퇴장 (계정 닉네임 우선, 게스트 이름도 가능. 차단은 아님 — 재접속 가능)
 function handleKickCommand(p, text) {
   const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
-  const names = text.split(/\s+/).slice(1);
+  const names = parseArgs(text).slice(1);
   if (!names.length) { reply("사용법: /추방 닉네임 …  (영구 차단은 /차단)"); return; }
   const done = [], missing = [];
   for (const name of names) {
@@ -1377,7 +1387,7 @@ function handleKickCommand(p, text) {
 //  게스트는 계정이 없어 차단 불가 → /추방으로 내보내기만 가능.
 function handleBanCommand(p, text, on) {
   const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
-  const names = text.split(/\s+/).slice(1);
+  const names = parseArgs(text).slice(1);
   if (!names.length) { reply(`사용법: ${on ? "/차단" : "/차단해제"} 닉네임 …`); return; }
   const done = [], missing = [], dup = [], denied = [];
   for (const name of names) {
@@ -1414,7 +1424,7 @@ function courseModeOf(token) {
 }
 function handleRecordDeleteCommand(p, text) {
   const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
-  const parts = text.split(/\s+/).slice(1);
+  const parts = parseArgs(text).slice(1);
   if (parts.length < 2) { reply("사용법: /기록삭제 닉네임 코스 …  (코스: A-1~C-3, 레트로1, 레트로2, 전체)"); return; }
   const name = parts[0];
   const matches = findUserIdsByName(name);
@@ -1457,8 +1467,8 @@ function handleRecordDeleteCommand(p, text) {
 //  /닉변 대상닉네임|아이디 새닉네임   (새 닉은 12자 제한 + 계정 간 중복 금지, 회원가입과 동일 규칙)
 function handleRenameCommand(p, text) {
   const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
-  const parts = text.split(/\s+/);
-  if (parts.length < 3) { reply("사용법: /닉변 대상닉네임 새닉네임"); return; }
+  const parts = parseArgs(text);
+  if (parts.length < 3) { reply('사용법: /닉변 대상닉네임 새닉네임 — 띄어쓰기 있는 닉은 "따옴표"로 묶기'); return; }
   const target = parts[1];
   const matches = findUserIdsByName(target);
   if (!matches.length) { reply(`없는 닉네임: ${target}`); return; }
@@ -1486,7 +1496,7 @@ function handleRenameCommand(p, text) {
 //  /점수초기화 닉네임 …    → 해당 계정만 (아이디 폴백 허용)
 function handleScoreResetCommand(p, text) {
   const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
-  const names = text.split(/\s+/).slice(1);
+  const names = parseArgs(text).slice(1);
   if (!names.length) { reply("사용법: /점수초기화 전체  또는  /점수초기화 닉네임1 닉네임2 …"); return; }
   const resetOne = (id) => {
     delete users[id].rankScore; // rankScoreOf 폴백 = 기본 100점
@@ -1518,7 +1528,7 @@ function handleScoreResetCommand(p, text) {
 //  /이벤트 닉네임 선물이름 메세지…   (선물 이름의 공백 허용 : 공백을 제거해 GIFT_ITEMS 와 매칭)
 function handleEventCommand(p, text) {
   const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
-  const parts = text.split(/\s+/).slice(1);
+  const parts = parseArgs(text).slice(1);
   if (parts.length < 2) { reply(`사용법: /이벤트 닉네임 선물이름 메세지 (선물: ${Object.keys(GIFT_ITEMS).join(", ")})`); return; }
   const name = parts[0];
   const matches = findUserIdsByName(name);
