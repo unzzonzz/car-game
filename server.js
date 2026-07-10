@@ -685,6 +685,7 @@ wss.on("connection", (ws) => {
       if (p.isAdmin && text.startsWith("/온라인")) { handleOnlineCommand(p); return; }   // 온라인 명단
       if (p.isAdmin && text.startsWith("/이벤트")) { handleEventCommand(p, text); return; } // 이벤트 선물 발송
       if (p.isAdmin && text.startsWith("/점수초기화")) { handleScoreResetCommand(p, text); return; } // 경쟁전 점수 리셋
+      if (p.isAdmin && text.startsWith("/기록삭제")) { handleRecordDeleteCommand(p, text); return; } // 코스 최고기록 삭제
       // 관리자의 알 수 없는 /명령 은 공개 채팅에 새지 않게 삼킨다 (오타/구버전 명령 보호).
       if (p.isAdmin && text.startsWith("/")) { send(p, { type: "chat", id: 0, name: "시스템", text: `알 수 없는 명령어: ${text.split(/\s+/)[0]}`, t: Date.now() }); return; }
       const name = p.account ? p.account.nickname : (p.active ? p.name : sanitizeName(msg.name));
@@ -1278,6 +1279,55 @@ function handleOnlineCommand(p) {
     cur += n + ", ";
   }
   reply(cur.replace(/, $/, ""));
+}
+
+// 관리자 /기록삭제 : 특정 계정의 코스 최고기록을 삭제 (인게임 TOP10/로비 랭킹에서 빠진다).
+//  /기록삭제 닉네임 코스 …   코스 = A-1~A-3, B-1~B-3, C-1~C-3, 레트로1, 레트로2, 전체
+const COURSE_LABEL = { a1: "A-1", a2: "A-2", a3: "A-3", racing: "B-1", hard: "B-2", serp: "B-3", c1: "C-1", c2: "C-2", c3: "C-3", retro1: "레트로1", retro2: "레트로2" };
+function courseModeOf(token) {
+  const t = String(token || "").toLowerCase().replace(/-/g, "");
+  const map = { a1: "a1", a2: "a2", a3: "a3", b1: "racing", b2: "hard", b3: "serp", c1: "c1", c2: "c2", c3: "c3", "레트로1": "retro1", "레트로2": "retro2" };
+  return map[t] || null;
+}
+function handleRecordDeleteCommand(p, text) {
+  const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
+  const parts = text.split(/\s+/).slice(1);
+  if (parts.length < 2) { reply("사용법: /기록삭제 닉네임 코스 …  (코스: A-1~C-3, 레트로1, 레트로2, 전체)"); return; }
+  const name = parts[0];
+  const matches = findUserIdsByName(name);
+  if (!matches.length) { reply(`없는 닉네임: ${name}`); return; }
+  if (matches.length > 1) { reply(`닉 중복(아이디로 지정하세요): ${name}(${matches.join(",")})`); return; }
+  const id = matches[0], u = users[id];
+  // 코스 목록 : "전체" 면 모든 코스, 아니면 토큰별 해석 (모르는 코스는 따로 안내)
+  const unknown = [];
+  let modes;
+  if (parts.slice(1).some((t) => t === "전체")) modes = Object.keys(COURSE_LABEL);
+  else {
+    modes = [];
+    for (const tk of parts.slice(1)) {
+      const m = courseModeOf(tk);
+      if (m) modes.push(m); else unknown.push(tk);
+    }
+  }
+  const fmt = (ms) => (ms / 1000).toFixed(2) + "초";
+  const deleted = [], none = [];
+  for (const mode of modes) {
+    const field = RECORD_FIELD[mode];
+    if (u[field]) {
+      deleted.push(`${COURSE_LABEL[mode]}(${fmt(u[field])})`);
+      delete u[field];
+      broadcastRecords(mode); // 해당 코스 인게임 TOP10 즉시 갱신
+    } else none.push(COURSE_LABEL[mode]);
+  }
+  if (deleted.length) {
+    persistUser(id);
+    for (const [, p2] of players) if (p2.account && p2.account.userId === id) { sendStats(p2); break; } // 접속 중이면 개인 기록 갱신
+  }
+  let out = deleted.length ? `${u.nickname || id} 기록 삭제 완료: ${deleted.join(", ")}` : "";
+  if (none.length && parts[1] !== "전체") out += `${out ? " / " : ""}기록 없음: ${none.join(", ")}`;
+  if (!deleted.length && !out) out = "삭제할 기록이 없습니다.";
+  if (unknown.length) out += `${out ? " / " : ""}모르는 코스: ${unknown.join(", ")} (A-1~C-3, 레트로1, 레트로2, 전체)`;
+  reply(out);
 }
 
 // 관리자 /점수초기화 : 경쟁전 점수를 기본(100)으로 리셋. 전적(승/판)은 유지.
