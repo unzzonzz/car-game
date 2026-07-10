@@ -3255,6 +3255,10 @@ function connect() {
       // 프로 레이스 종료 → 모두 자유 레이싱으로 이동
       race.state = "none";
       enterFreeRacingFromPro();
+    } else if (msg.type === "kicked") {
+      // 관리자 추방/차단 또는 치트 자동 감지 — 즉시 재접속하지 않게 표시
+      net.kicked = true;
+      alert(msg.reason || "관리자에 의해 연결이 종료되었습니다.");
     } else if (msg.type === "snapshot") {
       applySnapshot(msg.st, msg.players); // (구버전/폴백) JSON 스냅샷 — 신규 서버는 바이너리로 보냄
     }
@@ -3263,7 +3267,9 @@ function connect() {
   net.ws.onclose = () => {
     net.connected = false;
     remotePlayers.clear();
-    setTimeout(connect, 1500); // 자동 재접속
+    const delay = net.kicked ? 30000 : 1500; // 추방 후엔 30초 뒤에야 재시도
+    net.kicked = false;
+    setTimeout(connect, delay);
   };
 
   net.ws.onerror = () => { net.ws.close(); };

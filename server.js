@@ -60,12 +60,31 @@ function resetMotion(p) {
   p.lastLapT = Date.now();   // 마지막으로 랩을 인정한 시각
 }
 // 비정상 이동 감지 → 잠시 랩/기록 인정 보류 + 로그 (첫 위반과 20회마다만 출력)
+//  누적되면(콘솔 핵으로 계속 날아다니는 경우) 온라인 관리자에게 알리고 자동 추방한다.
+const AUTO_KICK_FLAGS = 10; // 세션 내 위반 누적이 여기 닿으면 자동 추방 (지속 초고속 ≈ 3~4초)
 function flagCheat(p, now, reason) {
   p.flagUntil = now + FLAG_HOLD_MS;
   p.cheatFlags = (p.cheatFlags || 0) + 1;
   if (p.cheatFlags === 1 || p.cheatFlags % 20 === 0) {
     console.warn(`[anticheat] player "${p.name || "?"}" flagged (${reason}) x${p.cheatFlags}`);
   }
+  const label = reason === "jump" ? "순간이동" : reason === "speed" ? "초고속" : "기록 조작";
+  if (p.cheatFlags === 3) notifyAdmins(`[감지] ${p.name || "?"}: ${label} 의심 (누적 ${p.cheatFlags}회)`);
+  if (p.cheatFlags >= AUTO_KICK_FLAGS) {
+    notifyAdmins(`[자동 추방] ${p.name || "?"}: 비정상 이동 누적 ${p.cheatFlags}회`);
+    console.warn(`[anticheat] auto-kick "${p.name || "?"}" (${reason}) x${p.cheatFlags}`);
+    p.cheatFlags = 0;
+    kickPlayer(p, "비정상 이동이 감지되어 연결이 종료되었습니다.");
+  }
+}
+// 강제 퇴장 : 사유 통지 후 연결 종료 (클라는 30초 뒤에야 재접속 시도)
+function kickPlayer(p, reason) {
+  send(p, { type: "kicked", reason });
+  try { p.ws.close(); } catch {}
+}
+// 온라인 관리자 전원에게 시스템 메시지 (치트 감지/자동 추방 알림)
+function notifyAdmins(text) {
+  for (const [, q] of players) if (q.isAdmin) send(q, { type: "chat", id: 0, name: "시스템", text, t: Date.now() });
 }
 
 /* =============================================================================
@@ -146,6 +165,20 @@ const GOLD = "#ffd94d";
 // 관리자 /이벤트 선물 목록 : 이름(공백 제거) → 수령 시 적용 내용. 새 이벤트는 여기에 추가.
 const SPACE_SKIN_COLOR = "#0b1026"; // 클라 SPACE_SKIN 과 동일해야 함 (33번째 스와치)
 const GIFT_ITEMS = { "우주스킨": { item: "spaceSkin" } };
+const DEFAULT_CAR_COLOR = "#e8604c"; // 기본 코랄 — 비소유자가 우주색을 보내면 이 색으로 대체
+// 우주 스킨 소유 확인 : 콘솔로 색만 바꿔 보내도 서버가 릴레이/저장에서 걸러낸다 (관리자는 허용)
+function ownsSpaceSkin(p) {
+  if (!p.account) return false;
+  if (p.account.userId === ADMIN_ID) return true;
+  const u = users[p.account.userId];
+  return !!(u && u.spaceSkin);
+}
+// 색 검증 : 형식 + 우주 스킨 소유 (모든 색 수신 경로 공통)
+function sanitizeColor(p, c) {
+  if (typeof c !== "string" || !/^#[0-9a-fA-F]{6}$/.test(c)) return null;
+  if (c.toLowerCase() === SPACE_SKIN_COLOR && !ownsSpaceSkin(p)) return DEFAULT_CAR_COLOR;
+  return c;
+}
 const USERS_FILE = path.join(__dirname, "users.json");
 
 // 영속 저장 : 환경변수가 있으면 Upstash Redis, 없으면 로컬 users.json 파일로 폴백.
@@ -419,8 +452,9 @@ function applyState(p, m) {
   p.lastPos = { x, y, t: now };
   const flagged = now < (p.flagUntil || 0);
 
-  // 커스텀 차 색 (형식 검증 후 저장 → 스냅샷으로 릴레이)
-  if (typeof m.color === "string" && /^#[0-9a-fA-F]{6}$/.test(m.color)) p.color = m.color;
+  // 커스텀 차 색 (형식 + 우주 스킨 소유 검증 후 저장 → 스냅샷으로 릴레이)
+  const okColor = sanitizeColor(p, m.color);
+  if (okColor) p.color = okColor;
   // 속도(vx,vy) — 서버 권위 충돌 임펄스 계산용. 최고속 초과분은 클램프(과충격 치트 방어).
   let vx = Number(m.vx) || 0, vy = Number(m.vy) || 0;
   const sp = Math.hypot(vx, vy);
@@ -536,6 +570,7 @@ wss.on("connection", (ws) => {
       const idv = (msg.id || "").trim();
       const u = users[idv];
       if (!u || !verifyPassword(u, msg.password || "")) { send(p, { type: "authError", reason: "아이디 또는 비밀번호가 틀렸습니다." }); return; }
+      if (u.banned) { send(p, { type: "authError", reason: "차단된 계정입니다." }); return; }
       // 레거시 해시 계정은 로그인 성공 시 평문으로 마이그레이션(콘솔에서 바로 보이도록)
       if (u.password == null) { u.password = String(msg.password || ""); delete u.salt; delete u.hash; persistUser(idv); }
       loginPlayer(p, idv);
@@ -543,8 +578,8 @@ wss.on("connection", (ws) => {
 
     } else if (msg.type === "auth") {
       const uid = tokens.get(msg.token);
-      if (uid && users[uid]) loginPlayer(p, uid);
-      else send(p, { type: "authError", reason: "", silent: true }); // 토큰 만료 → 조용히
+      if (uid && users[uid] && !users[uid].banned) loginPlayer(p, uid);
+      else send(p, { type: "authError", reason: "", silent: true }); // 토큰 만료/차단 → 조용히 (게스트로 진행)
       return;
 
     } else if (msg.type === "logout") {
@@ -572,7 +607,8 @@ wss.on("connection", (ws) => {
       if (!p.account) return;
       const u = users[p.account.userId];
       if (!u) return;
-      if (typeof msg.color === "string" && /^#[0-9a-fA-F]{6}$/.test(msg.color)) { u.color = msg.color; p.color = msg.color; }
+      const prefColor = sanitizeColor(p, msg.color); // 형식 + 우주 스킨 소유 검증
+      if (prefColor) { u.color = prefColor; p.color = prefColor; }
       const s = msg.settings;
       if (s && typeof s === "object") {
         const clean = (u.settings && typeof u.settings === "object") ? { ...u.settings } : {};
@@ -686,6 +722,10 @@ wss.on("connection", (ws) => {
       if (p.isAdmin && text.startsWith("/이벤트")) { handleEventCommand(p, text); return; } // 이벤트 선물 발송
       if (p.isAdmin && text.startsWith("/점수초기화")) { handleScoreResetCommand(p, text); return; } // 경쟁전 점수 리셋
       if (p.isAdmin && text.startsWith("/기록삭제")) { handleRecordDeleteCommand(p, text); return; } // 코스 최고기록 삭제
+      if (p.isAdmin && text.startsWith("/추방")) { handleKickCommand(p, text); return; }          // 온라인 강제 퇴장
+      if (p.isAdmin && text.startsWith("/차단해제")) { handleBanCommand(p, text, false); return; } // 계정 차단 해제
+      if (p.isAdmin && text.startsWith("/차단명단")) { handleBanListCommand(p); return; }          // 차단 목록
+      if (p.isAdmin && text.startsWith("/차단")) { handleBanCommand(p, text, true); return; }      // 계정 차단(+접속 중이면 즉시 추방)
       // 관리자의 알 수 없는 /명령 은 공개 채팅에 새지 않게 삼킨다 (오타/구버전 명령 보호).
       if (p.isAdmin && text.startsWith("/")) { send(p, { type: "chat", id: 0, name: "시스템", text: `알 수 없는 명령어: ${text.split(/\s+/)[0]}`, t: Date.now() }); return; }
       const name = p.account ? p.account.nickname : (p.active ? p.name : sanitizeName(msg.name));
@@ -1279,6 +1319,59 @@ function handleOnlineCommand(p) {
     cur += n + ", ";
   }
   reply(cur.replace(/, $/, ""));
+}
+
+// 관리자 /추방 : 접속 중인 유저를 즉시 퇴장 (계정 닉네임 우선, 게스트 이름도 가능. 차단은 아님 — 재접속 가능)
+function handleKickCommand(p, text) {
+  const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
+  const names = text.split(/\s+/).slice(1);
+  if (!names.length) { reply("사용법: /추방 닉네임 …  (영구 차단은 /차단)"); return; }
+  const done = [], missing = [];
+  for (const name of names) {
+    const ids = new Set(findUserIdsByName(name));
+    let kicked = 0;
+    for (const [, q] of players) {
+      if (q === p) continue; // 자기 자신 제외
+      const hit = q.account ? ids.has(q.account.userId)
+        : (q.name || "").toLowerCase() === String(name).toLowerCase(); // 게스트는 온라인 이름 일치(중복 시 전부)
+      if (hit) { kickPlayer(q, "관리자에 의해 연결이 종료되었습니다."); kicked++; }
+    }
+    if (kicked) done.push(`${name}(${kicked}명)`); else missing.push(name);
+  }
+  let out = done.length ? `추방 완료: ${done.join(", ")}` : "";
+  if (missing.length) out += `${out ? " / " : ""}접속 중이 아님: ${missing.join(", ")}`;
+  reply(out);
+}
+
+// 관리자 /차단 /차단해제 : 계정 로그인 자체를 막는다 (banned 컬럼). 차단 시 접속 중이면 즉시 추방.
+//  게스트는 계정이 없어 차단 불가 → /추방으로 내보내기만 가능.
+function handleBanCommand(p, text, on) {
+  const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
+  const names = text.split(/\s+/).slice(1);
+  if (!names.length) { reply(`사용법: ${on ? "/차단" : "/차단해제"} 닉네임 …`); return; }
+  const done = [], missing = [], dup = [], denied = [];
+  for (const name of names) {
+    const matches = findUserIdsByName(name);
+    if (!matches.length) { missing.push(name); continue; }
+    if (matches.length > 1) { dup.push(`${name}(${matches.join(",")})`); continue; } // 옛 중복 닉 → 아이디로 지정 요청
+    const id = matches[0], u = users[id];
+    if (id === ADMIN_ID) { denied.push(name); continue; } // 관리자 계정은 차단 불가
+    if (on) u.banned = true; else delete u.banned;
+    persistUser(id);
+    done.push(u.nickname || id);
+    if (on) for (const [, q] of players) if (q.account && q.account.userId === id) kickPlayer(q, "차단된 계정입니다.");
+  }
+  let out = done.length ? `${on ? "차단" : "차단 해제"} 완료 ${done.length}명: ${done.join(", ")}` : "";
+  if (missing.length) out += `${out ? " / " : ""}없는 닉네임: ${missing.join(", ")}`;
+  if (dup.length) out += `${out ? " / " : ""}닉 중복(아이디로 지정하세요): ${dup.join(", ")}`;
+  if (denied.length) out += `${out ? " / " : ""}관리자 차단 불가: ${denied.join(", ")}`;
+  reply(out);
+}
+
+function handleBanListCommand(p) {
+  const reply = (t) => send(p, { type: "chat", id: 0, name: "시스템", text: t, t: Date.now() });
+  const banned = Object.keys(users).filter((id) => users[id].banned === true).map((id) => users[id].nickname || id);
+  reply(banned.length ? `차단 ${banned.length}명: ${banned.join(", ")}` : "차단된 계정이 없습니다.");
 }
 
 // 관리자 /기록삭제 : 특정 계정의 코스 최고기록을 삭제 (인게임 TOP10/로비 랭킹에서 빠진다).
