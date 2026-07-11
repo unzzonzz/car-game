@@ -1685,8 +1685,12 @@ const BOSS_RESULT_MS = 10000;     // 결과 화면 후 자동 재시작
 const BOSS_LIVES = 2;             // 부활 1회 (두 번째 죽음 = 관전)
 const BOSS_RESPAWN_MS = 2500;
 const BOSS_HL = 95, BOSS_HW = 68; // 차체 히트박스 OBB 반길이/반폭 (시각 크기와 일치)
-const BOSS_SPEED = 1500;          // 추격 속도 (플레이어 최고속 2667px/s 의 ~56%)
-const BOSS_TURN = 1.7;            // 조향 속도 (rad/s)
+const BOSS_SPEED = 1500;          // 추격 최고 속도 (플레이어 최고속 2667px/s 의 ~56%)
+// 트럭 운동 모델 : 가감속 + 속도에 따라 조향 반경이 커진다 (저속 민첩, 고속 둔중)
+const BOSS_ACCEL = 1500;          // 가속 (px/s^2)
+const BOSS_DECEL = 2400;          // 감속 (px/s^2)
+const BOSS_TURN_LO = 3.2;         // 저속 조향 속도 (rad/s)
+const BOSS_TURN_HI = 1.8;         // 최고속 조향 속도 (rad/s)
 const CHARGE_CD = 8000, CHARGE_PREP = 1200, CHARGE_SPEED = 3500, CHARGE_DIST = 1100, CHARGE_RECOVER = 800;
 const GROGGY_MS = 1500;           // 돌진이 벽/기둥에 박히면 그로기 (접촉 킬도 꺼짐 = 보너스 타임)
 const SLAM_CD = 10000, SLAM_PREP = 900, SLAM_RADIUS = 340, SLAM_TRIGGER = 260, SLAM_KNOCK = 760, SLAM_STUN = 1200;
@@ -1763,6 +1767,7 @@ function startBossCountdown(now) {
   // 보스 : 위쪽 가장자리에서 진입 (카운트다운 동안 천천히 걸어 들어옴)
   bossWorld.boss = {
     x: BOSS_ARENA.w / 2, y: -260, angle: Math.PI / 2, vx: 0, vy: 0,
+    speed: 0, aimAngle: null, // 트럭 운동 모델 (스칼라 속도 + 조준 방향)
     state: "enter", stateUntil: 0, targetId: null, retargetAt: 0,
     chargeDir: 0, chargeLeft: 0, teleport: true,
     cds: { charge: 0, slam: 0, tire: 0 },
@@ -1945,39 +1950,57 @@ function bossTick() {
   if (bossWorld.state === "idle") { startBossCountdown(now); return; }
 
   if (bossWorld.state === "countdown") {
-    // 진입 연출 : 아레나 중앙 쪽으로 천천히 걸어 들어옴
+    // 진입 연출 : 부드럽게 가속해 들어와 목표 지점 앞에서 감속 정지
     const b = bossWorld.boss;
+    const px = b.x, py = b.y;
     const cy = BOSS_ARENA.h * 0.32;
-    if (b.y < cy) { b.y += 320 * dt; b.vx = 0; b.vy = 320; } else { b.vx = 0; b.vy = 0; }
+    const remain = cy - b.y;
+    const stopSpeed = Math.sqrt(Math.max(0, 2 * BOSS_DECEL * remain)); // 남은 거리로 정지 가능한 속도
+    const target = Math.min(430, stopSpeed);
+    b.speed = b.speed < target ? Math.min(target, b.speed + 700 * dt) : Math.max(target, b.speed - BOSS_DECEL * dt);
+    b.y = Math.min(cy, b.y + b.speed * dt);
+    b.vx = (b.x - px) / dt; b.vy = (b.y - py) / dt; b.stateAt = now;
     if (now >= bossWorld.countdownAt) startBossRound(now);
     return;
   }
 
   if (bossWorld.state === "result") {
+    // 결과 화면 : 관성으로 미끄러지다 정지
     const b = bossWorld.boss;
-    if (b) { b.vx = 0; b.vy = 0; }
+    if (b) {
+      const px = b.x, py = b.y;
+      b.speed = Math.max(0, b.speed - BOSS_DECEL * dt);
+      if (b.speed > 0) bossMove(b, b.x + Math.cos(b.angle) * b.speed * dt, b.y + Math.sin(b.angle) * b.speed * dt);
+      b.vx = (b.x - px) / dt; b.vy = (b.y - py) / dt; b.stateAt = now;
+    }
     if (now >= bossWorld.nextAt) startBossCountdown(now);
     return;
   }
 
-  // ---- running ----
+  // ---- running : 무거운 트럭 운동 모델 ----
+  //  상태별로 "원하는 방향/속도"만 정하고, 실제 각도·속도는 조향 한계(P 제어,
+  //  속도가 빠를수록 조향 반경 증가)와 가감속 한계로 서서히 따라간다.
+  //  → 제자리 회전/즉시 정지/등속 미끄러짐 같은 부자연스러운 움직임 제거.
   const b = bossWorld.boss;
   const enr = bossEnrage(now);
   const cdScale = bossCdScale(now);
   const px = b.x, py = b.y;
+  const wrapA = (a) => { while (a > Math.PI) a -= Math.PI * 2; while (a < -Math.PI) a += Math.PI * 2; return a; };
+  let wantAngle = b.angle, wantSpeed = 0, steerRate = 1;
 
   if (b.state === "chase") {
     const target = bossPickTarget(b, now);
     if (target) {
       const st = target.p.state;
-      const want = Math.atan2(st.y - b.y, st.x - b.x);
-      let da = want - b.angle;
-      while (da > Math.PI) da -= Math.PI * 2;
-      while (da < -Math.PI) da += Math.PI * 2;
-      const maxTurn = BOSS_TURN * enr * dt;
-      b.angle += Math.max(-maxTurn, Math.min(maxTurn, da));
-      const sp = BOSS_SPEED * enr;
-      bossMove(b, b.x + Math.cos(b.angle) * sp * dt, b.y + Math.sin(b.angle) * sp * dt);
+      const d = Math.hypot(st.x - b.x, st.y - b.y);
+      // 리드 추격 : 목표의 예상 위치를 조준 (꽁무니 쫓기 대신 앞질러 도는 곡선)
+      const lead = Math.min(0.5, d / Math.max(400, BOSS_SPEED * enr));
+      // 코앞(<=130px)에선 조준 갱신 정지 — 표적 각이 요동쳐 제자리에서 맴도는 것 방지
+      if (d > 130) b.aimAngle = Math.atan2(st.y + (st.vy || 0) * lead - b.y, st.x + (st.vx || 0) * lead - b.x);
+      wantAngle = (b.aimAngle != null) ? b.aimAngle : b.angle;
+      // 급코너일수록 감속해 돌고, 정렬되면 풀스피드 (최저 25%)
+      const align = Math.max(0, Math.cos(wrapA(wantAngle - b.angle)));
+      wantSpeed = BOSS_SPEED * enr * (0.25 + 0.75 * align);
 
       // 스킬 판단 (타이어는 추격 중에도 병행)
       if (now >= b.cds.tire) { bossThrowTires(b, now); b.cds.tire = now + TIRE_CD * cdScale; }
@@ -1987,44 +2010,62 @@ function bossTick() {
         broadcastBoss({ type: "bossEvent", kind: "slamPrep", x: b.x, y: b.y, ms: SLAM_PREP });
       } else if (now >= b.cds.charge) {
         // 표적의 예측 위치로 돌진 방향 고정
-        const lead = Math.min(1.0, CHARGE_PREP / 1000);
-        const ax = st.x + (st.vx || 0) * lead, ay = st.y + (st.vy || 0) * lead;
+        const clead = Math.min(1.0, CHARGE_PREP / 1000);
+        const ax = st.x + (st.vx || 0) * clead, ay = st.y + (st.vy || 0) * clead;
         b.chargeDir = Math.atan2(ay - b.y, ax - b.x);
         b.state = "chargePrep"; b.stateUntil = now + CHARGE_PREP;
         broadcastBoss({ type: "bossEvent", kind: "chargePrep", x: b.x, y: b.y, dir: b.chargeDir, ms: CHARGE_PREP, dist: CHARGE_DIST });
       }
+    } else {
+      wantSpeed = 0; // 표적 없음(전원 부활 대기 등) : 관성으로 미끄러지다 정지
     }
   } else if (b.state === "chargePrep") {
-    // 방향으로 서서히 회전하며 예열 (이동 없음 — 진동은 클라 연출)
-    let da = b.chargeDir - b.angle;
-    while (da > Math.PI) da -= Math.PI * 2;
-    while (da < -Math.PI) da += Math.PI * 2;
-    const maxTurn = 3.2 * dt;
-    b.angle += Math.max(-maxTurn, Math.min(maxTurn, da));
+    wantAngle = b.chargeDir; wantSpeed = 0; steerRate = 1.6; // 제자리 예열 — 빠르게 조준 방향으로
     if (now >= b.stateUntil) {
       b.state = "charge"; b.chargeLeft = CHARGE_DIST; b.angle = b.chargeDir;
       broadcastBoss({ type: "bossEvent", kind: "charge", x: b.x, y: b.y, dir: b.chargeDir });
     }
   } else if (b.state === "charge") {
-    const step = CHARGE_SPEED * enr * dt;
+    // 런지 : 급가속 램프 (~0.2초에 최고속) 후 직선 대시. 방향 고정.
+    wantAngle = b.chargeDir; wantSpeed = 0; // (아래에서 별도 처리)
+    b.speed = Math.min(CHARGE_SPEED * enr, b.speed + 16000 * dt);
+    const step = b.speed * dt;
     const hit = bossMove(b, b.x + Math.cos(b.chargeDir) * step, b.y + Math.sin(b.chargeDir) * step);
     b.chargeLeft -= step;
     if (hit) {
+      b.speed = 0; // 벽/기둥에 쾅 — 즉시 정지
       b.state = "groggy"; b.stateUntil = now + GROGGY_MS;
       b.cds.charge = now + CHARGE_CD * cdScale;
       broadcastBoss({ type: "bossEvent", kind: "groggy", x: b.x, y: b.y, ms: GROGGY_MS });
     } else if (b.chargeLeft <= 0) {
-      b.state = "recover"; b.stateUntil = now + CHARGE_RECOVER;
+      b.state = "recover"; b.stateUntil = now + CHARGE_RECOVER; // 미끄러지며 감속 (아래 recover)
       b.cds.charge = now + CHARGE_CD * cdScale;
     }
   } else if (b.state === "slamPrep") {
+    wantSpeed = 0; steerRate = 0; // 들어올리는 동안 조향 없음
     if (now >= b.stateUntil) {
       bossDoSlam(b, now);
       b.state = "recover"; b.stateUntil = now + 600;
       b.cds.slam = now + SLAM_CD * cdScale;
     }
   } else if (b.state === "recover" || b.state === "groggy") {
-    if (now >= b.stateUntil) { b.state = "chase"; }
+    wantSpeed = 0; steerRate = 0; // 관성 감속만 (돌진 후엔 스키드로 자연 정지)
+    if (now >= b.stateUntil) b.state = "chase";
+  }
+
+  // ---- 공통 조향 : P 제어 + 속도 비례 조향 반경 (돌진 중엔 방향 고정) ----
+  if (b.state !== "charge" && steerRate > 0) {
+    const da = wrapA(wantAngle - b.angle);
+    const speedFrac = Math.min(1, b.speed / (BOSS_SPEED * enr));
+    const maxTurn = (BOSS_TURN_LO - (BOSS_TURN_LO - BOSS_TURN_HI) * speedFrac) * enr * steerRate;
+    b.angle = wrapA(b.angle + Math.max(-maxTurn, Math.min(maxTurn, da * 5)) * dt);
+  }
+  // ---- 공통 가감속 + 이동 (돌진은 위에서 직접 이동) ----
+  if (b.state !== "charge") {
+    b.speed = b.speed < wantSpeed
+      ? Math.min(wantSpeed, b.speed + BOSS_ACCEL * dt)
+      : Math.max(wantSpeed, b.speed - BOSS_DECEL * dt);
+    if (b.speed > 0) bossMove(b, b.x + Math.cos(b.angle) * b.speed * dt, b.y + Math.sin(b.angle) * b.speed * dt);
   }
 
   // 스냅샷용 속도 (클라 보간 피드포워드) + 진짜 샘플 시각 (플레이어 clientT 와 동일 역할 —
