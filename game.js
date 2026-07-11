@@ -59,6 +59,7 @@ const WORLD = {
   lobby: { w: 3600, h: 3600, type: "lobby" },                 // 로비(메인 화면) — 로컬 전용
   test: { w: 6000, h: 3400, type: "stadium", track: null },   // 테스트 : 가로로 긴 운동장 트랙 (새 플랫 디자인)
   soccer: { w: 1800, h: 3000, type: "soccer", track: null },  // 축구(베타) — 싱글, 풋살장 크기
+  boss: { w: 3400, h: 2600, type: "boss" },                   // 보스전 아레나 (서버 BOSS_ARENA 와 동일)
 };
 
 /* 로비 : 접속하자마자 차를 몰 수 있는 웜 화이트 월드. 게이트에 들어가면 모드 입장.
@@ -126,6 +127,7 @@ const MAP_GROUPS = {
     title: "아케이드",
     desc: "다른 플레이어들과 경쟁하는 버라이어티 맵",
     maps: [
+      { name: "보스전", desc: "거대 몬스터 트럭에게서 살아남기", mode: "boss" },
       { name: "서바이벌", desc: "머리로 받아 상대 터뜨리기", mode: null },
       { name: "술래잡기", desc: "술래를 피해 도망치는 추격전", mode: null },
       { name: "스모", desc: "링 밖으로 밀어내는 몸싸움", mode: null },
@@ -239,7 +241,7 @@ function applySkinOwnership() {
 
 const CUSTOM_RING_R = 175; // 링 반지름(월드 px)
 const custom = { active: false, cx: 0, cy: 0, selAnim: null }; // selAnim = 픽커(선택 링) 슬라이드 애니메이션
-const modeCounts = { a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, retro1: 0, retro2: 0, pro: 0, test: 0, rank: 0, total: 0 };
+const modeCounts = { a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, retro1: 0, retro2: 0, pro: 0, test: 0, rank: 0, boss: 0, total: 0 };
 
 // 현재 모드/월드/게임 상태 (실제 시작은 하단 enterLobby() 가 로비로 설정)
 let gameMode = "lobby";      // "lobby" | "racing" | "hard" | "serp" | "pro" | "test"
@@ -1090,6 +1092,19 @@ function updateInput(car, dt) {
     car.vx = 0; car.vy = 0; car.lf = 0; car.ll = 0;
     return;
   }
+  if (gameMode === "boss") {
+    // 사망/관전/결과 화면 : 완전 정지
+    if (bossCli.dead || bossCli.spec || bossCli.state === "result") {
+      car.throttle = 0; car.braking = 0; car.reversing = 0; car.steerInput = 0;
+      car.vx = 0; car.vy = 0; car.lf = 0; car.ll = 0;
+      return;
+    }
+    // 스턴 : 입력만 잠금 — 넉백 관성으로 미끄러진다
+    if (performance.now() < bossCli.stunUntil) {
+      car.throttle = 0; car.braking = 0; car.reversing = 0; car.steerInput = 0;
+      return;
+    }
+  }
 
   car.throttle = keys.w ? 1 : 0;
   car.braking = keys.space ? 1 : 0;
@@ -1291,6 +1306,7 @@ function updateCollision(car) {
     const now = performance.now();
     if (preSpeed > 60 && now - lastWallSfx > 250) { lastWallSfx = now; SFX.collision(clamp(preSpeed / 700, 0.3, 1)); }
   }
+  if (gameMode === "boss") bossPillarCollision(car); // 아레나 기둥
 }
 
 /* 두 방향성 사각형(OBB)의 최소 분리 벡터(MTV) — 분리축 정리(SAT).
@@ -1749,6 +1765,7 @@ function render(car) {
   drawGround();
   drawSkid();
   if (gameMode === "soccer") drawBall(); // 축구공 (바닥 위)
+  if (gameMode === "boss") drawBossTelegraphs(); // 보스 스킬 예고 (바닥 위, 차 아래)
 
   // 속도 불꽃 (내 차 뒤만) — 차체 아래에 깔리도록 차량보다 먼저 그린다.
   //  save/restore 로 감싸 불꽃 렌더가 남긴 ctx 상태(alpha/transform 등)가 뒤 그리기를 오염시키지 않게.
@@ -1761,11 +1778,18 @@ function render(car) {
   const drawOthers = othersVisible();
   if (drawOthers) {
     for (const [id, r] of remotePlayers) {
+      if (gameMode === "boss" && id === BOSS_EID) continue; // 보스는 차들 위에 따로 그린다
       drawCar(r, r.color || colorForId(id));
     }
   }
-  // 내 차량
-  drawCar(car, myColor());
+  // 내 차량 (보스전 사망/관전 중엔 숨김)
+  if (!(gameMode === "boss" && (bossCli.dead || bossCli.spec))) drawCar(car, myColor());
+  // 보스 : 설정의 "다른 차 숨김"과 무관하게 항상 보인다
+  if (gameMode === "boss") {
+    const bent = remotePlayers.get(BOSS_EID);
+    if (bent) drawBossEntity(bent);
+    drawBossOver(); // 날아가는 타이어 + 내 스턴 별
+  }
 
   // 이름표 (차 아래) — 회전 영향 안 받게 차량 그린 뒤 별도로.
   //  다른 플레이어만 표시 (내 이름은 안 보여줌, 로비에선 전부 미표시)
@@ -1775,15 +1799,17 @@ function render(car) {
 
   // 폭발 이펙트 (차량 위에)
   drawExplosions();
+  if (gameMode === "boss") drawBossBooms(); // 보스전 전용 대형 폭발
 
   // 커스텀 32색 링 : 캔버스 최상위 (스키드/차에 가려지지 않게)
   if (gameMode === "lobby") drawCustomRing();
 
   ctx.restore();
 
-  if (gameMode !== "lobby" && gameMode !== "soccer") drawMinimap(car);
+  if (gameMode !== "lobby" && gameMode !== "soccer" && gameMode !== "boss") drawMinimap(car);
   drawSpeed(car);
   drawRaceHud(); // 프로 레이싱 신호등/GO
+  drawBossHud(); // 보스전 타이머/카운트다운/결과
   updateTimeHud(); // 우측 하단 #time (프로 현재 랩 / 타임어택)
   updateProTimer(); // 상단 종료 카운트다운 (#proTimer DOM)
 }
@@ -1886,8 +1912,658 @@ function updateTimeHud() {
 function drawGround() {
   if (gameMode === "lobby") drawLobbyGround();
   else if (gameMode === "soccer") drawSoccerGround();
+  else if (gameMode === "boss") drawBossGround();
   else if (isFlatTrackMode()) drawFlatTrackGround();
   else if (isTrackWorld()) drawRacingGround();
+}
+
+/* =============================================================================
+ *  보스전 (클라이언트) — 서버 권위 AI 몬스터 트럭에게서 90초 생존
+ *  보스 위치는 스냅샷의 특수 엔트리(id 0)로 와서 기존 보간을 그대로 탄다.
+ *  스킬 예고/타이머/결과는 bossSync/bossEvent 메시지 기반의 로컬 연출.
+ * ========================================================================== */
+const BOSS_EID = 0;                 // 스냅샷 상의 보스 엔티티 id
+const BOSS_DRAW_SCALE = 0.68;       // 스프라이트(±160) → 월드 크기 (길이 약 218px)
+const BOSS_CLI_PILLARS = [          // 서버 BOSS_PILLARS 와 동일해야 함
+  { x: 850, y: 650, r: 90 }, { x: 2550, y: 650, r: 90 },
+  { x: 850, y: 1950, r: 90 }, { x: 2550, y: 1950, r: 90 },
+];
+
+const bossCli = {
+  state: "idle", bossState: null,
+  cdEnd: 0, endAt: 0,          // performance.now 기준 카운트다운/라운드 종료 시각
+  alive: 0, lives: 2, spec: false, enrage: 1,
+  dead: false, respawnAt: 0,   // 내 사망/부활 대기
+  stunUntil: 0,
+  result: null,                // { survivedMs, cleared, best, newBest }
+  fx: { chargePrepUntil: 0, chargeDir: 0, chargeDist: 1100, chargeDashUntil: 0, slamPrepUntil: 0, slamPrepMs: 900, slams: [], groggyUntil: 0, tires: [], marks: [] },
+};
+const bossBooms = []; // 보스전 전용 대형 폭발
+
+function resetBossCli() {
+  bossCli.state = "idle"; bossCli.bossState = null;
+  bossCli.cdEnd = 0; bossCli.endAt = 0;
+  bossCli.alive = 0; bossCli.lives = 2; bossCli.spec = false; bossCli.enrage = 1;
+  bossCli.dead = false; bossCli.respawnAt = 0; bossCli.stunUntil = 0; bossCli.result = null;
+  bossCli.fx = { chargePrepUntil: 0, chargeDir: 0, chargeDist: 1100, chargeDashUntil: 0, slamPrepUntil: 0, slamPrepMs: 900, slams: [], groggyUntil: 0, tires: [], marks: [] };
+  bossBooms.length = 0;
+}
+
+function handleBossEvent(msg) {
+  if (gameMode !== "boss") return;
+  const pn = performance.now();
+  const fx = bossCli.fx;
+  if (msg.kind === "chargePrep") {
+    fx.chargePrepUntil = pn + (msg.ms || 1200);
+    fx.chargeDir = msg.dir || 0;
+    fx.chargeDist = msg.dist || 1100;
+    SFX.beep();
+  } else if (msg.kind === "charge") {
+    fx.chargePrepUntil = 0;
+    fx.chargeDashUntil = pn + 700;
+  } else if (msg.kind === "slamPrep") {
+    fx.slamPrepUntil = pn + (msg.ms || 900);
+    fx.slamPrepMs = msg.ms || 900;
+  } else if (msg.kind === "slam") {
+    fx.slamPrepUntil = 0;
+    fx.slams.push({ x: msg.x, y: msg.y, at: pn });
+    addShake(30);
+    SFX.collision(1);
+  } else if (msg.kind === "groggy") {
+    fx.chargePrepUntil = 0;
+    fx.groggyUntil = pn + (msg.ms || 1500);
+    SFX.collision(0.9);
+  } else if (msg.kind === "tires") {
+    for (const t of msg.tires || []) fx.tires.push({ x0: t.x0, y0: t.y0, x1: t.x1, y1: t.y1, t0: pn, t1: pn + (t.ms || 1200) });
+  } else if (msg.kind === "kill") {
+    const color = msg.victimId === net.id ? myColor() : colorForId(msg.victimId);
+    spawnBossBoom(msg.x, msg.y, color);
+    SFX.explosion();
+    addShake(msg.victimId === net.id ? 70 : 36);
+  }
+}
+
+/* ---- 전용 대형 폭발 : 섬광 + 이중 충격파 링 + 회전 파편 + 스파크 + 피어오르는 연기 ---- */
+function spawnBossBoom(x, y, color) {
+  const debris = [];
+  for (let i = 0; i < 13; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 260 + Math.random() * 520;
+    debris.push({
+      x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      rot: Math.random() * Math.PI * 2, vr: (Math.random() - 0.5) * 18,
+      w: 6 + Math.random() * 12, h: 4 + Math.random() * 7,
+      life: 0.6 + Math.random() * 0.5,
+      color: Math.random() < 0.55 ? color : (Math.random() < 0.5 ? "#3a3a3a" : "#e8604c"),
+    });
+  }
+  const sparks = [];
+  for (let i = 0; i < 18; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 520 + Math.random() * 620;
+    sparks.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0.22 + Math.random() * 0.25 });
+  }
+  const smoke = [];
+  for (let i = 0; i < 8; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 110;
+    smoke.push({ x: x + (Math.random() - 0.5) * 40, y: y + (Math.random() - 0.5) * 40, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, r: 16 + Math.random() * 18, life: 0.9 + Math.random() * 0.5, delay: Math.random() * 0.18 });
+  }
+  bossBooms.push({ x, y, age: 0, debris, sparks, smoke });
+}
+
+function updateBossFx(dt) {
+  if (gameMode !== "boss") { if (bossBooms.length) bossBooms.length = 0; return; }
+  const pn = performance.now();
+  const fx = bossCli.fx;
+  // 폭발
+  for (let i = bossBooms.length - 1; i >= 0; i--) {
+    const b = bossBooms[i];
+    b.age += dt;
+    for (const d of b.debris) {
+      if (d.life <= 0) continue;
+      d.life -= dt; d.x += d.vx * dt; d.y += d.vy * dt;
+      d.vx *= Math.exp(-2.6 * dt); d.vy *= Math.exp(-2.6 * dt); d.rot += d.vr * dt;
+    }
+    for (const s of b.sparks) { if (s.life <= 0) continue; s.life -= dt; s.x += s.vx * dt; s.y += s.vy * dt; s.vx *= 0.86; s.vy *= 0.86; }
+    for (const s of b.smoke) { if (s.delay > 0) { s.delay -= dt; continue; } if (s.life <= 0) continue; s.life -= dt; s.x += s.vx * dt; s.y += s.vy * dt; s.r += 26 * dt; }
+    if (b.age > 1.7) bossBooms.splice(i, 1);
+  }
+  // 타이어 착지 → 흙먼지 마크
+  for (let i = fx.tires.length - 1; i >= 0; i--) {
+    const t = fx.tires[i];
+    if (pn >= t.t1) { fx.marks.push({ x: t.x1, y: t.y1, at: pn }); fx.tires.splice(i, 1); }
+  }
+  while (fx.marks.length && pn - fx.marks[0].at > 600) fx.marks.shift();
+  while (fx.slams.length && pn - fx.slams[0].at > 600) fx.slams.shift();
+}
+
+/* ---- 아레나 바닥 : 웜 화이트 + 격자 + 경계 벽 + 기둥 ---- */
+function drawBossGround() {
+  const W = world.w, H = world.h;
+  ctx.fillStyle = PALETTE.bg;
+  ctx.fillRect(0, 0, W, H);
+  const gx = W / Math.round(W / 56), gy = H / Math.round(H / 56);
+  ctx.strokeStyle = PALETTE.grid;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 0; i <= Math.round(W / gx); i++) { const x = i * gx; ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+  for (let j = 0; j <= Math.round(H / gy); j++) { const y = j * gy; ctx.moveTo(0, y); ctx.lineTo(W, y); }
+  ctx.stroke();
+  // 경계 벽 : 잉크 프레임 + 안쪽 웜 그레이 라인
+  ctx.strokeStyle = "#3a3a3a";
+  ctx.lineWidth = 26;
+  ctx.strokeRect(13, 13, W - 26, H - 26);
+  ctx.strokeStyle = "#e9e4d8";
+  ctx.lineWidth = 4;
+  ctx.strokeRect(34, 34, W - 68, H - 68);
+  // 기둥 : 플랫 그림자 + 잉크 원판 + 안쪽 링
+  for (const p of BOSS_CLI_PILLARS) {
+    ctx.fillStyle = PALETTE.gateShadow;
+    ctx.beginPath(); ctx.arc(p.x + 10, p.y + 14, p.r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#3a3a3a";
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#57534a";
+    ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r - 16, 0, Math.PI * 2); ctx.stroke();
+  }
+}
+
+// 기둥 충돌 : 차를 원 밖으로 밀어내고 radial 속도 성분 제거 (벽과 동일한 감각)
+function bossPillarCollision(car) {
+  for (const p of BOSS_CLI_PILLARS) {
+    const dx = car.x - p.x, dy = car.y - p.y;
+    const d = Math.hypot(dx, dy), min = p.r + car.length / 2 - 6;
+    if (d < min && d > 0.001) {
+      const ux = dx / d, uy = dy / d;
+      car.x = p.x + ux * min; car.y = p.y + uy * min;
+      const vr = car.vx * ux + car.vy * uy; // 기둥 방향 속도 성분
+      if (vr < 0) { car.vx -= vr * ux; car.vy -= vr * uy; decompose(car); }
+    }
+  }
+}
+
+/* ---- 스킬 텔레그래프 (바닥 위, 차 아래) ---- */
+function drawBossTelegraphs() {
+  const pn = performance.now();
+  const fx = bossCli.fx;
+  const b = remotePlayers.get(BOSS_EID);
+
+  // 돌진 예고 : 보스 위치에서 고정 방향으로 코랄 밴드 + 흐르는 셰브런
+  if (b && pn < fx.chargePrepUntil) {
+    const len = fx.chargeDist + 260, wHalf = 105;
+    ctx.save();
+    ctx.translate(b.x, b.y);
+    ctx.rotate(fx.chargeDir);
+    ctx.fillStyle = "rgba(232,96,76,0.13)";
+    ctx.fillRect(60, -wHalf, len, wHalf * 2);
+    ctx.strokeStyle = "rgba(232,96,76,0.55)";
+    ctx.lineWidth = 10;
+    ctx.lineCap = "round";
+    for (let i = 0; i < 4; i++) {
+      const xx = 140 + ((pn * 0.55 + i * (len - 160) / 4) % (len - 160));
+      ctx.beginPath();
+      ctx.moveTo(xx - 20, -30);
+      ctx.lineTo(xx, 0);
+      ctx.lineTo(xx - 20, 30);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // 내려찍기 예고 : 고정 반경 링 + 시전까지 줄어드는 안쪽 링 (타이밍 읽기)
+  if (b && pn < fx.slamPrepUntil) {
+    const remain = (fx.slamPrepUntil - pn) / fx.slamPrepMs;
+    ctx.strokeStyle = "rgba(232,96,76,0.5)";
+    ctx.lineWidth = 8;
+    ctx.beginPath(); ctx.arc(b.x, b.y, 340, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = "rgba(232,96,76,0.08)";
+    ctx.beginPath(); ctx.arc(b.x, b.y, 340, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "rgba(232,96,76,0.75)";
+    ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.arc(b.x, b.y, Math.max(6, 340 * remain), 0, Math.PI * 2); ctx.stroke();
+  }
+
+  // 내려찍기 충격파 : 착지 순간 확장 링 + 먼지
+  for (const s of fx.slams) {
+    const t = (pn - s.at) / 500;
+    if (t > 1) continue;
+    ctx.globalAlpha = 1 - t;
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 16 * (1 - t) + 4;
+    ctx.beginPath(); ctx.arc(s.x, s.y, 40 + 300 * t, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = "rgba(232,96,76,0.8)";
+    ctx.lineWidth = 8 * (1 - t) + 2;
+    ctx.beginPath(); ctx.arc(s.x, s.y, 20 + 340 * t, 0, Math.PI * 2); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // 타이어 착탄 예고 : 코랄 마커 (착지가 가까울수록 진해지고 좁아짐)
+  for (const t of fx.tires) {
+    const u = clamp((pn - t.t0) / (t.t1 - t.t0), 0, 1);
+    ctx.strokeStyle = `rgba(232,96,76,${0.25 + 0.55 * u})`;
+    ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.arc(t.x1, t.y1, 90, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = `rgba(232,96,76,${0.05 + 0.16 * u})`;
+    ctx.beginPath(); ctx.arc(t.x1, t.y1, 90, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = `rgba(232,96,76,${0.5 + 0.4 * u})`;
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(t.x1, t.y1, 90 * (1 - u) + 8, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  // 타이어 착지 흙먼지
+  for (const m of fx.marks) {
+    const t = (pn - m.at) / 600;
+    if (t > 1) continue;
+    ctx.globalAlpha = (1 - t) * 0.6;
+    ctx.fillStyle = "#cfc9ba";
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2 + m.at;
+      ctx.beginPath();
+      ctx.arc(m.x + Math.cos(a) * (30 + 70 * t), m.y + Math.sin(a) * (30 + 70 * t), 14 * (1 - t) + 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+/* ---- 보스 몬스터 트럭 렌더 (확정 디자인 v1) ----
+ * 스프라이트 공간 : 폭 ±110, 길이 ±160, 정면 = -y. 회전은 drawCar 와 동일 규약. */
+function bossRR(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function drawBoss(x, y, angle, pose, enrage) {
+  const t = performance.now() / 1000;
+  const s = BOSS_DRAW_SCALE;
+  const airborne = pose === "slam";
+  const lift = airborne ? 1.14 : 1;
+  const wob = pose === "groggy" ? Math.sin(t * 3) * 0.06 : 0;
+  const shake = pose === "charge" ? Math.sin(t * 55) * 2.2 : 0;
+  const rage = clamp((enrage - 1) / 0.4, 0, 1); // 격노 강도 0~1
+  const litUp = pose === "charge" || rage > 0.45;
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle + Math.PI / 2); // 쉐입 전방(-y) → angle 전방(+x)
+  ctx.scale(s, s);
+
+  // 그림자 (공중이면 작아지고 멀어짐 = 높이감)
+  ctx.fillStyle = gameMode === "lobby" ? PALETTE.carShadowLobby : "#e6e0d2";
+  ctx.save();
+  ctx.translate(airborne ? 30 : 16, airborne ? 40 : 22);
+  ctx.scale(airborne ? 0.8 : 1, airborne ? 0.8 : 1);
+  bossRR(-128, -158, 256, 316, 74);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.rotate(wob);
+  ctx.translate(shake, 0);
+  ctx.scale(lift, lift);
+
+  // 초거대 타이어 4개 + 블록 러그 트레드 + 옆면 돌기
+  for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+    const tx = sx * 94, ty = sy * 94;
+    ctx.fillStyle = "#262626";
+    bossRR(tx - 42, ty - 64, 84, 128, 26);
+    ctx.fill();
+    ctx.fillStyle = "#3d4348";
+    for (let i = 0; i < 4; i++) {
+      const yy = ty - 56 + i * 30;
+      bossRR(tx - 34, yy + (i % 2 ? 6 : 0), 30, 14, 6); ctx.fill();
+      bossRR(tx + 4, yy + (i % 2 ? 0 : 6), 30, 14, 6); ctx.fill();
+    }
+    ctx.fillStyle = "#262626";
+    for (let i = 0; i < 3; i++) { bossRR(tx + sx * 42 - 4, ty - 44 + i * 38, 8, 18, 4); ctx.fill(); }
+  }
+
+  // 차축 (강철 바)
+  ctx.fillStyle = "#514b42";
+  bossRR(-94, -106, 188, 24, 12); ctx.fill();
+  bossRR(-94, 82, 188, 24, 12); ctx.fill();
+
+  // 차체
+  ctx.fillStyle = "#3a3a3a";
+  bossRR(-62, -132, 124, 264, 26);
+  ctx.fill();
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = "#242424";
+  bossRR(-62, -132, 124, 264, 26);
+  ctx.stroke();
+
+  // 펜더
+  ctx.fillStyle = "#2f2f2f";
+  for (const sy of [-1, 1]) {
+    bossRR(-70, sy * 92 - 34, 20, 68, 10); ctx.fill();
+    bossRR(50, sy * 92 - 34, 20, 68, 10); ctx.fill();
+  }
+
+  // 정면 : 코랄 불바 + 그릴 + 성난 헤드라이트
+  ctx.fillStyle = rage > 0.45 ? "#ff6b57" : "#e8604c";
+  bossRR(-68, -146, 136, 22, 11);
+  ctx.fill();
+  ctx.fillStyle = "#242424";
+  for (let i = -1; i <= 1; i++) { bossRR(i * 16 - 5, -118, 10, 18, 4); ctx.fill(); }
+  ctx.fillStyle = litUp ? "#ffd94d" : "#ffedc9";
+  for (const sx of [-1, 1]) {
+    ctx.save();
+    ctx.translate(sx * 40, -114);
+    ctx.rotate(sx * 0.35);
+    bossRR(-13, -6, 26, 12, 4);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // 보닛 : 코랄 스트라이프 2줄 + 에어 스쿠프
+  ctx.fillStyle = "#e8604c";
+  bossRR(-20, -100, 12, 196, 6); ctx.fill();
+  bossRR(8, -100, 12, 196, 6); ctx.fill();
+  ctx.fillStyle = "#242424";
+  bossRR(-24, -78, 48, 34, 8); ctx.fill();
+  ctx.fillStyle = "#514b42";
+  bossRR(-16, -72, 32, 8, 4); ctx.fill();
+
+  // 캐빈 + 롤케이지
+  ctx.fillStyle = "#22252b";
+  bossRR(-46, -30, 92, 62, 14);
+  ctx.fill();
+  ctx.strokeStyle = "#b8b2a6";
+  ctx.lineWidth = 6;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(-46, -26); ctx.lineTo(-46, 30);
+  ctx.moveTo(46, -26); ctx.lineTo(46, 30);
+  ctx.moveTo(-46, 2); ctx.lineTo(46, 2);
+  ctx.stroke();
+
+  // 배기 스택 2개 (+격노/돌진 불꽃)
+  for (const sx of [-1, 1]) {
+    ctx.fillStyle = "#7a756b";
+    ctx.beginPath(); ctx.arc(sx * 30, 48, 12, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#22252b";
+    ctx.beginPath(); ctx.arc(sx * 30, 48, 6, 0, Math.PI * 2); ctx.fill();
+    if (litUp) {
+      ctx.fillStyle = "rgba(232,96,76," + (0.5 + 0.4 * Math.sin(t * 20 + sx)) + ")";
+      ctx.beginPath(); ctx.arc(sx * 30, 48, 16 + 3 * Math.sin(t * 17 + sx * 2), 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // 적재함 X 브레이스 + 리어 범퍼
+  ctx.fillStyle = "#2f2f2f";
+  bossRR(-50, 66, 100, 62, 12);
+  ctx.fill();
+  ctx.strokeStyle = "#514b42";
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.moveTo(-40, 74); ctx.lineTo(40, 120);
+  ctx.moveTo(40, 74); ctx.lineTo(-40, 120);
+  ctx.stroke();
+  ctx.fillStyle = rage > 0.45 ? "#ff6b57" : "#e8604c";
+  bossRR(-56, 128, 112, 14, 7);
+  ctx.fill();
+
+  // 격노 오라 (경과에 따라 서서히 진해짐)
+  if (rage > 0.1) {
+    ctx.strokeStyle = `rgba(232,96,76,${rage * (0.45 + 0.2 * Math.sin(t * 8))})`;
+    ctx.lineWidth = 10;
+    bossRR(-70, -140, 140, 280, 30);
+    ctx.stroke();
+  }
+
+  // 그로기 : 코랄 별 3개 + 연기
+  if (pose === "groggy") {
+    for (let i = 0; i < 3; i++) {
+      const a = t * 2.4 + (i * Math.PI * 2) / 3;
+      const px = Math.cos(a) * 64, py = -10 + Math.sin(a) * 26;
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate(a);
+      ctx.fillStyle = "#e8604c";
+      ctx.beginPath();
+      ctx.moveTo(0, -9); ctx.lineTo(7, 0); ctx.lineTo(0, 9); ctx.lineTo(-7, 0);
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+    for (let i = 0; i < 2; i++) {
+      const ph = (t * 0.7 + i * 0.5) % 1;
+      ctx.fillStyle = "rgba(122,117,107," + (0.5 * (1 - ph)) + ")";
+      ctx.beginPath();
+      ctx.arc(20 + i * 18 - 30, -60 - ph * 46, 10 + ph * 14, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  ctx.restore();
+
+  // 돌진 예열 : 뒷바퀴 흙먼지 (월드 공간, 회전 반영)
+  if (pose === "charge") {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle + Math.PI / 2);
+    ctx.scale(s, s);
+    for (let i = 0; i < 6; i++) {
+      const ph = (t * 1.6 + i * 0.37) % 1;
+      ctx.fillStyle = "rgba(207,201,186," + (0.55 * (1 - ph)) + ")";
+      const sx = i % 2 ? -94 : 94;
+      ctx.beginPath();
+      ctx.arc(sx + (i - 3) * 8 * ph, 165 + ph * 60, 8 + ph * 20, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+// 보스 엔티티(스냅샷 id 0) → 포즈 결정해 렌더
+function drawBossEntity(r) {
+  const pn = performance.now();
+  const fx = bossCli.fx;
+  let pose = "chase";
+  if (pn < fx.groggyUntil) pose = "groggy";
+  else if (pn < fx.slamPrepUntil) pose = "slam";
+  else if (pn < fx.chargePrepUntil) pose = "charge";
+  drawBoss(r.x, r.y, r.angle, pose, bossCli.enrage);
+  // 돌진 대시 중 : 흙먼지 트레일
+  if (pn < fx.chargeDashUntil) {
+    for (let i = 0; i < 3; i++) {
+      const ph = ((pn * 0.004) + i * 0.33) % 1;
+      ctx.fillStyle = "rgba(207,201,186," + (0.4 * (1 - ph)) + ")";
+      ctx.beginPath();
+      ctx.arc(r.x - Math.cos(fx.chargeDir) * (90 + ph * 160), r.y - Math.sin(fx.chargeDir) * (90 + ph * 160), 12 + ph * 22, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+/* ---- 차/보스 위 오버레이 : 날아가는 타이어 + 내 스턴 별 ---- */
+function drawBossOver() {
+  const pn = performance.now();
+  const fx = bossCli.fx;
+  // 날아가는 타이어 : 포물선(스케일+그림자 분리) + 회전
+  for (const t of fx.tires) {
+    const u = clamp((pn - t.t0) / (t.t1 - t.t0), 0, 1);
+    const x = t.x0 + (t.x1 - t.x0) * u, y = t.y0 + (t.y1 - t.y0) * u;
+    const h = Math.sin(u * Math.PI); // 0→1→0 높이
+    const sc = 1 + h * 0.9;
+    ctx.fillStyle = "rgba(58,54,46,0.18)"; // 그림자 (지면)
+    ctx.beginPath(); ctx.ellipse(x, y + 10, 26 * (1 - h * 0.4), 16 * (1 - h * 0.4), 0, 0, Math.PI * 2); ctx.fill();
+    ctx.save();
+    ctx.translate(x, y - h * 90);
+    ctx.rotate(pn * 0.012);
+    ctx.scale(sc, sc);
+    ctx.fillStyle = "#262626";
+    ctx.beginPath(); ctx.arc(0, 0, 24, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#3d4348";
+    ctx.lineWidth = 7;
+    ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = "#514b42";
+    ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+  // 내 스턴 : 차 위를 도는 코랄 별
+  if (pn < bossCli.stunUntil && !bossCli.dead && !bossCli.spec) {
+    for (let i = 0; i < 3; i++) {
+      const a = pn * 0.008 + (i * Math.PI * 2) / 3;
+      const px = CAR.x + Math.cos(a) * 42, py = CAR.y - 14 + Math.sin(a) * 16;
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate(a);
+      ctx.fillStyle = "#e8604c";
+      ctx.beginPath();
+      ctx.moveTo(0, -7); ctx.lineTo(5.5, 0); ctx.lineTo(0, 7); ctx.lineTo(-5.5, 0);
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+  }
+}
+
+function drawBossBooms() {
+  for (const b of bossBooms) {
+    // 섬광
+    if (b.age < 0.1) {
+      ctx.globalAlpha = 1 - b.age / 0.1;
+      ctx.fillStyle = "#fff6e0";
+      ctx.beginPath(); ctx.arc(b.x, b.y, 70, 0, Math.PI * 2); ctx.fill();
+    }
+    // 이중 충격파 링 (흰색 빠름 + 코랄 느림)
+    if (b.age < 0.38) {
+      const t = b.age / 0.38;
+      ctx.globalAlpha = (1 - t) * 0.9;
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 14 * (1 - t) + 3;
+      ctx.beginPath(); ctx.arc(b.x, b.y, 30 + 230 * t, 0, Math.PI * 2); ctx.stroke();
+    }
+    if (b.age < 0.6) {
+      const t = b.age / 0.6;
+      ctx.globalAlpha = (1 - t) * 0.7;
+      ctx.strokeStyle = "#e8604c";
+      ctx.lineWidth = 8 * (1 - t) + 2;
+      ctx.beginPath(); ctx.arc(b.x, b.y, 20 + 320 * t, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    // 연기 (파편 아래)
+    for (const s of b.smoke) {
+      if (s.delay > 0 || s.life <= 0) continue;
+      ctx.globalAlpha = Math.min(0.5, s.life * 0.45);
+      ctx.fillStyle = "#a8a094";
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    // 회전 파편
+    for (const d of b.debris) {
+      if (d.life <= 0) continue;
+      ctx.globalAlpha = Math.min(1, d.life * 2);
+      ctx.save();
+      ctx.translate(d.x, d.y);
+      ctx.rotate(d.rot);
+      ctx.fillStyle = d.color;
+      ctx.fillRect(-d.w / 2, -d.h / 2, d.w, d.h);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+    // 스파크
+    for (const s of b.sparks) {
+      if (s.life <= 0) continue;
+      ctx.globalAlpha = Math.min(1, s.life * 4);
+      ctx.fillStyle = "#ffedc9";
+      ctx.beginPath(); ctx.arc(s.x, s.y, 2.6, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+/* ---- 관전 카메라 : 보스를 따라간다 (부활 대기 중엔 내 폭발 지점 유지) ---- */
+function bossSpectateCamera(dt) {
+  if (gameMode !== "boss" || !bossCli.spec) return;
+  const b = remotePlayers.get(BOSS_EID);
+  if (b) updateCamera({ x: b.x, y: b.y }, dt);
+}
+
+/* ---- HUD (화면 공간) : 타이머/생존자/목숨 + 카운트다운 + 부활/관전 + 결과 ---- */
+function drawBossHud() {
+  if (gameMode !== "boss") return;
+  const pn = performance.now();
+  const cx = viewW / 2;
+
+  // 카드 헬퍼 : 흰 면 + 얇은 테두리 (기존 HUD 결)
+  const card = (x, y, w, h) => {
+    ctx.fillStyle = "rgba(58,54,46,0.10)";
+    ctx.beginPath(); ctx.roundRect(x + 3, y + 5, w, h, 16); ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, 16); ctx.fill();
+    ctx.strokeStyle = "#ece8df";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, 16); ctx.stroke();
+  };
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  if (bossCli.state === "countdown") {
+    const remain = Math.max(0, bossCli.cdEnd - pn);
+    card(cx - 150, 24, 300, 74);
+    ctx.fillStyle = "#e8604c";
+    ctx.font = "400 34px Jua, sans-serif";
+    ctx.fillText(String(Math.ceil(remain / 1000)), cx, 50);
+    ctx.fillStyle = "#7a756b";
+    ctx.font = "400 16px Jua, sans-serif";
+    ctx.fillText("몬스터 트럭이 온다", cx, 80);
+  } else if (bossCli.state === "running") {
+    const remain = Math.max(0, bossCli.endAt - pn);
+    const sec = Math.ceil(remain / 1000);
+    card(cx - 150, 24, 300, 64);
+    ctx.fillStyle = sec <= 10 ? "#e8604c" : "#3a3a3a";
+    ctx.font = "400 30px Jua, sans-serif";
+    ctx.fillText(`${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`, cx, 46);
+    ctx.fillStyle = "#7a756b";
+    ctx.font = "400 14px Jua, sans-serif";
+    ctx.fillText(`생존 ${bossCli.alive}명`, cx + 82, 56);
+    // 내 목숨 (좌측) : 코랄 칸 2개
+    for (let i = 0; i < 2; i++) {
+      ctx.fillStyle = i < bossCli.lives ? "#e8604c" : "#ece8df";
+      ctx.beginPath(); ctx.roundRect(cx - 118 + i * 26, 48, 20, 12, 5); ctx.fill();
+    }
+    // 부활 대기 (보스/폭발 위에서도 읽히게 흰 외곽선)
+    if (bossCli.dead && !bossCli.spec && bossCli.respawnAt) {
+      const r = Math.max(0, bossCli.respawnAt - pn);
+      ctx.font = "400 26px Jua, sans-serif";
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = "rgba(255,255,255,0.9)";
+      ctx.strokeText(`부활까지 ${(r / 1000).toFixed(1)}초`, cx, viewH * 0.62);
+      ctx.fillStyle = "#3a3a3a";
+      ctx.fillText(`부활까지 ${(r / 1000).toFixed(1)}초`, cx, viewH * 0.62);
+    }
+  }
+
+  // 관전 안내
+  if (bossCli.spec) {
+    ctx.fillStyle = "rgba(58,58,58,0.75)";
+    ctx.font = "400 18px Jua, sans-serif";
+    ctx.fillText("관전 중 — 다음 라운드에 참가합니다", cx, viewH - 46);
+  }
+
+  // 결과 카드
+  if (bossCli.result) {
+    const r = bossCli.result;
+    card(cx - 190, viewH * 0.30, 380, 168);
+    ctx.fillStyle = r.cleared ? "#57b868" : "#e8604c";
+    ctx.font = "400 36px Jua, sans-serif";
+    ctx.fillText(r.cleared ? "클리어!" : "탈락...", cx, viewH * 0.30 + 44);
+    ctx.fillStyle = "#3a3a3a";
+    ctx.font = "400 20px Jua, sans-serif";
+    const s = r.survivedMs / 1000;
+    ctx.fillText(`생존 ${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}.${String(Math.floor((s % 1) * 100)).padStart(2, "0")}`, cx, viewH * 0.30 + 84);
+    ctx.fillStyle = "#7a756b";
+    ctx.font = "400 15px Jua, sans-serif";
+    if (r.best > 0) {
+      const bs = r.best / 1000;
+      ctx.fillText(`최고 기록 ${Math.floor(bs / 60)}:${String(Math.floor(bs % 60)).padStart(2, "0")}${r.newBest ? "  (신기록!)" : ""}`, cx, viewH * 0.30 + 116);
+    } else {
+      ctx.fillText("로그인하면 최고 생존 기록이 저장됩니다", cx, viewH * 0.30 + 116);
+    }
+    ctx.fillText("잠시 후 다음 라운드가 시작됩니다", cx, viewH * 0.30 + 144);
+  }
+  ctx.textBaseline = "alphabetic";
 }
 
 /* ==========================  축구 (베타 · 싱글)  ==========================
@@ -2220,7 +2896,7 @@ function drawLobbyGround() {
 function gateSub(g) {
   switch (g.group) {
     case "retro": return `${(modeCounts.retro1 || 0) + (modeCounts.retro2 || 0)}명 접속 중`; // 레트로 = 초보자+어려움
-    case "arcade": return "준비 중"; // 술래잡기/스모 모두 준비 중
+    case "arcade": return `${modeCounts.boss || 0}명 접속 중`; // 보스전 접속 수 (다른 맵은 준비 중)
     case "racing": return `${modeCounts.rank || 0}명 접속 중`; // 경쟁전(랭크) 접속 수 (일반전/캐주얼은 아직 준비 중)
     case "plaza": return "준비 중";
     case "custom": return `${modeCounts.pro || 0}명 접속 중`;
@@ -3180,6 +3856,7 @@ function connect() {
       CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
       CAR.invulnUntil = performance.now() + 1500;
       net.pendingTeleport = true; // 남들 화면에서 슬라이드 없이 스냅되도록
+      if (gameMode === "boss") { bossCli.dead = false; bossCli.respawnAt = 0; updateCamera(CAR, 0); } // 보스전 부활/배치 복귀
     } else if (msg.type === "bump") {
       // 서버 권위 충돌 임펄스 → 내 차 속도에 반영(진짜 밀치기/밀려남)
       if (COLLISION_ENABLED && gameState === "playing" && gameMode !== "lobby") applyBump(Number(msg.vx) || 0, Number(msg.vy) || 0);
@@ -3255,6 +3932,47 @@ function connect() {
       // 프로 레이스 종료 → 모두 자유 레이싱으로 이동
       race.state = "none";
       enterFreeRacingFromPro();
+    } else if (msg.type === "bossSync") {
+      // 보스전 라운드 동기 (5Hz + 전환 시) : 상태/타이머/인원/내 목숨
+      if (gameMode === "boss") {
+        const pn = performance.now();
+        bossCli.state = msg.state;
+        bossCli.bossState = msg.bossState;
+        bossCli.cdEnd = pn + (msg.countdownMs || 0);
+        bossCli.endAt = pn + (msg.endMs || 0);
+        bossCli.alive = msg.alive || 0;
+        if (typeof msg.lives === "number") bossCli.lives = msg.lives;
+        const wasSpec = bossCli.spec;
+        bossCli.spec = !!msg.spec;
+        bossCli.enrage = msg.enrage || 1;
+        if (msg.state !== "result") bossCli.result = null; // 다음 라운드 시작 → 결과 카드 제거
+        if (wasSpec && !bossCli.spec) camera.zoomT = zoomFor(1); // 관전 해제 → 줌 복귀
+        else if (!wasSpec && bossCli.spec) camera.zoomT = zoomFor(0.8); // 관전 → 살짝 줌아웃
+      }
+    } else if (msg.type === "bossEvent") {
+      handleBossEvent(msg);
+    } else if (msg.type === "bossDeath") {
+      // 내 사망 : lives>0 이면 부활 대기, 0 이면 관전
+      if (gameMode === "boss") {
+        bossCli.dead = true;
+        bossCli.lives = msg.lives || 0;
+        bossCli.respawnAt = msg.respawnMs ? performance.now() + msg.respawnMs : 0;
+        keys.w = keys.a = keys.s = keys.d = keys.space = false;
+      }
+    } else if (msg.type === "bossStun") {
+      // 충격파 : 넉백 + 잠시 입력 잠금 (즉사 아님)
+      if (gameMode === "boss" && !bossCli.dead && !bossCli.spec) {
+        CAR.vx += Number(msg.kx) || 0; CAR.vy += Number(msg.ky) || 0;
+        decompose(CAR);
+        bossCli.stunUntil = performance.now() + (msg.ms || 1200);
+        addShake(26);
+        SFX.collision(0.8);
+      }
+    } else if (msg.type === "bossResult") {
+      if (gameMode === "boss") {
+        bossCli.result = { survivedMs: msg.survivedMs || 0, cleared: !!msg.cleared, best: msg.best || 0, newBest: !!msg.newBest };
+        if (msg.cleared) SFX.record();
+      }
     } else if (msg.type === "kicked") {
       // 관리자 추방/차단 또는 치트 자동 감지 — 즉시 재접속하지 않게 표시
       net.kicked = true;
@@ -3774,6 +4492,7 @@ function applySnapshot(st, players) {
 //  → 서버가 항상 최신 위치를 갖고, 남들 화면에선 수신측 보간이 각자 모니터 Hz로 렌더한다.
 function netSend(car, now) {
   if (gameMode === "lobby" || gameMode === "soccer") return; // 로비/축구는 로컬 전용(서버 미입장)
+  if (gameMode === "boss" && (bossCli.dead || bossCli.spec)) return; // 사망/관전 중엔 위치 안 보냄
   if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
   if (now - net.lastSend < 6) return; // 매 프레임 전송(60·120·144Hz 그대로), 6ms 미만만 차단
   net.lastSend = now;
@@ -3966,6 +4685,8 @@ function frame(now) {
   updateRemotes(dt);          // 원격 차량 보간 (서버 타임스탬프 기반)
   updatePlayerCollision(CAR); // 원격 위치 갱신 후, 내 차를 상대 밖으로 밀어냄(겹침 방지)
   updateExplosions(dt);       // 폭발 이펙트 갱신 (킬 판정은 서버가 통지)
+  updateBossFx(dt);           // 보스전 연출(폭발/타이어) 갱신
+  bossSpectateCamera(dt);     // 보스전 관전 : 카메라가 보스를 따라감
 
   render(CAR);                // 렌더
 
@@ -4068,6 +4789,13 @@ function startGame(mode) {
     CAR.x = SOCCER.cx; CAR.y = SOCCER.cy + 950; CAR.angle = -Math.PI / 2; // 하단, 공을 바라봄
     CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0;
     minimap.style.display = "none";                 // 축구는 미니맵 없음 (시야는 다른 인게임과 동일한 기본 줌)
+    net.pendingTeleport = true;
+    updateCamera(CAR, 0);
+  } else if (mode === "boss") {
+    resetBossCli();                                 // 라운드/연출 상태 초기화 (서버 bossSync 가 곧 덮어씀)
+    CAR.x = WORLD.boss.w / 2; CAR.y = WORLD.boss.h - 500; CAR.angle = -Math.PI / 2; // 임시 위치 — 서버 spawn 으로 재배치
+    CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0;
+    minimap.style.display = "none";                 // 아레나가 작아 미니맵 없음
     net.pendingTeleport = true;
     updateCamera(CAR, 0);
   }
@@ -4807,6 +5535,7 @@ const RANK_COURSES = [
   ["B-1", "racing"], ["B-2", "hard"], ["B-3", "serp"],
   ["C-1", "c1"], ["C-2", "c2"], ["C-3", "c3"],
   ["초보자", "retro1"], ["어려움", "retro2"], // 레트로(옛 기록 재활용)
+  ["보스전", "boss"], // 최고 생존 시간 (내림차순 — 서버가 정렬)
 ];
 const RANK_PER_PAGE = 8; // 한 페이지에 보이는 순위 행 수
 const rankView = { mode: "a1", entries: [], page: 0, built: false };
