@@ -2027,8 +2027,10 @@ function bossTick() {
     if (now >= b.stateUntil) { b.state = "chase"; }
   }
 
-  // 스냅샷용 속도 (클라 보간 피드포워드)
+  // 스냅샷용 속도 (클라 보간 피드포워드) + 진짜 샘플 시각 (플레이어 clientT 와 동일 역할 —
+  //  브로드캐스트 시각 대신 이 값을 쓰면 클라가 중복 샘플을 걸러내 재생이 부드럽다)
   b.vx = (b.x - px) / dt; b.vy = (b.y - py) / dt;
+  b.stateAt = now;
 
   // 접촉 킬 (그로기 동안은 안전 = 보너스 타임)
   if (b.state !== "groggy") bossContactKills(now);
@@ -2047,7 +2049,7 @@ function bossTick() {
   const inRound = bossEntries().filter((e) => !e.p.bossSpec);
   if (now >= bossWorld.endAt || inRound.length === 0) endBossRound(now);
 }
-setInterval(bossTick, 1000 / 30);
+setInterval(bossTick, 1000 / 60); // 60Hz — 플레이어 송신율과 동일한 샘플 밀도 (부드러운 보간)
 setInterval(syncAllBoss, 200); // 5Hz 상태 동기 (타이머/인원 갱신)
 
 // --- 브로드캐스트 루프 ------------------------------------------------------
@@ -2065,7 +2067,7 @@ setInterval(() => {
       id: BOSS_ID, name: "", x: b.x, y: b.y, angle: b.angle,
       vx: Math.round(b.vx || 0), vy: Math.round(b.vy || 0),
       drifting: false, teleport: !!b.teleport, invuln: false, admin: false,
-      color: "#101010", stateAt: now,
+      color: "#101010", stateAt: b.stateAt || now, // 틱 샘플 시각 → v3 age 로 전달 (중복 샘플 dedup)
     });
     b.teleport = false;
   }

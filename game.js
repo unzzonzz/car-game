@@ -2185,20 +2185,22 @@ function drawBoss(x, y, angle, pose, enrage) {
   const rage = clamp((enrage - 1) / 0.4, 0, 1); // 격노 강도 0~1
   const litUp = pose === "charge" || rage > 0.45;
 
+  // ---- 그림자 : 플레이어 차와 동일한 스타일 (multiply 블렌드 + 트랙 그림자색,
+  //  화면 아래 방향 오프셋 + 실루엣). 공중(내려찍기)이면 작아지고 멀어져 높이감.
+  ctx.save();
+  ctx.translate(x + (airborne ? 22 : 0), y + (airborne ? 34 : 8));
+  ctx.rotate(angle + Math.PI / 2);
+  ctx.scale(s * (airborne ? 0.8 : 1.05) * lift, s * (airborne ? 0.8 : 1.04) * lift);
+  ctx.globalCompositeOperation = "multiply";
+  ctx.fillStyle = PALETTE.carShadowTrack;
+  for (const sx of [-1, 1]) for (const sy of [-1, 1]) { bossRR(sx * 94 - 42, sy * 94 - 64, 84, 128, 26); ctx.fill(); } // 타이어 실루엣
+  bossRR(-68, -146, 136, 292, 28); ctx.fill(); // 차체(불바~리어범퍼) 실루엣
+  ctx.restore();
+
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(angle + Math.PI / 2); // 쉐입 전방(-y) → angle 전방(+x)
   ctx.scale(s, s);
-
-  // 그림자 (공중이면 작아지고 멀어짐 = 높이감)
-  ctx.fillStyle = gameMode === "lobby" ? PALETTE.carShadowLobby : "#e6e0d2";
-  ctx.save();
-  ctx.translate(airborne ? 30 : 16, airborne ? 40 : 22);
-  ctx.scale(airborne ? 0.8 : 1, airborne ? 0.8 : 1);
-  bossRR(-128, -158, 256, 316, 74);
-  ctx.fill();
-  ctx.restore();
-
   ctx.rotate(wob);
   ctx.translate(shake, 0);
   ctx.scale(lift, lift);
