@@ -1811,7 +1811,8 @@ function render(car) {
 
   ctx.restore();
 
-  if (gameMode !== "lobby" && gameMode !== "soccer" && gameMode !== "boss") drawMinimap(car);
+  if (gameMode === "boss") drawBossMinimap(car);
+  else if (gameMode !== "lobby" && gameMode !== "soccer") drawMinimap(car);
   drawSpeed(car);
   drawRaceHud(); // 프로 레이싱 신호등/GO
   drawBossHud(); // 보스전 타이머/카운트다운/결과
@@ -3595,6 +3596,93 @@ function drawMinimap(car) {
   mctx.restore();
 }
 
+/* 보스전 미니맵 : 아레나(흰 면+1px 테두리) + 기둥 + 타이어 착탄 예고 + 플레이어 + 보스.
+ *  보스는 큰 잉크 삼각형 + 코랄 테두리 — 화면 밖에서 다가오는 방향을 읽는 용도. */
+function drawBossMinimap(car) {
+  const size = minimapSize;
+  const scale = Math.min(size / world.w, size / world.h);
+  const ox = (size - world.w * scale) / 2;
+  const oy = (size - world.h * scale) / 2;
+  const wx = (x) => ox + x * scale;
+  const wy = (y) => oy + y * scale;
+
+  mctx.clearRect(0, 0, size, size);
+
+  // 아레나 (기존 UI 결 : 흰 면 + 1px 테두리)
+  mctx.fillStyle = "#ffffff";
+  mctx.fillRect(ox, oy, world.w * scale, world.h * scale);
+  mctx.strokeStyle = "#ece8df";
+  mctx.lineWidth = 1;
+  mctx.strokeRect(ox, oy, world.w * scale, world.h * scale);
+
+  // 기둥
+  mctx.fillStyle = "#3a3a3a";
+  for (const p of BOSS_CLI_PILLARS) {
+    mctx.beginPath();
+    mctx.arc(wx(p.x), wy(p.y), Math.max(2.5, p.r * scale), 0, Math.PI * 2);
+    mctx.fill();
+  }
+
+  // 타이어 착탄 예고 (코랄 링 — 본 화면 마커와 동일 의미)
+  mctx.strokeStyle = "#e8604c";
+  mctx.lineWidth = 1.5;
+  for (const t of bossCli.fx.tires) {
+    mctx.beginPath();
+    mctx.arc(wx(t.x1), wy(t.y1), Math.max(3, 90 * scale), 0, Math.PI * 2);
+    mctx.stroke();
+  }
+
+  // 현재 화면(뷰포트) 영역
+  mctx.strokeStyle = "rgba(58,58,58,0.25)";
+  mctx.lineWidth = 1;
+  mctx.strokeRect(wx(camera.x), wy(camera.y), (viewW / camera.zoom) * scale, (viewH / camera.zoom) * scale);
+
+  // 다른 플레이어 (작은 점) — 보스(id 0)는 아래에서 따로
+  if (othersVisible()) {
+    for (const [id, r] of remotePlayers) {
+      if (id === BOSS_EID) continue;
+      mctx.fillStyle = r.color || colorForId(id);
+      mctx.beginPath();
+      mctx.arc(wx(r.x), wy(r.y), 3, 0, Math.PI * 2);
+      mctx.fill();
+    }
+  }
+
+  // 내 차량 (죽음/관전 중엔 생략)
+  if (!bossCli.dead && !bossCli.spec) {
+    mctx.save();
+    mctx.translate(wx(car.x), wy(car.y));
+    mctx.rotate(car.angle);
+    mctx.fillStyle = myColor();
+    mctx.beginPath();
+    mctx.moveTo(7, 0);
+    mctx.lineTo(-5, -4);
+    mctx.lineTo(-5, 4);
+    mctx.closePath();
+    mctx.fill();
+    mctx.restore();
+  }
+
+  // 보스 : 큰 잉크 삼각형 + 코랄 테두리 (맨 위에 — 항상 보이게)
+  const b = remotePlayers.get(BOSS_EID);
+  if (b) {
+    mctx.save();
+    mctx.translate(wx(b.x), wy(b.y));
+    mctx.rotate(b.angle);
+    mctx.fillStyle = "#2c2c2c";
+    mctx.strokeStyle = "#e8604c";
+    mctx.lineWidth = 1.5;
+    mctx.beginPath();
+    mctx.moveTo(11, 0);
+    mctx.lineTo(-8, -7);
+    mctx.lineTo(-8, 7);
+    mctx.closePath();
+    mctx.fill();
+    mctx.stroke();
+    mctx.restore();
+  }
+}
+
 
 /* =============================================================================
  *  멀티플레이어 (WebSocket 클라이언트)
@@ -4815,7 +4903,6 @@ function startGame(mode) {
     resetBossCli();                                 // 라운드/연출 상태 초기화 (서버 bossSync 가 곧 덮어씀)
     CAR.x = WORLD.boss.w / 2; CAR.y = WORLD.boss.h - 500; CAR.angle = -Math.PI / 2; // 임시 위치 — 서버 spawn 으로 재배치
     CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0;
-    minimap.style.display = "none";                 // 아레나가 작아 미니맵 없음
     net.pendingTeleport = true;
     updateCamera(CAR, 0);
   }
