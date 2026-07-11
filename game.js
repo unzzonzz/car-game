@@ -2053,13 +2053,7 @@ function drawBossGround() {
   for (let i = 0; i <= Math.round(W / gx); i++) { const x = i * gx; ctx.moveTo(x, 0); ctx.lineTo(x, H); }
   for (let j = 0; j <= Math.round(H / gy); j++) { const y = j * gy; ctx.moveTo(0, y); ctx.lineTo(W, y); }
   ctx.stroke();
-  // 경계 벽 : 잉크 프레임 + 안쪽 웜 그레이 라인
-  ctx.strokeStyle = "#3a3a3a";
-  ctx.lineWidth = 26;
-  ctx.strokeRect(13, 13, W - 26, H - 26);
-  ctx.strokeStyle = "#e9e4d8";
-  ctx.lineWidth = 4;
-  ctx.strokeRect(34, 34, W - 68, H - 68);
+  // 경계 : 로비와 동일 — 벽 프레임 없이 격자가 끝나는 곳이 경계 (충돌은 그대로)
   // 기둥 : 플랫 그림자 + 잉크 원판 + 안쪽 링
   for (const p of BOSS_CLI_PILLARS) {
     ctx.fillStyle = PALETTE.gateShadow;

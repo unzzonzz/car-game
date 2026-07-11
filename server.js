@@ -1684,7 +1684,17 @@ const BOSS_COUNTDOWN_MS = 5000;   // 라운드 시작 카운트다운
 const BOSS_RESULT_MS = 10000;     // 결과 화면 후 자동 재시작
 const BOSS_LIVES = 2;             // 부활 1회 (두 번째 죽음 = 관전)
 const BOSS_RESPAWN_MS = 2500;
-const BOSS_HL = 95, BOSS_HW = 68; // 차체 히트박스 OBB 반길이/반폭 (시각 크기와 일치)
+// 접촉 히트박스 : 시각 차체와 일치하는 복합 OBB (차체 1 + 타이어 4).
+//  단일 큰 사각형은 바퀴 사이 "허리" 옆이나 타이어 사이 정면을 지날 때 허공 킬을 만들었다.
+//  (클라 BOSS_DRAW_SCALE 0.68 기준 : 차체 ±97×±43, 타이어 중심 (±64,±64) 크기 ±44×±29)
+const BOSS_HIT_BOXES = [
+  { ox: 0, oy: 0, hl: 97, hw: 43 },    // 차체 (불바~리어범퍼)
+  { ox: 64, oy: 64, hl: 44, hw: 29 },  // 타이어 4개
+  { ox: 64, oy: -64, hl: 44, hw: 29 },
+  { ox: -64, oy: 64, hl: 44, hw: 29 },
+  { ox: -64, oy: -64, hl: 44, hw: 29 },
+];
+const CAR_HIT_HL = 27.6, CAR_HIT_HW = 13.2; // 플레이어 시각 차체 반길이/반폭 (클라 carHalfExtents 와 동일)
 const BOSS_SPEED = 1330;          // 추격 최고 속도 (플레이어 최고속 2667px/s 의 ~50%)
 // 트럭 운동 모델 : 가감속 + 속도에 따라 조향 반경이 커진다 (저속 민첩, 고속 둔중)
 const BOSS_ACCEL = 800;           // 가속 (px/s^2) — 0→최고속 약 1.7초, 출발이 묵직해 초반 도망 여유
@@ -1869,15 +1879,59 @@ function bossNearestAlive(b) {
   return best ? { e: best, d: bd } : null;
 }
 
-// 접촉 킬 : 보스 차체 OBB 안에 플레이어 중심(+여유)이 들어오면 즉사 (그로기/무적 제외)
+// 두 방향성 사각형(OBB)의 겹침 여부 — 분리축 정리(SAT). a,b = {x,y,ang,hl,hw}
+function obbOverlap(a, b) {
+  const aC = Math.cos(a.ang), aS = Math.sin(a.ang);
+  const bC = Math.cos(b.ang), bS = Math.sin(b.ang);
+  const axes = [[aC, aS], [-aS, aC], [bC, bS], [-bS, bC]];
+  const dx = b.x - a.x, dy = b.y - a.y;
+  for (const [x, y] of axes) {
+    const aR = a.hl * Math.abs(x * aC + y * aS) + a.hw * Math.abs(-x * aS + y * aC);
+    const bR = b.hl * Math.abs(x * bC + y * bS) + b.hw * Math.abs(-x * bS + y * bC);
+    if (aR + bR < Math.abs(dx * x + dy * y)) return false; // 분리축 발견 = 안 겹침
+  }
+  return true;
+}
+
+// 보스 포즈 히스토리에서 t 시각의 위치/각도 복원 (킬 랙 보상 — 피해자가 "본" 보스로 판정)
+function bossPoseAt(b, t) {
+  const h = b.hist;
+  if (!h || !h.length) return b;
+  if (t >= h[h.length - 1].t) return h[h.length - 1];
+  if (t <= h[0].t) return h[0];
+  for (let i = h.length - 1; i > 0; i--) {
+    const A = h[i - 1], B = h[i];
+    if (t >= A.t && t <= B.t) {
+      const u = B.t > A.t ? (t - A.t) / (B.t - A.t) : 1;
+      let d = B.angle - A.angle;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      return { x: A.x + (B.x - A.x) * u, y: A.y + (B.y - A.y) * u, angle: A.angle + d * u };
+    }
+  }
+  return b;
+}
+
+// 보스(복합 히트박스)와 플레이어 차체(OBB)의 실제 접촉 여부
+function bossHitsCar(pose, st) {
+  const car = { x: st.x, y: st.y, ang: st.angle, hl: CAR_HIT_HL, hw: CAR_HIT_HW };
+  const cos = Math.cos(pose.angle), sin = Math.sin(pose.angle);
+  for (const hb of BOSS_HIT_BOXES) {
+    const cx = pose.x + cos * hb.ox - sin * hb.oy; // 로컬 (전방 ox, 좌우 oy) → 월드
+    const cy = pose.y + sin * hb.ox + cos * hb.oy;
+    if (obbOverlap({ x: cx, y: cy, ang: pose.angle, hl: hb.hl, hw: hb.hw }, car)) return true;
+  }
+  return false;
+}
+
+// 접촉 킬 : 시각과 일치하는 복합 히트박스 + 랙 보상 (그로기/무적 제외)
+//  피해자의 보간 지연만큼 보스를 과거로 되감아 "피해자 화면에서 닿았을 때만" 죽는다.
 function bossContactKills(now) {
   const b = bossWorld.boss;
-  const cos = Math.cos(b.angle), sin = Math.sin(b.angle);
   for (const { id, p } of bossAliveList()) {
     if (now < (p.invulnUntil || 0)) continue;
-    const dx = p.state.x - b.x, dy = p.state.y - b.y;
-    const lx = dx * cos + dy * sin, ly = -dx * sin + dy * cos;
-    if (Math.abs(lx) <= BOSS_HL + 16 && Math.abs(ly) <= BOSS_HW + 16) bossKill(id, p, now);
+    const pose = bossPoseAt(b, now - rewindOf(p));
+    if (bossHitsCar(pose, p.state)) bossKill(id, p, now);
   }
 }
 
@@ -2072,6 +2126,10 @@ function bossTick() {
   //  브로드캐스트 시각 대신 이 값을 쓰면 클라가 중복 샘플을 걸러내 재생이 부드럽다)
   b.vx = (b.x - px) / dt; b.vy = (b.y - py) / dt;
   b.stateAt = now;
+  // 포즈 히스토리 (~400ms) — 접촉 킬 랙 보상용
+  if (!b.hist) b.hist = [];
+  b.hist.push({ t: now, x: b.x, y: b.y, angle: b.angle });
+  while (b.hist.length > 2 && b.hist[0].t < now - 400) b.hist.shift();
 
   // 접촉 킬 (그로기 동안은 안전 = 보너스 타임)
   if (b.state !== "groggy") bossContactKills(now);
