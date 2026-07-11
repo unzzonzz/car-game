@@ -1685,16 +1685,16 @@ const BOSS_RESULT_MS = 10000;     // 결과 화면 후 자동 재시작
 const BOSS_LIVES = 2;             // 부활 1회 (두 번째 죽음 = 관전)
 const BOSS_RESPAWN_MS = 2500;
 const BOSS_HL = 95, BOSS_HW = 68; // 차체 히트박스 OBB 반길이/반폭 (시각 크기와 일치)
-const BOSS_SPEED = 1500;          // 추격 최고 속도 (플레이어 최고속 2667px/s 의 ~56%)
+const BOSS_SPEED = 1330;          // 추격 최고 속도 (플레이어 최고속 2667px/s 의 ~50%)
 // 트럭 운동 모델 : 가감속 + 속도에 따라 조향 반경이 커진다 (저속 민첩, 고속 둔중)
 const BOSS_ACCEL = 1500;          // 가속 (px/s^2)
 const BOSS_DECEL = 2400;          // 감속 (px/s^2)
 const BOSS_TURN_LO = 3.2;         // 저속 조향 속도 (rad/s)
-const BOSS_TURN_HI = 1.8;         // 최고속 조향 속도 (rad/s)
-const CHARGE_CD = 8000, CHARGE_PREP = 1200, CHARGE_SPEED = 3500, CHARGE_DIST = 1100, CHARGE_RECOVER = 800;
+const BOSS_TURN_HI = 1.4;         // 최고속 조향 속도 (rad/s) — 급턴으로 따돌릴 수 있게 넉넉한 반경
+const CHARGE_CD = 10000, CHARGE_PREP = 1200, CHARGE_SPEED = 3500, CHARGE_DIST = 1100, CHARGE_RECOVER = 800;
 const GROGGY_MS = 1500;           // 돌진이 벽/기둥에 박히면 그로기 (접촉 킬도 꺼짐 = 보너스 타임)
-const SLAM_CD = 10000, SLAM_PREP = 900, SLAM_RADIUS = 340, SLAM_TRIGGER = 260, SLAM_KNOCK = 760, SLAM_STUN = 1200;
-const TIRE_CD = 7000, TIRE_FLIGHT = 1200, TIRE_RADIUS = 90;
+const SLAM_CD = 12000, SLAM_PREP = 900, SLAM_RADIUS = 340, SLAM_TRIGGER = 260, SLAM_KNOCK = 760, SLAM_STUN = 1200;
+const TIRE_CD = 9000, TIRE_FLIGHT = 1200, TIRE_RADIUS = 78;
 const ENRAGE_STEP_MS = 30000, ENRAGE_PER = 0.04, ENRAGE_MAX = 0.4; // 30초마다 +4%, 최대 +40%
 
 const bossWorld = {
@@ -1899,7 +1899,7 @@ function bossKill(id, p, now) {
 function bossThrowTires(b, now) {
   const alive = bossAliveList();
   if (!alive.length) return;
-  const n = Math.min(1 + Math.floor(alive.length / 2), 4);
+  const n = Math.min(1 + Math.floor(alive.length / 3), 3);
   const picked = [...alive].sort(() => Math.random() - 0.5).slice(0, n);
   const list = [];
   for (const e of picked) {
@@ -1993,14 +1993,14 @@ function bossTick() {
     if (target) {
       const st = target.p.state;
       const d = Math.hypot(st.x - b.x, st.y - b.y);
-      // 리드 추격 : 목표의 예상 위치를 조준 (꽁무니 쫓기 대신 앞질러 도는 곡선)
-      const lead = Math.min(0.5, d / Math.max(400, BOSS_SPEED * enr));
+      // 리드 추격 : 목표의 예상 위치를 "살짝만" 조준 — 과하면 도주 방향을 미리 막아 사기처럼 느껴진다
+      const lead = Math.min(0.28, d / Math.max(400, BOSS_SPEED * enr) * 0.55);
       // 코앞(<=130px)에선 조준 갱신 정지 — 표적 각이 요동쳐 제자리에서 맴도는 것 방지
       if (d > 130) b.aimAngle = Math.atan2(st.y + (st.vy || 0) * lead - b.y, st.x + (st.vx || 0) * lead - b.x);
       wantAngle = (b.aimAngle != null) ? b.aimAngle : b.angle;
-      // 급코너일수록 감속해 돌고, 정렬되면 풀스피드 (최저 25%)
+      // 급코너일수록 감속해 돌고, 정렬되면 풀스피드 (최저 18%) — 급턴 따돌리기가 통하는 여지
       const align = Math.max(0, Math.cos(wrapA(wantAngle - b.angle)));
-      wantSpeed = BOSS_SPEED * enr * (0.25 + 0.75 * align);
+      wantSpeed = BOSS_SPEED * enr * (0.18 + 0.82 * align);
 
       // 스킬 판단 (타이어는 추격 중에도 병행)
       if (now >= b.cds.tire) { bossThrowTires(b, now); b.cds.tire = now + TIRE_CD * cdScale; }
