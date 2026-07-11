@@ -1687,7 +1687,7 @@ const BOSS_RESPAWN_MS = 2500;
 const BOSS_HL = 95, BOSS_HW = 68; // 차체 히트박스 OBB 반길이/반폭 (시각 크기와 일치)
 const BOSS_SPEED = 1330;          // 추격 최고 속도 (플레이어 최고속 2667px/s 의 ~50%)
 // 트럭 운동 모델 : 가감속 + 속도에 따라 조향 반경이 커진다 (저속 민첩, 고속 둔중)
-const BOSS_ACCEL = 1500;          // 가속 (px/s^2)
+const BOSS_ACCEL = 800;           // 가속 (px/s^2) — 0→최고속 약 1.7초, 출발이 묵직해 초반 도망 여유
 const BOSS_DECEL = 2400;          // 감속 (px/s^2)
 const BOSS_TURN_LO = 3.2;         // 저속 조향 속도 (rad/s)
 const BOSS_TURN_HI = 1.4;         // 최고속 조향 속도 (rad/s) — 급턴으로 따돌릴 수 있게 넉넉한 반경
