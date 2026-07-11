@@ -1930,9 +1930,11 @@ function drawGround() {
  * ========================================================================== */
 const BOSS_EID = 0;                 // 스냅샷 상의 보스 엔티티 id
 const BOSS_DRAW_SCALE = 0.68;       // 스프라이트(±160) → 월드 크기 (길이 약 218px)
-const BOSS_CLI_PILLARS = [          // 서버 BOSS_PILLARS 와 동일해야 함
-  { x: 850, y: 650, r: 90 }, { x: 2550, y: 650, r: 90 },
-  { x: 850, y: 1950, r: 90 }, { x: 2550, y: 1950, r: 90 },
+const BOSS_CLI_PILLARS = [          // 서버 BOSS_PILLARS 와 동일해야 함 (콜로세움 : 타원 링 8개)
+  { x: 2633, y: 1591, r: 84 }, { x: 2087, y: 2002, r: 84 },
+  { x: 1314, y: 2002, r: 84 }, { x: 767, y: 1591, r: 84 },
+  { x: 767, y: 1009, r: 84 }, { x: 1314, y: 598, r: 84 },
+  { x: 2087, y: 598, r: 84 }, { x: 2633, y: 1009, r: 84 },
 ];
 
 const bossCli = {
@@ -2041,19 +2043,78 @@ function updateBossFx(dt) {
   while (fx.slams.length && pn - fx.slams[0].at > 600) fx.slams.shift();
 }
 
-/* ---- 아레나 바닥 : 웜 화이트 + 격자 + 경계 벽 + 기둥 ---- */
+/* ---- 아레나 바닥 : 몬스터 트럭 랠리장 ----
+ *  다진 흙빛 베이스 + 흙 패치 + 흰 페인트 경기장 마킹(외곽 라인/중앙 서클/코너 아크/
+ *  스폰 패드) + 타이어 자국 데칼 + 코랄 소환 서클. 전부 플랫 단색 (기존 결 유지). */
+const BOSS_DIRT_PATCHES = [ // 시드 고정 흙 패치 (x, y, rx, ry, 회전)
+  [700, 500, 340, 200, 0.4], [2600, 700, 420, 240, -0.3], [1500, 1750, 380, 220, 0.2],
+  [2800, 1900, 300, 190, 0.7], [500, 1600, 320, 180, -0.5], [1900, 400, 280, 170, 0.9],
+];
+const BOSS_SKID_DECALS = [ // 타이어 자국 아크 (x, y, r, 시작각, 끝각)
+  [1200, 900, 380, 0.4, 1.6], [2300, 1500, 430, 2.9, 4.2], [1750, 2050, 320, -0.6, 0.8], [800, 2100, 300, 4.4, 5.6],
+];
+const BOSS_SPAWN_PADS = [[500, 450], [2900, 450], [500, 2150], [2900, 2150]]; // 서버 스폰 코너와 동일
 function drawBossGround() {
   const W = world.w, H = world.h;
-  ctx.fillStyle = PALETTE.bg;
+  ctx.fillStyle = "#f5eee0"; // 다진 흙
   ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#eee4d0"; // 흙 패치
+  for (const [x, y, rx, ry, a] of BOSS_DIRT_PATCHES) {
+    ctx.beginPath();
+    ctx.ellipse(x, y, rx, ry, a, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // 은은한 격자 (속도감 기준선) — 뷰포트 구간만
   const gx = W / Math.round(W / 56), gy = H / Math.round(H / 56);
-  ctx.strokeStyle = PALETTE.grid;
+  const vx0 = Math.max(0, camera.x), vx1 = Math.min(W, camera.x + viewW / camera.zoom);
+  const vy0 = Math.max(0, camera.y), vy1 = Math.min(H, camera.y + viewH / camera.zoom);
+  ctx.strokeStyle = "#ece1cb";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  for (let i = 0; i <= Math.round(W / gx); i++) { const x = i * gx; ctx.moveTo(x, 0); ctx.lineTo(x, H); }
-  for (let j = 0; j <= Math.round(H / gy); j++) { const y = j * gy; ctx.moveTo(0, y); ctx.lineTo(W, y); }
+  for (let i = Math.max(0, Math.floor(vx0 / gx)); i <= Math.min(Math.round(W / gx), Math.ceil(vx1 / gx)); i++) {
+    const x = i * gx; ctx.moveTo(x, vy0); ctx.lineTo(x, vy1);
+  }
+  for (let j = Math.max(0, Math.floor(vy0 / gy)); j <= Math.min(Math.round(H / gy), Math.ceil(vy1 / gy)); j++) {
+    const y = j * gy; ctx.moveTo(vx0, y); ctx.lineTo(vx1, y);
+  }
   ctx.stroke();
-  // 경계 : 로비와 동일 — 벽 프레임 없이 격자가 끝나는 곳이 경계 (충돌은 그대로)
+  // 타이어 자국 데칼 : 두 줄 아크 (보스가 휩쓸고 다닌 흔적)
+  ctx.strokeStyle = "rgba(58,58,58,0.07)";
+  ctx.lineCap = "round";
+  ctx.lineWidth = 20;
+  for (const [x, y, r, a0, a1] of BOSS_SKID_DECALS) {
+    for (const off of [-16, 16]) {
+      ctx.beginPath();
+      ctx.arc(x, y, r + off, a0, a1);
+      ctx.stroke();
+    }
+  }
+  // 흰 페인트 마킹 : 외곽 인셋 라인 + 중앙 서클 + 코너 쿼터 아크 + 스폰 패드
+  ctx.strokeStyle = "rgba(255,255,255,0.85)";
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.lineWidth = 14;
+  ctx.strokeRect(70, 70, W - 140, H - 140);
+  ctx.lineWidth = 10;
+  ctx.beginPath(); ctx.arc(1700, 1300, 430, 0, Math.PI * 2); ctx.stroke(); // 중앙 서클
+  ctx.beginPath(); ctx.arc(1700, 1300, 16, 0, Math.PI * 2); ctx.fill();
+  ctx.lineWidth = 12;
+  for (const [ax, ay, a0] of [[70, 70, 0], [W - 70, 70, Math.PI / 2], [W - 70, H - 70, Math.PI], [70, H - 70, -Math.PI / 2]]) {
+    ctx.beginPath(); ctx.arc(ax, ay, 260, a0, a0 + Math.PI / 2); ctx.stroke(); // 코너 쿼터 아크
+  }
+  for (const [px, py] of BOSS_SPAWN_PADS) {
+    ctx.lineWidth = 12;
+    ctx.beginPath(); ctx.roundRect(px - 90, py - 90, 180, 180, 40); ctx.stroke();
+    ctx.beginPath(); ctx.arc(px, py, 14, 0, Math.PI * 2); ctx.fill();
+  }
+  // 소환 서클 : 보스 진입/대기 지점 (코랄 점선 링)
+  ctx.strokeStyle = "rgba(232,96,76,0.5)";
+  ctx.lineWidth = 14;
+  ctx.setLineDash([60, 40]);
+  ctx.beginPath(); ctx.arc(1700, 832, 210, 0, Math.PI * 2); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.strokeStyle = "rgba(232,96,76,0.3)";
+  ctx.lineWidth = 8;
+  ctx.beginPath(); ctx.arc(1700, 832, 140, 0, Math.PI * 2); ctx.stroke();
   // 기둥 : 플랫 그림자 + 잉크 원판 + 안쪽 링
   for (const p of BOSS_CLI_PILLARS) {
     ctx.fillStyle = PALETTE.gateShadow;
@@ -3602,10 +3663,10 @@ function drawBossMinimap(car) {
 
   mctx.clearRect(0, 0, size, size);
 
-  // 아레나 (기존 UI 결 : 흰 면 + 1px 테두리)
-  mctx.fillStyle = "#ffffff";
+  // 아레나 (랠리장 흙빛 + 1px 테두리)
+  mctx.fillStyle = "#f5eee0";
   mctx.fillRect(ox, oy, world.w * scale, world.h * scale);
-  mctx.strokeStyle = "#ece8df";
+  mctx.strokeStyle = "#e0d6c2";
   mctx.lineWidth = 1;
   mctx.strokeRect(ox, oy, world.w * scale, world.h * scale);
 
