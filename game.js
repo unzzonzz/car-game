@@ -1294,13 +1294,18 @@ function updatePhysics(car, dt) {
  *  두 모드 모두 맵 밖으로 못 나가게 차체를 벽 안쪽에 가둔다(죽음 없음). */
 let lastWallSfx = 0; // 벽 충돌음 쿨다운(연속 마찰 시 스팸 방지)
 function updateCollision(car) {
-  const half = car.length / 2;
+  // 시각 차체(OBB)와 일치하는 회전 반영 반경 — 예전 car.length/2 원형 근사는
+  //  머리부터 박을 때 차 앞코가 벽/요소에 파고들어 보였다.
+  const { hl, hw } = carHalfExtents(car);
+  const acos = Math.abs(Math.cos(car.angle)), asin = Math.abs(Math.sin(car.angle));
+  const halfX = hl * acos + hw * asin; // 차 OBB 의 X축 투영 반경
+  const halfY = hl * asin + hw * acos;
   const preSpeed = Math.hypot(car.vx, car.vy); // 충돌 전 속도(효과음 판단용)
   let hit = false;
-  if (car.x < half) { car.x = half; car.vx = 0; hit = true; }
-  if (car.x > world.w - half) { car.x = world.w - half; car.vx = 0; hit = true; }
-  if (car.y < half) { car.y = half; car.vy = 0; hit = true; }
-  if (car.y > world.h - half) { car.y = world.h - half; car.vy = 0; hit = true; }
+  if (car.x < halfX) { car.x = halfX; car.vx = 0; hit = true; }
+  if (car.x > world.w - halfX) { car.x = world.w - halfX; car.vx = 0; hit = true; }
+  if (car.y < halfY) { car.y = halfY; car.vy = 0; hit = true; }
+  if (car.y > world.h - halfY) { car.y = world.h - halfY; car.vy = 0; hit = true; }
   if (hit) {
     decompose(car); // 벽에 흡수된 속도를 차체 성분에 반영
     const now = performance.now();
@@ -2066,17 +2071,32 @@ function drawBossGround() {
   }
 }
 
-// 기둥 충돌 : 차를 원 밖으로 밀어내고 radial 속도 성분 제거 (벽과 동일한 감각)
+// 기둥 충돌 : 시각 차체(OBB)의 최근접점 기준 원 충돌 — 어느 각도로 박아도
+//  차 가장자리가 기둥에 파고들지 않고 딱 맞닿는다.
 function bossPillarCollision(car) {
+  const { hl, hw } = carHalfExtents(car);
+  const cos = Math.cos(car.angle), sin = Math.sin(car.angle);
   for (const p of BOSS_CLI_PILLARS) {
-    const dx = car.x - p.x, dy = car.y - p.y;
-    const d = Math.hypot(dx, dy), min = p.r + car.length / 2 - 6;
-    if (d < min && d > 0.001) {
-      const ux = dx / d, uy = dy / d;
-      car.x = p.x + ux * min; car.y = p.y + uy * min;
-      const vr = car.vx * ux + car.vy * uy; // 기둥 방향 속도 성분
-      if (vr < 0) { car.vx -= vr * ux; car.vy -= vr * uy; decompose(car); }
+    // 기둥 중심을 차 로컬 좌표로 → OBB 내 최근접점
+    const dx = p.x - car.x, dy = p.y - car.y;
+    const lx = dx * cos + dy * sin, ly = -dx * sin + dy * cos;
+    const nx = clamp(lx, -hl, hl), ny = clamp(ly, -hw, hw);
+    let ddx = lx - nx, ddy = ly - ny; // 최근접점 → 기둥 중심 (로컬)
+    const d = Math.hypot(ddx, ddy);
+    if (d >= p.r) continue;
+    let ux, uy;
+    if (d < 0.001) { // 기둥 중심이 차체 안 (드묾) : 차 중심 기준으로 밀어냄
+      const dd = Math.hypot(dx, dy) || 1;
+      ux = -dx / dd; uy = -dy / dd;
+    } else {       // 로컬 방향 → 월드 방향, 기둥 반대쪽으로
+      const wx = ddx * cos - ddy * sin, wy = ddx * sin + ddy * cos;
+      const n = Math.hypot(wx, wy);
+      ux = -wx / n; uy = -wy / n;
     }
+    const push = p.r - d;
+    car.x += ux * push; car.y += uy * push;
+    const vr = car.vx * ux + car.vy * uy; // 기둥 쪽 속도 성분 제거
+    if (vr < 0) { car.vx -= vr * ux; car.vy -= vr * uy; decompose(car); }
   }
 }
 
@@ -2488,14 +2508,12 @@ function drawBossHud() {
   const pn = performance.now();
   const cx = viewW / 2;
 
-  // 카드 헬퍼 : 흰 면 + 얇은 테두리 (기존 HUD 결)
+  // 카드 헬퍼 : 흰 면 + 1px 테두리, 그림자 없음 (기존 UI 결)
   const card = (x, y, w, h) => {
-    ctx.fillStyle = "rgba(58,54,46,0.10)";
-    ctx.beginPath(); ctx.roundRect(x + 3, y + 5, w, h, 16); ctx.fill();
     ctx.fillStyle = "#ffffff";
     ctx.beginPath(); ctx.roundRect(x, y, w, h, 16); ctx.fill();
     ctx.strokeStyle = "#ece8df";
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 1;
     ctx.beginPath(); ctx.roundRect(x, y, w, h, 16); ctx.stroke();
   };
   ctx.textAlign = "center";
