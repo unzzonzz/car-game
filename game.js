@@ -4171,12 +4171,15 @@ function connect() {
     } else if (msg.type === "friendError") {
       addChatLine("시스템", msg.reason || "친구 요청을 처리하지 못했습니다.", "#e8604c", Date.now());
     } else if (msg.type === "friendEvent") {
-      // 실시간 알림 : 신청 받음 / 내 신청이 수락됨 (친구 아이콘 배지 갱신)
+      // 실시간 알림 : 신청 받음 / 내 신청이 수락됨 (친구 아이콘 배지 갱신) / 친구 접속·종료
       if (msg.kind === "req") {
         account.friendReqCount = (account.friendReqCount || 0) + 1;
         addChatLine("시스템", `${msg.nickname}님이 친구 신청을 보냈습니다.`, "#7a756b", Date.now());
       } else if (msg.kind === "accept") {
         addChatLine("시스템", `${msg.nickname}님이 친구 신청을 수락했습니다.`, "#7a756b", Date.now());
+      } else if (msg.kind === "online" || msg.kind === "offline") {
+        // 친구 로그에만 조용히 (귓속말 아님 → 탭 알림 점은 안 켠다)
+        addChatLine("시스템", `${msg.nickname}님이 ${msg.kind === "online" ? "접속했습니다." : "오프라인이 되었습니다."}`, "#7a756b", Date.now(), true);
       }
       updateFriendUI();
     } else if (msg.type === "kicked") {

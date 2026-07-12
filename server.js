@@ -274,6 +274,8 @@ function loginPlayer(p, userId) {
   // 최근 친구 귓속말 재전송 (오프라인 동안 받은 것 포함) — authOk 다음에 보내 클라가 내 계정을 아는 상태로 처리
   const dms = dmHistory[userId];
   if (dms && dms.length) send(p, { type: "chatHistory", scope: "friends", messages: dms });
+  // 이 계정의 첫 접속이면 친구들에게 접속 알림 (두 번째 탭 로그인은 조용히)
+  if (connsOf(userId).length === 1) notifyFriendsPresence(userId, true);
 }
 
 // 접속 시간을 평생 누적(user.totalTime)에 반영하고 기준시각 리셋
@@ -579,11 +581,13 @@ wss.on("connection", (ws) => {
 
     } else if (msg.type === "logout") {
       flushConnectedTime(p); // 지금까지의 접속 시간 누적 반영
+      const outUid = p.account ? p.account.userId : null;
       if (p.account) {
         const u = users[p.account.userId];
         if (u && u.token) { tokens.delete(u.token); u.token = undefined; persistUser(p.account.userId); } // 토큰 무효화
       }
       p.account = null; p.isAdmin = false; p.loginAt = 0;
+      if (outUid && connsOf(outUid).length === 0) notifyFriendsPresence(outUid, false); // 마지막 세션 로그아웃 → 종료 알림
       return;
 
     } else if (msg.type === "changePassword") {
@@ -914,6 +918,8 @@ wss.on("connection", (ws) => {
       if (pc.mode === "pro" && pc.active && pc.roomId != null) leaveRoom(id, pc);
     }
     players.delete(id);
+    // 이 계정의 마지막 접속이 끊겼으면 친구들에게 종료 알림 (다른 탭이 남아 있으면 조용히)
+    if (pc && pc.account && connsOf(pc.account.userId).length === 0) notifyFriendsPresence(pc.account.userId, false);
     console.log(`[-] player ${id} disconnected (total ${players.size})`);
   });
 
@@ -1417,6 +1423,19 @@ function connsOf(userId) {
   const out = [];
   for (const [, q] of players) if (q.account && q.account.userId === userId) out.push(q);
   return out;
+}
+
+// 친구 접속/종료 알림 : 같은 계정의 첫 접속(0→1)·마지막 종료(1→0)에만 온라인 친구들에게 보낸다.
+//  (탭 두 개 중 하나만 닫는 건 종료가 아님 — connsOf 로 남은 접속 수를 세서 판단)
+function notifyFriendsPresence(userId, online) {
+  const u = users[userId];
+  if (!u) return;
+  for (const fid of friendsOf(u)) {
+    for (const q of connsOf(fid)) {
+      send(q, { type: "friendEvent", kind: online ? "online" : "offline", nickname: u.nickname || userId });
+      sendFriendsInfo(q); // 친구 패널/귓속말 대상 메뉴의 온라인 점 즉시 갱신
+    }
+  }
 }
 
 // --- 친구 귓속말 최근 대화 (계정별 50개) : 로그인 시 재전송 → 오프라인 수신도 다음 접속 때 보인다
