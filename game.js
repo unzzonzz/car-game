@@ -4045,12 +4045,23 @@ function connect() {
       // 채팅 수신 → 로그에 추가 (관리자는 금색 이름, 친구 채팅은 친구 탭 로그로)
       //  귓속말(dm)은 방향이 보이게 "나 → 철수" / "철수 → 나" 로 표시
       let dispName = msg.name;
-      if (msg.friend && msg.dm) dispName = msg.id === net.id ? `나 → ${msg.to}` : `${msg.name} → 나`;
+      if (msg.friend && msg.dm) {
+        // 내가 보낸 것인지는 계정 id(fromUid)로 판별 — 접속(net.id)은 탭마다 달라 다중 접속에서 틀린다
+        const mine = msg.fromUid ? msg.fromUid === account.userId : msg.id === net.id;
+        dispName = mine ? `나 → ${msg.to}` : `${msg.name} → 나`;
+      }
       addChatLine(dispName, msg.text, msg.admin ? GOLD : colorForId(msg.id), msg.t, !!msg.friend);
       if (msg.friend && chatScope !== "friends") document.getElementById("chatTabFrDot").classList.add("show"); // 새 친구 메시지 점
     } else if (msg.type === "chatHistory") {
-      // 접속 직후 받은 최근 채팅 (페이지당 1회만 적용 → 재접속 중복 방지)
-      if (!chatHistoryLoaded) {
+      if (msg.scope === "friends") {
+        // 로그인 시 최근 친구 귓속말 복원 — 재로그인 중복 방지를 위해 비우고 다시 채운다
+        document.getElementById("chatLogFriends").innerHTML = "";
+        for (const m of (msg.messages || [])) {
+          const mine = m.fromUid === account.userId;
+          addChatLine(mine ? `나 → ${m.to}` : `${m.name} → 나`, m.text, m.admin ? GOLD : colorForId(m.id), m.t, true);
+        }
+      } else if (!chatHistoryLoaded) {
+        // 접속 직후 받은 최근 전체 채팅 (페이지당 1회만 적용 → 재접속 중복 방지)
         chatHistoryLoaded = true;
         for (const m of (msg.messages || [])) {
           addChatLine(m.name, m.text, m.admin ? GOLD : colorForId(m.id), m.t);
@@ -5812,6 +5823,7 @@ function sendLogout() {
   applySkinOwnership(); // 우주 스킨 스와치 제거 + 쓰던 중이면 기본색 복구
   account.friendsCount = 0; account.friendReqCount = 0;
   friendsCache = []; setChatTarget(null);
+  document.getElementById("chatLogFriends").innerHTML = ""; // 공용 PC 대비 : 귓속말 기록 지움
   updateFriendUI();
   hideFriendsModal(); hidePlayerInfo(); // 친구 UI 정리 (게스트는 사용 불가)
   // 로그아웃 즉시 게스트 이름으로 전환 (저장된 게스트 이름 있으면 그것, 없으면 "게스트")

@@ -271,6 +271,9 @@ function loginPlayer(p, userId) {
     friendsCount: Array.isArray(u.friends) ? u.friends.length : 0, // 채팅 친구 탭 표시 여부
     friendReqCount: Array.isArray(u.friendReqs) ? u.friendReqs.length : 0, // 친구 아이콘 배지
   });
+  // 최근 친구 귓속말 재전송 (오프라인 동안 받은 것 포함) — authOk 다음에 보내 클라가 내 계정을 아는 상태로 처리
+  const dms = dmHistory[userId];
+  if (dms && dms.length) send(p, { type: "chatHistory", scope: "friends", messages: dms });
 }
 
 // 접속 시간을 평생 누적(user.totalTime)에 반영하고 기준시각 리셋
@@ -736,15 +739,18 @@ wss.on("connection", (ws) => {
       //  전체 히스토리엔 안 남고, 관리 로그(chat-log.jsonl)엔 [친구→닉] 접두어로 기록.
       if (msg.scope === "friends") {
         if (!p.account || !users[p.account.userId]) return;
-        const fr = friendsOf(users[p.account.userId]);
+        const me = p.account.userId;
+        const fr = friendsOf(users[me]);
         const toId = typeof msg.to === "string" && msg.to ? msg.to : null;
         if (!toId || !fr.includes(toId) || !users[toId]) return; // 대상 없음/비친구 → 무시
         const toNick = users[toId].nickname || toId;
-        const fm = { type: "chat", id, name: p.account.nickname, text, t: Date.now(), admin: !!p.isAdmin, friend: true, dm: true, to: toNick };
-        send(p, fm); // 본인 에코
-        const oq = onlineOf(toId);
-        if (oq) send(oq, fm);
-        else send(p, { type: "chat", id: 0, name: "시스템", text: `${toNick}님이 오프라인이라 지금은 전달되지 않았습니다.`, t: Date.now(), friend: true });
+        const fm = { type: "chat", id, name: p.account.nickname, text, t: Date.now(), admin: !!p.isAdmin, friend: true, dm: true, to: toNick, fromUid: me };
+        pushDmHistory(me, fm);
+        pushDmHistory(toId, fm); // 오프라인이어도 쌓아둔다 → 다음 로그인 때 최근 대화로 수신
+        for (const q of connsOf(me)) send(q, fm); // 본인 에코 (모든 내 접속)
+        const conns = connsOf(toId);
+        for (const q of conns) send(q, fm);
+        if (!conns.length) send(p, { type: "chat", id: 0, name: "시스템", text: `${toNick}님이 지금은 오프라인이에요. 접속하면 최근 대화로 전달됩니다.`, t: Date.now(), friend: true });
         logChat(p, p.account.nickname, `[친구→${toNick}] ` + text, fm.t, fm.admin);
         return;
       }
@@ -1404,6 +1410,42 @@ function reqsOf(u) { if (!Array.isArray(u.friendReqs)) u.friendReqs = []; return
 function onlineOf(userId) {
   for (const [, q] of players) if (q.account && q.account.userId === userId) return q;
   return null;
+}
+// 같은 계정의 모든 접속 (자동 로그인 토큰 때문에 옛 탭이 남아 다중 접속이 흔하다.
+//  귓속말을 첫 연결에만 보내면 "보고 있는 탭"엔 안 오는 버그가 되므로 전부에 보낸다)
+function connsOf(userId) {
+  const out = [];
+  for (const [, q] of players) if (q.account && q.account.userId === userId) out.push(q);
+  return out;
+}
+
+// --- 친구 귓속말 최근 대화 (계정별 20개) : 로그인 시 재전송 → 오프라인 수신도 다음 접속 때 보인다
+const DM_HISTORY_MAX = 20;
+const dmHistory = {}; // userId -> [{name,text,t,admin,to,fromUid,...}]
+function pushDmHistory(uid, fm) {
+  const arr = dmHistory[uid] || (dmHistory[uid] = []);
+  arr.push(fm);
+  if (arr.length > DM_HISTORY_MAX) arr.shift();
+}
+// 서버 재시작으로 메모리가 비어도 최근 대화가 보이게 chat-log.jsonl 꼬리에서 복원.
+//  수신자는 로그의 "[친구→닉]" 닉네임으로 역추적한다 (닉변 이전 기록은 유실될 수 있음 — 허용).
+function prewarmDmHistory() {
+  try {
+    if (!fs.existsSync(CHAT_LOG_FILE)) return;
+    const nick2uid = {};
+    for (const uid in users) nick2uid[String(users[uid].nickname || "").toLowerCase()] = uid;
+    const lines = fs.readFileSync(CHAT_LOG_FILE, "utf8").split("\n").slice(-4000);
+    for (const line of lines) {
+      if (!line) continue;
+      let e; try { e = JSON.parse(line); } catch { continue; }
+      const m = typeof e.text === "string" && e.uid ? e.text.match(/^\[친구→([^\]]+)\] /) : null;
+      if (!m || !users[e.uid]) continue;
+      const fm = { type: "chat", id: 0, name: e.name, text: e.text.slice(m[0].length), t: e.t, admin: !!e.admin, friend: true, dm: true, to: m[1], fromUid: e.uid };
+      pushDmHistory(e.uid, fm);
+      const toId = nick2uid[m[1].toLowerCase()];
+      if (toId && toId !== e.uid) pushDmHistory(toId, fm);
+    }
+  } catch (e) { console.error("[dm-history]", e.message); }
 }
 // 친구 패널 데이터 : 친구(온라인/활동) + 받은 신청 + 보낸 신청
 function sendFriendsInfo(p) {
@@ -2405,6 +2447,7 @@ setInterval(() => {
 // 계정 캐시를 적재하고 토큰 인덱스를 구성한 뒤 서버를 연다
 hydrateUsers().then(() => {
   rebuildTokens();
+  prewarmDmHistory(); // 재시작 후에도 로그인 시 최근 친구 대화가 보이게 (닉네임 맵이 필요해 계정 적재 뒤에)
   server.listen(PORT, () => {
     console.log(`Car game server running at http://localhost:${PORT} (storage: ${useRedis ? "Upstash Redis" : "files"})`);
   });
