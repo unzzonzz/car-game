@@ -4512,8 +4512,9 @@ let chatScope = "all"; // "all" | "friends"
 let friendsRefreshTimer = null;
 let piCurrent = null; // 열려있는 프로필 팝업 대상 { pid, uid, rel }
 
-// 채팅 탭/배지 표시 상태 갱신 (로그인 + 친구 1명 이상 → 탭 표시)
+// 친구 UI 표시 상태 갱신 : 아이콘은 로그인 시에만, 탭은 로그인 + 친구 1명 이상
 function updateFriendUI() {
+  document.getElementById("lobFriends").style.display = account.loggedIn ? "" : "none";
   const has = account.loggedIn && (account.friendsCount || 0) > 0;
   document.body.classList.toggle("has-friends", has);
   if (!has && chatScope === "friends") setChatScope("all");
@@ -6000,9 +6001,10 @@ function setupAuth() {
     if (e.target.id === "playerModal") { SFX.click(); hidePlayerInfo(); }
   });
   document.getElementById("lobFriends").addEventListener("click", () => {
-    if (!account.loggedIn) { showAuthModal(); return; } // 친구는 계정 기능
+    if (!account.loggedIn) return; // 비로그인 땐 아이콘 자체가 숨겨짐
     showFriendsModal();
   });
+  updateFriendUI(); // 초기 상태 : 비로그인 → 친구 아이콘 숨김
   document.getElementById("frClose").addEventListener("click", hideFriendsModal);
   document.getElementById("friendsModal").addEventListener("pointerdown", (e) => {
     if (e.target.id === "friendsModal") { SFX.click(); hideFriendsModal(); }
