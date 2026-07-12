@@ -4501,8 +4501,9 @@ function sendChat() {
   if (net.connected && net.ws.readyState === WebSocket.OPEN) {
     const payload = { type: "chat", text, name: currentName() };
     if (chatScope === "friends") {
+      if (!chatTargetId) return; // 친구 채팅은 개별 대화만 — 대상 없으면 전송 안 함
       payload.scope = "friends";
-      if (chatTargetId) payload.to = chatTargetId; // 선택한 친구에게만 (귓속말)
+      payload.to = chatTargetId;
     }
     net.ws.send(JSON.stringify(payload));
   }
@@ -4538,15 +4539,16 @@ function setChatScope(scope) {
   log.scrollTop = log.scrollHeight;
 }
 
-/* ---- 친구 탭 귓속말 대상 선택 (전체 / 친구 개인) ---- */
-let chatTargetId = null;   // null = 친구 전체 채널
+/* ---- 친구 탭 대상 선택 : 친구 개별 채팅(귓속말) 전용 ---- */
+let chatTargetId = null;   // 현재 대화 상대 (친구 userId)
 let friendsCache = [];     // 최근 friendsInfo 의 친구 목록 (메뉴/대상 검증용)
+// 라벨만 갱신 — 메뉴 닫기는 "사용자가 선택한 순간"에만 한다
+//  (friendsInfo 자동 갱신이 이 함수를 부르는데, 여기서 닫으면 메뉴가 열리자마자 꺼진다)
 function setChatTarget(id, name) {
   chatTargetId = id || null;
   const pill = document.getElementById("chatTarget");
-  pill.textContent = chatTargetId ? name : "전체";
-  pill.title = chatTargetId ? `${name}님에게만 보이는 귓속말` : "친구 전체에게 전송";
-  hideChatTargetMenu();
+  pill.textContent = chatTargetId ? name : "-";
+  pill.title = chatTargetId ? `${name}님과의 1:1 채팅` : "친구 없음";
 }
 function hideChatTargetMenu() {
   document.getElementById("chatTargetMenu").classList.remove("show");
@@ -4561,22 +4563,17 @@ function toggleChatTargetMenu() {
 function renderChatTargetMenu() {
   const menu = document.getElementById("chatTargetMenu");
   menu.innerHTML = "";
-  const mk = (id, name, online, isAll) => {
+  for (const f of friendsCache) {
     const b = document.createElement("button");
-    b.className = "ct-row" + ((id || null) === chatTargetId ? " on" : "");
-    if (!isAll) {
-      const st = document.createElement("span");
-      st.className = "fr-status" + (online ? " on" : "");
-      b.appendChild(st);
-    }
+    b.className = "ct-row" + (f.id === chatTargetId ? " on" : "");
+    const st = document.createElement("span");
+    st.className = "fr-status" + (f.online ? " on" : "");
     const t = document.createElement("span");
-    t.textContent = isAll ? "친구 전체" : name;
-    b.appendChild(t);
-    b.addEventListener("click", () => { SFX.click(); setChatTarget(id, name); });
-    return b;
-  };
-  menu.appendChild(mk(null, "전체", true, true));
-  for (const f of friendsCache) menu.appendChild(mk(f.id, f.nickname, f.online, false));
+    t.textContent = f.nickname;
+    b.append(st, t);
+    b.addEventListener("click", () => { SFX.click(); setChatTarget(f.id, f.nickname); hideChatTargetMenu(); });
+    menu.appendChild(b);
+  }
 }
 
 /* ---- 상대 프로필 팝업 (차량 클릭) ---- */
@@ -4670,12 +4667,13 @@ function renderFriendsInfo(msg) {
   account.friendsCount = (msg.friends || []).length;
   account.friendReqCount = (msg.incoming || []).length;
   updateFriendUI();
-  // 귓속말 대상 캐시 갱신 + 대상이 친구 목록에서 사라졌으면 전체로 복귀
+  // 대상 캐시 갱신 : 현재 상대 유지(닉변 반영), 없어졌거나 미선택이면 첫 친구(온라인 우선) 자동 선택
   friendsCache = msg.friends || [];
-  if (chatTargetId) {
-    const cur = friendsCache.find((f) => f.id === chatTargetId);
-    if (!cur) setChatTarget(null);
-    else setChatTarget(cur.id, cur.nickname); // 닉변 반영
+  const cur = chatTargetId ? friendsCache.find((f) => f.id === chatTargetId) : null;
+  if (cur) setChatTarget(cur.id, cur.nickname);
+  else {
+    const first = friendsCache.find((f) => f.online) || friendsCache[0];
+    setChatTarget(first ? first.id : null, first ? first.nickname : "");
   }
   if (document.getElementById("chatTargetMenu").classList.contains("show")) renderChatTargetMenu();
   const nameEl = (n) => { const s = document.createElement("span"); s.className = "fr-name"; s.textContent = n; return s; };
