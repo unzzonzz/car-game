@@ -51,6 +51,10 @@
       <button id="lobDash" class="lob-btn" aria-label="대시보드">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 20v-8"/><path d="M12 20V5"/><path d="M19 20v-11"/></svg>
       </button>
+      <button id="lobFriends" class="lob-btn" aria-label="친구">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="7" r="4"/><path d="M2 21v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2"/><path d="M16 3.1a4 4 0 0 1 0 7.8"/><path d="M22 21v-2a4 4 0 0 0-3-3.85"/></svg>
+        <span id="lobFriendsDot" class="fr-dot"></span>
+      </button>
       <button id="lobRank" class="lob-btn" aria-label="랭킹">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10v5a5 5 0 0 1-10 0V4z"/><path d="M7 6H5a2 2 0 0 0 0 4h1"/><path d="M17 6h2a2 2 0 0 1 0 4h-1"/></svg>
       </button>
@@ -70,7 +74,12 @@
   <!-- 미니맵 하단 채팅창 (모든 모드 공유) -->
   <div id="chat">
     <div id="chatLog"></div>
+    <div id="chatLogFriends"></div>
     <div id="chatRow">
+      <div id="chatTabs">
+        <button id="chatTabAll" class="chat-tab on">전체</button>
+        <button id="chatTabFr" class="chat-tab">친구<span id="chatTabFrDot" class="fr-dot"></span></button>
+      </div>
       <input id="chatInput" type="text" maxlength="200" placeholder="채팅을 입력하세요." autocomplete="off" />
       <button id="chatSend">전송</button>
     </div>
@@ -251,6 +260,44 @@
       <div class="dash-row"><span>점수 변화</span><span id="rankResultDelta">-</span></div>
       <div class="dash-row"><span>현재 점수</span><span id="rankResultScore">-</span></div>
       <button id="rankResultClose" class="auth-btn auth-close">닫기</button>
+    </div>
+  </div>
+
+  <!-- 상대 플레이어 프로필 (차량 클릭) : 대시보드 + 친구 버튼 -->
+  <div id="playerModal">
+    <div class="dash-card">
+      <h2 id="piName">-</h2>
+      <div class="dash-row"><span>활동</span><span id="piActivity">-</span></div>
+      <div class="dash-row"><span>경쟁전 점수</span><span id="piRank">-</span></div>
+      <div class="dash-row"><span>경쟁전 전적</span><span id="piRecord">-</span></div>
+      <div class="dash-row"><span>보스전 최고 생존</span><span id="piBoss">-</span></div>
+      <div class="dash-row"><span>접속 시간</span><span id="piTime">-</span></div>
+      <button id="piFriendBtn" class="auth-btn">친구 추가</button>
+      <button id="piClose" class="auth-btn auth-close">닫기</button>
+    </div>
+  </div>
+
+  <!-- 친구 패널 : 받은 신청 / 친구 목록 / 보낸 신청 / 닉네임 신청 -->
+  <div id="friendsModal">
+    <div class="dash-card friends-card">
+      <h2>친구</h2>
+      <div class="fr-sec" id="frIncomingSec">
+        <div class="fr-sec-title">받은 신청</div>
+        <div id="frIncoming"></div>
+      </div>
+      <div class="fr-sec">
+        <div class="fr-sec-title">친구 목록</div>
+        <div id="frList"></div>
+      </div>
+      <div class="fr-sec" id="frOutgoingSec">
+        <div class="fr-sec-title">보낸 신청</div>
+        <div id="frOutgoing"></div>
+      </div>
+      <div id="frAddRow">
+        <input id="frAddInput" type="text" maxlength="12" placeholder="닉네임으로 친구 신청" autocomplete="off" />
+        <button id="frAddBtn">신청</button>
+      </div>
+      <button id="frClose" class="auth-btn auth-close">닫기</button>
     </div>
   </div>
 

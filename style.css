@@ -158,6 +158,65 @@ body:not(.lobby) #chatLog {
 body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 #chatLog::-webkit-scrollbar { width: 6px; }
 #chatLog::-webkit-scrollbar-thumb { background: var(--track); border-radius: 3px; }
+
+/* 친구 채팅 로그 : 전체 로그와 동일한 결 — 탭으로 표시 전환 */
+#chatLogFriends {
+  display: none;
+  flex-direction: column;
+  gap: 3px;
+  height: 180px;
+  overflow-y: auto;
+  padding: 0 9px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #6a655c;
+  font-family: 'Jua', sans-serif;
+  word-break: break-word;
+}
+#chatLogFriends::-webkit-scrollbar { width: 6px; }
+#chatLogFriends::-webkit-scrollbar-thumb { background: var(--track); border-radius: 3px; }
+body.chat-friends #chatLog { display: none; }
+body.chat-friends #chatLogFriends { display: flex; }
+body:not(.lobby) #chatLogFriends { height: 88px; font-size: 12px; padding: 0 8px; }
+body:not(.lobby).chat-friends .chat-msg:first-child { margin-top: auto; }
+
+/* 채팅 탭 (인풋 좌측) : 친구 1명 이상 + 로그인일 때만 표시 */
+#chatTabs {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  padding-left: 6px;
+}
+body.has-friends #chatTabs { display: flex; }
+.chat-tab {
+  position: relative;
+  border: 0;
+  background: transparent;
+  color: #9a948a;
+  font-family: 'Jua', sans-serif;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.chat-tab.on {
+  background: var(--ink, #3a3a3a);
+  color: #ffffff;
+}
+/* 새 메시지/신청 배지 점 */
+.fr-dot {
+  display: none;
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e8604c;
+}
+.fr-dot.show { display: block; }
+#lobFriends { position: relative; } /* 배지 점 기준 좌표 */
+#lobFriendsDot { top: 8px; right: 8px; }
 .chat-time { color: #cfc9bb; font-size: 10px; margin-right: 4px; }
 .chat-name { font-weight: 400; margin-right: 4px; }
 .chat-text { color: var(--text); }
@@ -702,6 +761,98 @@ body:not(.lobby) .chat-msg:first-child { margin-top: auto; }
 #rankResultOutcome.win { color: var(--green); }
 #rankResultOutcome.lose { color: var(--coral); }
 #rankResultOutcome.draw { color: var(--muted); } /* 중간 등수(점수 변동 0) */
+
+/* 상대 프로필 팝업 (차량 클릭) + 친구 패널 : 대시보드와 같은 오버레이 */
+#playerModal, #friendsModal {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(58, 54, 46, 0.28);
+  z-index: 46;
+}
+#playerModal.show, #friendsModal.show { display: flex; }
+#piFriendBtn[disabled] { opacity: 0.45; cursor: default; }
+.friends-card { max-height: min(560px, 86vh); overflow-y: auto; }
+.fr-sec { margin-top: 14px; text-align: left; }
+.fr-sec-title {
+  font-family: 'Jua', sans-serif;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.fr-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 2px;
+  border-bottom: 1px solid #f2efe8;
+  font-size: 14px;
+}
+.fr-row:last-child { border-bottom: 0; }
+.fr-status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d6d0c4;
+  flex: 0 0 auto;
+}
+.fr-status.on { background: #57b868; }
+.fr-name {
+  font-family: 'Jua', sans-serif;
+  color: var(--ink);
+  flex: 0 0 auto;
+}
+.fr-activity {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'Quicksand', 'Jua', sans-serif;
+}
+.fr-btn {
+  border: 1px solid #ece8df;
+  background: #ffffff;
+  color: var(--ink);
+  font-family: 'Jua', sans-serif;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.fr-btn.accent { background: var(--ink, #3a3a3a); color: #fff; border-color: var(--ink, #3a3a3a); }
+.fr-btn.danger { color: #e8604c; border-color: #f3d5cf; }
+.fr-empty { color: #b8b2a6; font-size: 12px; padding: 4px 2px; }
+#frAddRow {
+  display: flex;
+  gap: 6px;
+  margin-top: 18px;
+}
+#frAddRow input {
+  flex: 1;
+  border: 1px solid #ece8df;
+  border-radius: 999px;
+  padding: 9px 14px;
+  font-size: 13px;
+  font-family: 'Jua', sans-serif;
+  outline: none;
+  background: #fff;
+  color: var(--ink);
+}
+#frAddRow button {
+  border: 0;
+  background: var(--ink, #3a3a3a);
+  color: #fff;
+  font-family: 'Jua', sans-serif;
+  font-size: 13px;
+  padding: 0 16px;
+  border-radius: 999px;
+  cursor: pointer;
+}
 
 /* 이벤트 선물 팝업 : 랭크 결과와 같은 오버레이 + 운영자 메세지 인용 박스 */
 #giftModal {

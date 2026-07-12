@@ -268,6 +268,8 @@ function loginPlayer(p, userId) {
     rankWins: u.rankWins || 0, rankPlays: u.rankPlays || 0,           // 랭크전 전적
     gift: u.gift ? { msg: u.gift.msg } : null, // 미수령 이벤트 선물 → 접속 즉시 팝업
     spaceSkin: !!u.spaceSkin, // 우주 스킨 소유 (수령 완료) — 소유자만 차고 스와치 표시
+    friendsCount: Array.isArray(u.friends) ? u.friends.length : 0, // 채팅 친구 탭 표시 여부
+    friendReqCount: Array.isArray(u.friendReqs) ? u.friendReqs.length : 0, // 친구 아이콘 배지
   });
 }
 
@@ -730,6 +732,19 @@ wss.on("connection", (ws) => {
       if (p.isAdmin && text.startsWith("/차단")) { handleBanCommand(p, text, true); return; }      // 계정 차단(+접속 중이면 즉시 추방)
       // 관리자의 알 수 없는 /명령 은 공개 채팅에 새지 않게 삼킨다 (오타/구버전 명령 보호).
       if (p.isAdmin && text.startsWith("/")) { send(p, { type: "chat", id: 0, name: "시스템", text: `알 수 없는 명령어: ${text.split(/\s+/)[0]}`, t: Date.now() }); return; }
+      // 친구 채팅 : 로그인 + 친구에게만 전달 (본인 에코 포함). 전체 히스토리엔 안 남는다.
+      if (msg.scope === "friends") {
+        if (!p.account || !users[p.account.userId]) return;
+        const fr = friendsOf(users[p.account.userId]);
+        if (!fr.length) return;
+        const fm = { type: "chat", id, name: p.account.nickname, text, t: Date.now(), admin: !!p.isAdmin, friend: true };
+        send(p, fm);
+        for (const [, q] of players) {
+          if (q.account && fr.includes(q.account.userId) && q.ws.readyState === q.ws.OPEN) send(q, fm);
+        }
+        logChat(p, p.account.nickname, "[친구] " + text, fm.t, fm.admin); // 관리 로그에는 남긴다
+        return;
+      }
       const name = p.account ? p.account.nickname : (p.active ? p.name : sanitizeName(msg.name));
       const chatMsg = { type: "chat", id, name, text, t: Date.now(), admin: !!p.isAdmin };
       chatHistory.push(chatMsg);
@@ -763,6 +778,110 @@ wss.on("connection", (ws) => {
         sendStats(p);              // 대시보드 최고기록 갱신
         broadcastRecords(p.mode);  // 해당 모드 TOP10 갱신
       }
+
+    } else if (msg.type === "friendsInfo") {
+      // 친구 패널 데이터 요청
+      sendFriendsInfo(p);
+
+    } else if (msg.type === "friendReq") {
+      // 친구 신청 : pid(접속 id, 차량 클릭) 또는 name(닉네임, 패널 입력)
+      if (!p.account) { send(p, { type: "friendError", reason: "로그인 후 친구 신청을 할 수 있습니다." }); return; }
+      let targetId = null;
+      if (msg.pid != null) {
+        const q = players.get(Number(msg.pid));
+        if (!q) { send(p, { type: "friendError", reason: "상대를 찾을 수 없습니다." }); return; }
+        if (!q.account) { send(p, { type: "friendError", reason: "게스트에게는 친구 신청을 보낼 수 없습니다." }); return; }
+        targetId = q.account.userId;
+      } else if (typeof msg.name === "string" && msg.name.trim()) {
+        const matches = findUserIdsByName(msg.name.trim());
+        if (!matches.length) { send(p, { type: "friendError", reason: "없는 닉네임입니다." }); return; }
+        if (matches.length > 1) { send(p, { type: "friendError", reason: "같은 닉네임 계정이 여러 개입니다." }); return; }
+        targetId = matches[0];
+      }
+      const me = p.account.userId;
+      if (!targetId || !users[targetId]) { send(p, { type: "friendError", reason: "상대를 찾을 수 없습니다." }); return; }
+      if (targetId === me) { send(p, { type: "friendError", reason: "자기 자신에게는 보낼 수 없습니다." }); return; }
+      const mu = users[me], tu = users[targetId];
+      if (friendsOf(mu).includes(targetId)) { send(p, { type: "friendError", reason: "이미 친구입니다." }); return; }
+      if (reqsOf(mu).includes(targetId)) { acceptFriend(p, targetId); return; } // 맞신청 = 즉시 수락
+      if (reqsOf(tu).includes(me)) { send(p, { type: "friendError", reason: "이미 신청을 보냈습니다." }); return; }
+      tu.friendReqs.push(me);
+      persistUser(targetId);
+      send(p, { type: "friendOk", kind: "requested", id: targetId, nickname: tu.nickname || targetId });
+      sendFriendsInfo(p);
+      const oq = onlineOf(targetId);
+      if (oq) { send(oq, { type: "friendEvent", kind: "req", nickname: mu.nickname || me }); sendFriendsInfo(oq); }
+
+    } else if (msg.type === "friendAccept") {
+      acceptFriend(p, String(msg.id || ""));
+
+    } else if (msg.type === "friendDecline") {
+      // 받은 신청 거절
+      if (!p.account) return;
+      const mu = users[p.account.userId];
+      const i = reqsOf(mu).indexOf(String(msg.id || ""));
+      if (i >= 0) { mu.friendReqs.splice(i, 1); persistUser(p.account.userId); }
+      sendFriendsInfo(p);
+
+    } else if (msg.type === "friendCancel") {
+      // 보낸 신청 취소 : 상대의 받은 신청에서 나를 제거
+      if (!p.account) return;
+      const tid = String(msg.id || "");
+      const tu = users[tid];
+      if (tu) {
+        const i = reqsOf(tu).indexOf(p.account.userId);
+        if (i >= 0) {
+          tu.friendReqs.splice(i, 1);
+          persistUser(tid);
+          const oq = onlineOf(tid);
+          if (oq) sendFriendsInfo(oq);
+        }
+      }
+      sendFriendsInfo(p);
+
+    } else if (msg.type === "friendRemove") {
+      // 친구 삭제 (양쪽에서 제거)
+      if (!p.account) return;
+      const me = p.account.userId, tid = String(msg.id || "");
+      const mu = users[me], tu = users[tid];
+      let i = friendsOf(mu).indexOf(tid);
+      if (i >= 0) { mu.friends.splice(i, 1); persistUser(me); }
+      if (tu) {
+        i = friendsOf(tu).indexOf(me);
+        if (i >= 0) { tu.friends.splice(i, 1); persistUser(tid); }
+        const oq = onlineOf(tid);
+        if (oq) sendFriendsInfo(oq);
+      }
+      sendFriendsInfo(p);
+
+    } else if (msg.type === "playerInfo") {
+      // 차량 클릭 : 접속 id 로 상대 프로필 조회 (대시보드 + 친구 관계)
+      const q = players.get(Number(msg.pid));
+      if (!q) { send(p, { type: "playerInfo", missing: true }); return; }
+      const info = {
+        type: "playerInfo", pid: Number(msg.pid),
+        name: q.account ? q.account.nickname : (q.name || "게스트"),
+        guest: !q.account, admin: !!q.isAdmin, activity: activityOf(q),
+      };
+      if (q.account && users[q.account.userId]) {
+        const tu = users[q.account.userId];
+        info.uid = q.account.userId;
+        info.rankScore = rankScoreOf(tu);
+        info.rankWins = tu.rankWins || 0;
+        info.rankPlays = tu.rankPlays || 0;
+        info.bestBoss = tu.bestBoss || 0;
+        info.totalTime = (tu.totalTime || 0) + (q.loginAt ? Date.now() - q.loginAt : 0);
+        if (p.account && users[p.account.userId]) {
+          const me = p.account.userId, mu = users[p.account.userId];
+          info.rel = info.uid === me ? "self"
+            : friendsOf(mu).includes(info.uid) ? "friend"
+            : reqsOf(tu).includes(me) ? "outgoing"
+            : reqsOf(mu).includes(info.uid) ? "incoming" : "none";
+        } else {
+          info.rel = "guestme"; // 내가 게스트 → 친구 기능 사용 불가
+        }
+      }
+      send(p, info);
 
     } else if (msg.type === "claimGift") {
       // 이벤트 선물 수령 : 저장된 선물을 계정에 적용하고 제거 (수령 버튼을 눌러야 적용)
@@ -1272,6 +1391,51 @@ function activityOf(p) {
 
 // 게스트 표시 이름 : 기본 이름("게스트")이거나 이름이 없으면 "게스트" 한 번만 (— "게스트 게스트" 방지)
 function guestLabel(name) { return name && name !== "게스트" ? `게스트 ${name}` : "게스트"; }
+
+/* =============================================================================
+ *  친구 시스템 — 계정 간 친구/신청 (u.friends = 친구 id 목록, u.friendReqs = 받은 신청)
+ *  보낸 신청은 따로 저장하지 않고 "상대의 받은 신청에 내가 있는가"로 파생한다.
+ * ========================================================================== */
+function friendsOf(u) { if (!Array.isArray(u.friends)) u.friends = []; return u.friends; }
+function reqsOf(u) { if (!Array.isArray(u.friendReqs)) u.friendReqs = []; return u.friendReqs; }
+function onlineOf(userId) {
+  for (const [, q] of players) if (q.account && q.account.userId === userId) return q;
+  return null;
+}
+// 친구 패널 데이터 : 친구(온라인/활동) + 받은 신청 + 보낸 신청
+function sendFriendsInfo(p) {
+  if (!p.account || !users[p.account.userId]) return;
+  const me = p.account.userId;
+  const u = users[me];
+  const friends = friendsOf(u).filter((id) => users[id]).map((id) => {
+    const q = onlineOf(id);
+    return { id, nickname: users[id].nickname || id, online: !!q, activity: q ? activityOf(q) : null };
+  });
+  const incoming = reqsOf(u).filter((id) => users[id]).map((id) => ({ id, nickname: users[id].nickname || id }));
+  const outgoing = [];
+  for (const id in users) {
+    if (id !== me && reqsOf(users[id]).includes(me)) outgoing.push({ id, nickname: users[id].nickname || id });
+  }
+  send(p, { type: "friendsInfo", friends, incoming, outgoing });
+}
+// 수락 : 받은 신청 제거 + 양쪽 친구 등록 + 양쪽 갱신 통지
+function acceptFriend(p, targetId) {
+  if (!p.account) return;
+  const me = p.account.userId;
+  const mu = users[me], tu = users[targetId];
+  if (!mu || !tu) return;
+  const i = reqsOf(mu).indexOf(targetId);
+  if (i < 0) { send(p, { type: "friendError", reason: "받은 신청이 없습니다." }); return; }
+  mu.friendReqs.splice(i, 1);
+  if (!friendsOf(mu).includes(targetId)) mu.friends.push(targetId);
+  if (!friendsOf(tu).includes(me)) tu.friends.push(me);
+  persistUser(me);
+  persistUser(targetId);
+  send(p, { type: "friendOk", kind: "accepted", id: targetId, nickname: tu.nickname || targetId });
+  sendFriendsInfo(p);
+  const q = onlineOf(targetId);
+  if (q) { send(q, { type: "friendEvent", kind: "accept", nickname: mu.nickname || me }); sendFriendsInfo(q); }
+}
 
 // 관리자 명령 인자 파싱 : 큰따옴표로 감싸면 띄어쓰기 포함 닉네임도 한 인자로 취급.
 //  예) /닉변 "김 승찬" "새 닉네임"   /추방 "우주 최강"   (따옴표 없으면 기존처럼 공백 분리)

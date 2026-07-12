@@ -307,6 +307,8 @@ const account = {
   lastLogin: 0,   // 직전 접속 시각(ms epoch, 0=처음)
   gift: null,     // 미수령 이벤트 선물 {msg} — 수령 전까지 로비에 올 때마다 팝업
   spaceSkin: false, // 우주 스킨 소유 (이벤트 선물 수령) — 소유자만 차고 스와치에 표시
+  friendsCount: 0,  // 친구 수 (1명 이상이면 채팅 친구 탭 표시)
+  friendReqCount: 0, // 받은 친구 신청 수 (친구 아이콘 배지)
 };
 
 /* =============================================================================
@@ -979,6 +981,8 @@ window.addEventListener("keydown", e => {
     ["dashboard", hideDashboard],
     ["rankResultModal", hideRankResult],
     ["giftModal", hideGiftModal], // 수령 안 하고 닫기 — 다음 로비 진입 때 다시 뜬다
+    ["playerModal", hidePlayerInfo],
+    ["friendsModal", hideFriendsModal],
     ["rankModal", hideRankings],
     ["authModal", hideAuthModal],
   ];
@@ -3914,6 +3918,9 @@ function connect() {
       try { localStorage.setItem("carGameToken", msg.token); } catch {}
       hideAuthModal();
       updateAuthUI();
+      account.friendsCount = msg.friendsCount || 0;
+      account.friendReqCount = msg.friendReqCount || 0;
+      updateFriendUI();
       account.spaceSkin = !!msg.spaceSkin;
       applySkinOwnership(); // 우주 스킨 소유자면 스와치 추가 (색 복원보다 먼저)
       applyAccountPrefs(msg.color, msg.settings); // 계정에 저장된 차 색/설정 복원
@@ -4034,8 +4041,9 @@ function connect() {
       // 내가 죽인 경우 내 화면을 흔든다 (타격감)
       if (msg.killerId === net.id) addShake(34);
     } else if (msg.type === "chat") {
-      // 채팅 수신 → 로그에 추가 (관리자는 금색 이름)
-      addChatLine(msg.name, msg.text, msg.admin ? GOLD : colorForId(msg.id), msg.t);
+      // 채팅 수신 → 로그에 추가 (관리자는 금색 이름, 친구 채팅은 친구 탭 로그로)
+      addChatLine(msg.name, msg.text, msg.admin ? GOLD : colorForId(msg.id), msg.t, !!msg.friend);
+      if (msg.friend && chatScope !== "friends") document.getElementById("chatTabFrDot").classList.add("show"); // 새 친구 메시지 점
     } else if (msg.type === "chatHistory") {
       // 접속 직후 받은 최근 채팅 (페이지당 1회만 적용 → 재접속 중복 방지)
       if (!chatHistoryLoaded) {
@@ -4136,6 +4144,26 @@ function connect() {
         bossCli.result = { survivedMs: msg.survivedMs || 0, cleared: !!msg.cleared, best: msg.best || 0, newBest: !!msg.newBest };
         if (msg.cleared) SFX.record();
       }
+    } else if (msg.type === "playerInfo") {
+      // 차량 클릭 프로필 응답
+      if (msg.missing) hidePlayerInfo();
+      else showPlayerInfo(msg);
+    } else if (msg.type === "friendsInfo") {
+      renderFriendsInfo(msg);
+    } else if (msg.type === "friendOk") {
+      if (msg.kind === "requested") addChatLine("시스템", `${msg.nickname}님에게 친구 신청을 보냈습니다.`, "#7a756b", Date.now());
+      else if (msg.kind === "accepted") addChatLine("시스템", `${msg.nickname}님과 친구가 되었습니다.`, "#7a756b", Date.now());
+    } else if (msg.type === "friendError") {
+      addChatLine("시스템", msg.reason || "친구 요청을 처리하지 못했습니다.", "#e8604c", Date.now());
+    } else if (msg.type === "friendEvent") {
+      // 실시간 알림 : 신청 받음 / 내 신청이 수락됨 (친구 아이콘 배지 갱신)
+      if (msg.kind === "req") {
+        account.friendReqCount = (account.friendReqCount || 0) + 1;
+        addChatLine("시스템", `${msg.nickname}님이 친구 신청을 보냈습니다.`, "#7a756b", Date.now());
+      } else if (msg.kind === "accept") {
+        addChatLine("시스템", `${msg.nickname}님이 친구 신청을 수락했습니다.`, "#7a756b", Date.now());
+      }
+      updateFriendUI();
     } else if (msg.type === "kicked") {
       // 관리자 추방/차단 또는 치트 자동 감지 — 즉시 재접속하지 않게 표시
       net.kicked = true;
@@ -4465,10 +4493,175 @@ function sendChat() {
   const text = (input.value || "").trim();
   if (!text) return;
   // 메뉴/로비/플레이 어디서든 전송 (미입장 상태면 이름을 함께 보냄)
+  //  친구 탭이 활성화돼 있으면 친구들에게만 전달되는 scope 로 보낸다.
   if (net.connected && net.ws.readyState === WebSocket.OPEN) {
-    net.ws.send(JSON.stringify({ type: "chat", text, name: currentName() }));
+    const payload = { type: "chat", text, name: currentName() };
+    if (chatScope === "friends") payload.scope = "friends";
+    net.ws.send(JSON.stringify(payload));
   }
   input.value = "";
+}
+
+/* =============================================================================
+ *  친구 시스템 (클라이언트)
+ *  - 차량 클릭 → 상대 프로필 팝업(대시보드 + 친구 버튼)
+ *  - 로비 친구 아이콘 → 패널 (받은 신청 / 친구 목록 / 보낸 신청 / 닉네임 신청)
+ *  - 친구 1명 이상이면 채팅에 전체/친구 탭 (인풋 좌측)
+ * ========================================================================== */
+let chatScope = "all"; // "all" | "friends"
+let friendsRefreshTimer = null;
+let piCurrent = null; // 열려있는 프로필 팝업 대상 { pid, uid, rel }
+
+// 채팅 탭/배지 표시 상태 갱신 (로그인 + 친구 1명 이상 → 탭 표시)
+function updateFriendUI() {
+  const has = account.loggedIn && (account.friendsCount || 0) > 0;
+  document.body.classList.toggle("has-friends", has);
+  if (!has && chatScope === "friends") setChatScope("all");
+  document.getElementById("lobFriendsDot").classList.toggle("show", account.loggedIn && (account.friendReqCount || 0) > 0);
+}
+function setChatScope(scope) {
+  chatScope = scope;
+  document.body.classList.toggle("chat-friends", scope === "friends");
+  document.getElementById("chatTabAll").classList.toggle("on", scope === "all");
+  document.getElementById("chatTabFr").classList.toggle("on", scope === "friends");
+  if (scope === "friends") document.getElementById("chatTabFrDot").classList.remove("show");
+  const log = document.getElementById(scope === "friends" ? "chatLogFriends" : "chatLog");
+  log.scrollTop = log.scrollHeight;
+}
+
+/* ---- 상대 프로필 팝업 (차량 클릭) ---- */
+function openPlayerInfo(pid) {
+  piCurrent = { pid };
+  if (net.connected && net.ws.readyState === WebSocket.OPEN) {
+    net.ws.send(JSON.stringify({ type: "playerInfo", pid }));
+  }
+}
+function hidePlayerInfo() {
+  piCurrent = null;
+  document.getElementById("playerModal").classList.remove("show");
+}
+// 프로필 응답 → 팝업 채우기 + 친구 버튼 상태
+function showPlayerInfo(msg) {
+  if (!piCurrent || msg.pid !== piCurrent.pid) return;
+  piCurrent.uid = msg.uid || null;
+  piCurrent.rel = msg.rel || null;
+  document.getElementById("piName").textContent = msg.name + (msg.guest ? " (게스트)" : "");
+  document.getElementById("piActivity").textContent = msg.activity || "-";
+  document.getElementById("piRank").textContent = msg.guest ? "-" : `${msg.rankScore}점`;
+  document.getElementById("piRecord").textContent = msg.guest ? "-" :
+    `${msg.rankPlays || 0}전 ${msg.rankWins || 0}승 ${(msg.rankPlays || 0) - (msg.rankWins || 0)}패`;
+  const bb = (msg.bestBoss || 0) / 1000;
+  document.getElementById("piBoss").textContent = msg.guest || !msg.bestBoss ? "-" :
+    `${Math.floor(bb / 60)}:${String(Math.floor(bb % 60)).padStart(2, "0")}.${String(Math.floor((bb % 1) * 100)).padStart(2, "0")}`;
+  document.getElementById("piTime").textContent = msg.guest ? "-" : fmtDuration(msg.totalTime || 0);
+  applyPiButton();
+  document.getElementById("playerModal").classList.add("show");
+}
+function applyPiButton() {
+  const btn = document.getElementById("piFriendBtn");
+  btn.disabled = false;
+  btn.style.display = "";
+  const rel = piCurrent && piCurrent.rel;
+  if (!piCurrent || rel === "self") { btn.style.display = "none"; return; }
+  if (!piCurrent.uid) { btn.textContent = "게스트는 친구 추가 불가"; btn.disabled = true; return; }
+  if (rel === "guestme") { btn.textContent = "로그인하면 친구 추가 가능"; btn.disabled = true; return; }
+  if (rel === "friend") { btn.textContent = "이미 친구입니다"; btn.disabled = true; return; }
+  if (rel === "outgoing") { btn.textContent = "신청 취소"; return; }
+  if (rel === "incoming") { btn.textContent = "친구 수락"; return; }
+  btn.textContent = "친구 추가";
+}
+function piFriendAction() {
+  if (!piCurrent || !piCurrent.uid) return;
+  const rel = piCurrent.rel;
+  if (rel === "none") {
+    net.ws.send(JSON.stringify({ type: "friendReq", pid: piCurrent.pid }));
+    piCurrent.rel = "outgoing";
+  } else if (rel === "outgoing") {
+    net.ws.send(JSON.stringify({ type: "friendCancel", id: piCurrent.uid }));
+    piCurrent.rel = "none";
+  } else if (rel === "incoming") {
+    net.ws.send(JSON.stringify({ type: "friendAccept", id: piCurrent.uid }));
+    piCurrent.rel = "friend";
+  }
+  applyPiButton();
+}
+
+/* ---- 친구 패널 ---- */
+function showFriendsModal() {
+  document.getElementById("friendsModal").classList.add("show");
+  requestFriendsInfo();
+  clearInterval(friendsRefreshTimer);
+  friendsRefreshTimer = setInterval(requestFriendsInfo, 4000); // 열려있는 동안 활동/온라인 자동 갱신
+}
+function hideFriendsModal() {
+  document.getElementById("friendsModal").classList.remove("show");
+  clearInterval(friendsRefreshTimer);
+  friendsRefreshTimer = null;
+}
+function requestFriendsInfo() {
+  if (net.connected && net.ws.readyState === WebSocket.OPEN && account.loggedIn) {
+    net.ws.send(JSON.stringify({ type: "friendsInfo" }));
+  }
+}
+function frRow(children) {
+  const row = document.createElement("div");
+  row.className = "fr-row";
+  row.append(...children);
+  return row;
+}
+function frBtn(text, cls, onClick) {
+  const b = document.createElement("button");
+  b.className = "fr-btn" + (cls ? " " + cls : "");
+  b.textContent = text;
+  b.addEventListener("click", onClick);
+  return b;
+}
+function renderFriendsInfo(msg) {
+  account.friendsCount = (msg.friends || []).length;
+  account.friendReqCount = (msg.incoming || []).length;
+  updateFriendUI();
+  const nameEl = (n) => { const s = document.createElement("span"); s.className = "fr-name"; s.textContent = n; return s; };
+  const fill = (elId, rows, empty) => {
+    const box = document.getElementById(elId);
+    box.innerHTML = "";
+    if (!rows.length) {
+      const e = document.createElement("div");
+      e.className = "fr-empty";
+      e.textContent = empty;
+      box.appendChild(e);
+      return;
+    }
+    for (const r of rows) box.appendChild(r);
+  };
+  fill("frIncoming", (msg.incoming || []).map((f) => frRow([
+    nameEl(f.nickname),
+    document.createElement("span"), // 공간 채움
+    frBtn("수락", "accent", () => { net.ws.send(JSON.stringify({ type: "friendAccept", id: f.id })); }),
+    frBtn("거절", "", () => { net.ws.send(JSON.stringify({ type: "friendDecline", id: f.id })); }),
+  ])), "받은 신청이 없습니다.");
+  fill("frList", (msg.friends || []).map((f) => {
+    const st = document.createElement("span");
+    st.className = "fr-status" + (f.online ? " on" : "");
+    const act = document.createElement("span");
+    act.className = "fr-activity";
+    act.textContent = f.online ? (f.activity || "온라인") : "오프라인";
+    return frRow([st, nameEl(f.nickname), act,
+      frBtn("삭제", "danger", () => { if (confirm(`${f.nickname}님을 친구에서 삭제할까요?`)) net.ws.send(JSON.stringify({ type: "friendRemove", id: f.id })); }),
+    ]);
+  }), "아직 친구가 없습니다.");
+  fill("frOutgoing", (msg.outgoing || []).map((f) => frRow([
+    nameEl(f.nickname),
+    document.createElement("span"),
+    frBtn("취소", "", () => { net.ws.send(JSON.stringify({ type: "friendCancel", id: f.id })); }),
+  ])), "보낸 신청이 없습니다.");
+  // 공간 채움 span 이 남는 폭을 차지하게
+  for (const s of document.querySelectorAll("#frIncoming .fr-row > span:nth-child(2), #frOutgoing .fr-row > span:nth-child(2)")) s.style.flex = "1";
+}
+// 시간(ms) → "n시간 n분" (상대 프로필 접속 시간)
+function fmtDuration(ms) {
+  const m = Math.floor(ms / 60000);
+  if (m < 60) return `${m}분`;
+  return `${Math.floor(m / 60)}시간 ${m % 60}분`;
 }
 
 // 시간 H:i (24시간 HH:MM)
@@ -4480,8 +4673,8 @@ function fmtTime(t) {
 }
 
 // 채팅 로그에 한 줄 추가 (textContent 로만 넣어 HTML 주입 방지)
-function addChatLine(name, text, color, t) {
-  const log = document.getElementById("chatLog");
+function addChatLine(name, text, color, t, friendScope) {
+  const log = document.getElementById(friendScope ? "chatLogFriends" : "chatLog");
   const wasBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
 
   const line = document.createElement("div");
@@ -5432,7 +5625,20 @@ function setupLobbyUI() {
 
   // 게이트 클릭/탭으로도 입장 (모바일 폴백) + 커스텀 스와치 선택
   canvas.addEventListener("pointerdown", (e) => {
-    if (gameMode !== "lobby") return;
+    if (gameMode !== "lobby") {
+      // 인게임 : 다른 플레이어 차량 클릭 → 상대 프로필 팝업 (보스 제외)
+      if (gameState !== "playing") return;
+      const cwx = camera.x + e.clientX / camera.zoom;
+      const cwy = camera.y + e.clientY / camera.zoom;
+      let hit = null, hd = 70; // 차 시각 반길이(27.6)보다 넉넉한 클릭 반경
+      for (const [id, r] of remotePlayers) {
+        if (gameMode === "boss" && id === BOSS_EID) continue;
+        const d = Math.hypot(r.x - cwx, r.y - cwy);
+        if (d < hd) { hd = d; hit = id; }
+      }
+      if (hit != null) { SFX.click(); openPlayerInfo(hit); }
+      return;
+    }
     const wx = camera.x + e.clientX / camera.zoom;
     const wy = camera.y + e.clientY / camera.zoom;
     if (custom.active) {
@@ -5548,6 +5754,9 @@ function sendLogout() {
   account.totalTime = 0; account.totalTimeAt = 0; account.bestA1Ms = 0; account.bestA2Ms = 0; account.bestA3Ms = 0; account.bestMs = 0; account.bestHardMs = 0; account.bestSerpMs = 0; account.bestC1Ms = 0; account.bestC2Ms = 0; account.bestC3Ms = 0; account.loginTime = 0;
   account.gift = null; account.spaceSkin = false;
   applySkinOwnership(); // 우주 스킨 스와치 제거 + 쓰던 중이면 기본색 복구
+  account.friendsCount = 0; account.friendReqCount = 0;
+  updateFriendUI();
+  hideFriendsModal(); hidePlayerInfo(); // 친구 UI 정리 (게스트는 사용 불가)
   // 로그아웃 즉시 게스트 이름으로 전환 (저장된 게스트 이름 있으면 그것, 없으면 "게스트")
   let guest = "";
   try { guest = (localStorage.getItem("carGameName") || "").trim().slice(0, 12); } catch {}
@@ -5783,6 +5992,35 @@ function setupAuth() {
   document.getElementById("dashClose").addEventListener("click", hideDashboard);
   document.getElementById("rankResultClose").addEventListener("click", hideRankResult);
   document.getElementById("giftClaimBtn").addEventListener("click", claimGift);
+
+  // ---- 친구 UI 배선 ----
+  document.getElementById("piClose").addEventListener("click", hidePlayerInfo);
+  document.getElementById("piFriendBtn").addEventListener("click", piFriendAction);
+  document.getElementById("playerModal").addEventListener("pointerdown", (e) => {
+    if (e.target.id === "playerModal") { SFX.click(); hidePlayerInfo(); }
+  });
+  document.getElementById("lobFriends").addEventListener("click", () => {
+    if (!account.loggedIn) { showAuthModal(); return; } // 친구는 계정 기능
+    showFriendsModal();
+  });
+  document.getElementById("frClose").addEventListener("click", hideFriendsModal);
+  document.getElementById("friendsModal").addEventListener("pointerdown", (e) => {
+    if (e.target.id === "friendsModal") { SFX.click(); hideFriendsModal(); }
+  });
+  const frAddSubmit = () => {
+    const input = document.getElementById("frAddInput");
+    const name = (input.value || "").trim();
+    if (!name || !net.connected || net.ws.readyState !== WebSocket.OPEN) return;
+    net.ws.send(JSON.stringify({ type: "friendReq", name }));
+    input.value = "";
+  };
+  document.getElementById("frAddBtn").addEventListener("click", frAddSubmit);
+  document.getElementById("frAddInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") frAddSubmit();
+    e.stopPropagation(); // 게임 키 입력과 분리
+  });
+  document.getElementById("chatTabAll").addEventListener("click", () => setChatScope("all"));
+  document.getElementById("chatTabFr").addEventListener("click", () => setChatScope("friends"));
   // 계정 폼 : Enter 로 바로 전송
   const enterSubmit = (ids, fn) => ids.forEach((id) => {
     const el = document.getElementById(id);
