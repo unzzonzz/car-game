@@ -6018,8 +6018,11 @@ function setupAuth() {
   };
   document.getElementById("frAddBtn").addEventListener("click", frAddSubmit);
   document.getElementById("frAddInput").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") frAddSubmit();
     e.stopPropagation(); // 게임 키 입력과 분리
+    // 한글 IME 조합 중 Enter 는 keydown 이 두 번 발화(조합 중 1 + 확정 후 1)
+    //  → 첫 발화에서 보내고 비우면 조합 글자가 입력창에 남아 "없는 닉네임" 재신청이 나갔다
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === "Enter") frAddSubmit();
   });
   document.getElementById("chatTabAll").addEventListener("click", () => setChatScope("all"));
   document.getElementById("chatTabFr").addEventListener("click", () => setChatScope("friends"));
