@@ -1428,8 +1428,9 @@ function pushDmHistory(uid, fm) {
   if (arr.length > DM_HISTORY_MAX) arr.shift();
 }
 // 서버 재시작으로 메모리가 비어도 최근 대화가 보이게 chat-log.jsonl 꼬리에서 복원.
-//  수신자는 로그의 "[친구→닉]" 닉네임으로 역추적한다 (닉변 이전 기록은 유실될 수 있음 — 허용).
-function prewarmDmHistory() {
+//  전체 채팅은 chatHistory(50개)로, 귓속말은 계정별 dmHistory 로 나눠 담는다.
+//  귓속말 수신자는 로그의 "[친구→닉]" 닉네임으로 역추적한다 (닉변 이전 기록은 유실될 수 있음 — 허용).
+function prewarmChatHistory() {
   try {
     if (!fs.existsSync(CHAT_LOG_FILE)) return;
     const nick2uid = {};
@@ -1438,14 +1439,21 @@ function prewarmDmHistory() {
     for (const line of lines) {
       if (!line) continue;
       let e; try { e = JSON.parse(line); } catch { continue; }
-      const m = typeof e.text === "string" && e.uid ? e.text.match(/^\[친구→([^\]]+)\] /) : null;
-      if (!m || !users[e.uid]) continue;
+      if (typeof e.text !== "string") continue;
+      const m = e.uid ? e.text.match(/^\[친구→([^\]]+)\] /) : null;
+      if (!m) {
+        // 전체 채팅 → 접속 시 보내는 최근 50개로 복원
+        chatHistory.push({ type: "chat", id: 0, name: e.name, text: e.text, t: e.t, admin: !!e.admin });
+        if (chatHistory.length > CHAT_HISTORY_MAX) chatHistory.shift();
+        continue;
+      }
+      if (!users[e.uid]) continue;
       const fm = { type: "chat", id: 0, name: e.name, text: e.text.slice(m[0].length), t: e.t, admin: !!e.admin, friend: true, dm: true, to: m[1], fromUid: e.uid };
       pushDmHistory(e.uid, fm);
       const toId = nick2uid[m[1].toLowerCase()];
       if (toId && toId !== e.uid) pushDmHistory(toId, fm);
     }
-  } catch (e) { console.error("[dm-history]", e.message); }
+  } catch (e) { console.error("[chat-history]", e.message); }
 }
 // 친구 패널 데이터 : 친구(온라인/활동) + 받은 신청 + 보낸 신청
 function sendFriendsInfo(p) {
@@ -2447,7 +2455,7 @@ setInterval(() => {
 // 계정 캐시를 적재하고 토큰 인덱스를 구성한 뒤 서버를 연다
 hydrateUsers().then(() => {
   rebuildTokens();
-  prewarmDmHistory(); // 재시작 후에도 로그인 시 최근 친구 대화가 보이게 (닉네임 맵이 필요해 계정 적재 뒤에)
+  prewarmChatHistory(); // 재시작 후에도 최근 전체 채팅/친구 대화가 보이게 (닉네임 맵이 필요해 계정 적재 뒤에)
   server.listen(PORT, () => {
     console.log(`Car game server running at http://localhost:${PORT} (storage: ${useRedis ? "Upstash Redis" : "files"})`);
   });
