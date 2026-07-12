@@ -505,11 +505,11 @@ let nextId = 1;
 const players = new Map();
 
 // 최근 채팅 보관 (새 접속자에게 즉시 전송)
-const CHAT_HISTORY_MAX = 20;
+const CHAT_HISTORY_MAX = 50;
 const chatHistory = [];
 
 // 채팅 전체를 append-only 로그(JSONL)에 영구 저장 : 시간 t / 아이디 uid / 닉 name / 메시지 text / admin.
-//  인게임 채팅창은 최근 20개만 보여주지만, 이 파일엔 "몽땅" 남는다. → view-chat.js 로 열람.
+//  인게임 채팅창은 최근 50개만 보여주지만, 이 파일엔 "몽땅" 남는다. → view-chat.js 로 열람.
 const CHAT_LOG_FILE = path.join(__dirname, "chat-log.jsonl");
 function logChat(p, name, text, t, admin) {
   const entry = { t, uid: p.account ? p.account.userId : null, name, text, admin: !!admin };
@@ -757,7 +757,7 @@ wss.on("connection", (ws) => {
       const name = p.account ? p.account.nickname : (p.active ? p.name : sanitizeName(msg.name));
       const chatMsg = { type: "chat", id, name, text, t: Date.now(), admin: !!p.isAdmin };
       chatHistory.push(chatMsg);
-      if (chatHistory.length > CHAT_HISTORY_MAX) chatHistory.shift(); // 인게임 표시는 최근 20개만
+      if (chatHistory.length > CHAT_HISTORY_MAX) chatHistory.shift(); // 인게임 표시는 최근 50개만
       logChat(p, name, text, chatMsg.t, chatMsg.admin);              // 로그 파일엔 몽땅 영구 저장
       broadcastConnected(chatMsg);
 
@@ -1419,8 +1419,8 @@ function connsOf(userId) {
   return out;
 }
 
-// --- 친구 귓속말 최근 대화 (계정별 20개) : 로그인 시 재전송 → 오프라인 수신도 다음 접속 때 보인다
-const DM_HISTORY_MAX = 20;
+// --- 친구 귓속말 최근 대화 (계정별 50개) : 로그인 시 재전송 → 오프라인 수신도 다음 접속 때 보인다
+const DM_HISTORY_MAX = 50;
 const dmHistory = {}; // userId -> [{name,text,t,admin,to,fromUid,...}]
 function pushDmHistory(uid, fm) {
   const arr = dmHistory[uid] || (dmHistory[uid] = []);
