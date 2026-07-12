@@ -126,7 +126,7 @@ html, body {
   position: absolute;
   bottom: 18px;  /* 미니맵 위 (미니맵 크기는 JS 가 --mm 으로 전달) */
   right: 18px;
-  width: 240px;
+  width: 320px;  /* 탭(전체/친구) + 대상 pill 이 붙어도 인풋이 좁아지지 않게 */
   display: flex;
   flex-direction: column;
   background: transparent;
@@ -1302,7 +1302,7 @@ body.chat-friends #chatTarget { display: block; }
   .touch-btn.gas { width: 82px; height: 82px; }
 
   /* 로비 채팅 : 하단(터치 위) 왼쪽 — 로비엔 미니맵/순위판이 없어 상단은 헤더만 */
-  body.lobby #chat { left: calc(12px + env(safe-area-inset-left)); right: auto; bottom: calc(118px + env(safe-area-inset-bottom)); top: auto; width: 200px; }
+  body.lobby #chat { left: calc(12px + env(safe-area-inset-left)); right: auto; bottom: calc(118px + env(safe-area-inset-bottom)); top: auto; width: 244px; }
 
   /* 맵 선택 팝업 : 카드 1열 (가로 3열이 좁은 화면서 넘침). #mapModal 로 특정성↑(뒤 규칙 이김) */
   #mapModal #mapGrid { grid-template-columns: 1fr; gap: 10px; }
