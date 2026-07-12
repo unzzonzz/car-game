@@ -1440,17 +1440,17 @@ function prewarmChatHistory() {
       if (!line) continue;
       let e; try { e = JSON.parse(line); } catch { continue; }
       if (typeof e.text !== "string") continue;
-      const m = e.uid ? e.text.match(/^\[친구→([^\]]+)\] /) : null;
+      const m = e.text.match(/^\[친구(→([^\]]+))?\] /); // "[친구→닉] "=귓속말, "[친구] "=구 단체 친구 채팅
       if (!m) {
         // 전체 채팅 → 접속 시 보내는 최근 50개로 복원
         chatHistory.push({ type: "chat", id: 0, name: e.name, text: e.text, t: e.t, admin: !!e.admin });
         if (chatHistory.length > CHAT_HISTORY_MAX) chatHistory.shift();
         continue;
       }
-      if (!users[e.uid]) continue;
-      const fm = { type: "chat", id: 0, name: e.name, text: e.text.slice(m[0].length), t: e.t, admin: !!e.admin, friend: true, dm: true, to: m[1], fromUid: e.uid };
+      if (!m[2] || !e.uid || !users[e.uid]) continue; // 구 단체 기록은 복원하지 않는다 (전체에 새면 안 됨)
+      const fm = { type: "chat", id: 0, name: e.name, text: e.text.slice(m[0].length), t: e.t, admin: !!e.admin, friend: true, dm: true, to: m[2], fromUid: e.uid };
       pushDmHistory(e.uid, fm);
-      const toId = nick2uid[m[1].toLowerCase()];
+      const toId = nick2uid[m[2].toLowerCase()];
       if (toId && toId !== e.uid) pushDmHistory(toId, fm);
     }
   } catch (e) { console.error("[chat-history]", e.message); }
