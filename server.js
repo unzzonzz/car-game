@@ -733,10 +733,23 @@ wss.on("connection", (ws) => {
       // 관리자의 알 수 없는 /명령 은 공개 채팅에 새지 않게 삼킨다 (오타/구버전 명령 보호).
       if (p.isAdmin && text.startsWith("/")) { send(p, { type: "chat", id: 0, name: "시스템", text: `알 수 없는 명령어: ${text.split(/\s+/)[0]}`, t: Date.now() }); return; }
       // 친구 채팅 : 로그인 + 친구에게만 전달 (본인 에코 포함). 전체 히스토리엔 안 남는다.
+      //  to(친구 userId)가 있으면 그 친구에게만 가는 귓속말(dm).
       if (msg.scope === "friends") {
         if (!p.account || !users[p.account.userId]) return;
         const fr = friendsOf(users[p.account.userId]);
         if (!fr.length) return;
+        const toId = typeof msg.to === "string" && msg.to ? msg.to : null;
+        if (toId) {
+          if (!fr.includes(toId) || !users[toId]) return; // 친구가 아니면 무시
+          const toNick = users[toId].nickname || toId;
+          const fm = { type: "chat", id, name: p.account.nickname, text, t: Date.now(), admin: !!p.isAdmin, friend: true, dm: true, to: toNick };
+          send(p, fm); // 본인 에코
+          const oq = onlineOf(toId);
+          if (oq) send(oq, fm);
+          else send(p, { type: "chat", id: 0, name: "시스템", text: `${toNick}님이 오프라인이라 지금은 전달되지 않았습니다.`, t: Date.now(), friend: true });
+          logChat(p, p.account.nickname, `[친구→${toNick}] ` + text, fm.t, fm.admin);
+          return;
+        }
         const fm = { type: "chat", id, name: p.account.nickname, text, t: Date.now(), admin: !!p.isAdmin, friend: true };
         send(p, fm);
         for (const [, q] of players) {

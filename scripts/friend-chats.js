@@ -30,8 +30,9 @@ let rows = fs.readFileSync(FILE, "utf8").split("\n").filter(Boolean).map((line) 
   try { return JSON.parse(line); } catch { return null; }
 }).filter(Boolean);
 
-// 친구 채팅만 (--all 이면 전체)
-if (!showAll) rows = rows.filter((r) => typeof r.text === "string" && r.text.startsWith("[친구] "));
+// 친구 채팅만 (--all 이면 전체) — 단체 "[친구] " 와 귓속말 "[친구→닉] " 모두
+const FR_PREFIX = /^\[친구(→[^\]]+)?\] /;
+if (!showAll) rows = rows.filter((r) => typeof r.text === "string" && FR_PREFIX.test(r.text));
 // 발신자 필터 (닉네임 또는 아이디, 대소문자 무시)
 if (names.length) {
   rows = rows.filter((r) =>
@@ -42,8 +43,9 @@ if (tail > 0) rows = rows.slice(-tail);
 if (!rows.length) { console.log("표시할 채팅이 없습니다."); process.exit(0); }
 console.log(`${showAll ? "전체" : "친구"} 채팅 ${rows.length}줄${names.length ? ` (발신자: ${names.join(", ")})` : ""}\n`);
 for (const r of rows) {
-  const friend = typeof r.text === "string" && r.text.startsWith("[친구] ");
-  const text = friend ? r.text.slice(5) : r.text;
+  const m = typeof r.text === "string" ? r.text.match(/^\[친구(→([^\]]+))?\] /) : null;
+  const text = m ? r.text.slice(m[0].length) : r.text;
+  const tag = m ? (m[2] ? `[귓속말→${m[2]}] ` : (showAll ? "[친구] " : "")) : "";
   const who = r.uid ? `${r.name}(${r.uid})` : `${r.name} [게스트]`;
-  console.log(`${fmt(r.t)}  ${showAll && friend ? "[친구] " : ""}${who}${r.admin ? " [관리자]" : ""}: ${text}`);
+  console.log(`${fmt(r.t)}  ${tag}${who}${r.admin ? " [관리자]" : ""}: ${text}`);
 }

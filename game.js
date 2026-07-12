@@ -3921,6 +3921,7 @@ function connect() {
       account.friendsCount = msg.friendsCount || 0;
       account.friendReqCount = msg.friendReqCount || 0;
       updateFriendUI();
+      if (account.friendsCount > 0) requestFriendsInfo(); // 귓속말 대상 메뉴용 친구 캐시 선적재
       account.spaceSkin = !!msg.spaceSkin;
       applySkinOwnership(); // 우주 스킨 소유자면 스와치 추가 (색 복원보다 먼저)
       applyAccountPrefs(msg.color, msg.settings); // 계정에 저장된 차 색/설정 복원
@@ -4042,7 +4043,10 @@ function connect() {
       if (msg.killerId === net.id) addShake(34);
     } else if (msg.type === "chat") {
       // 채팅 수신 → 로그에 추가 (관리자는 금색 이름, 친구 채팅은 친구 탭 로그로)
-      addChatLine(msg.name, msg.text, msg.admin ? GOLD : colorForId(msg.id), msg.t, !!msg.friend);
+      //  귓속말(dm)은 방향이 보이게 "나 → 철수" / "철수 → 나" 로 표시
+      let dispName = msg.name;
+      if (msg.friend && msg.dm) dispName = msg.id === net.id ? `나 → ${msg.to}` : `${msg.name} → 나`;
+      addChatLine(dispName, msg.text, msg.admin ? GOLD : colorForId(msg.id), msg.t, !!msg.friend);
       if (msg.friend && chatScope !== "friends") document.getElementById("chatTabFrDot").classList.add("show"); // 새 친구 메시지 점
     } else if (msg.type === "chatHistory") {
       // 접속 직후 받은 최근 채팅 (페이지당 1회만 적용 → 재접속 중복 방지)
@@ -4496,7 +4500,10 @@ function sendChat() {
   //  친구 탭이 활성화돼 있으면 친구들에게만 전달되는 scope 로 보낸다.
   if (net.connected && net.ws.readyState === WebSocket.OPEN) {
     const payload = { type: "chat", text, name: currentName() };
-    if (chatScope === "friends") payload.scope = "friends";
+    if (chatScope === "friends") {
+      payload.scope = "friends";
+      if (chatTargetId) payload.to = chatTargetId; // 선택한 친구에게만 (귓속말)
+    }
     net.ws.send(JSON.stringify(payload));
   }
   input.value = "";
@@ -4526,8 +4533,50 @@ function setChatScope(scope) {
   document.getElementById("chatTabAll").classList.toggle("on", scope === "all");
   document.getElementById("chatTabFr").classList.toggle("on", scope === "friends");
   if (scope === "friends") document.getElementById("chatTabFrDot").classList.remove("show");
+  if (scope !== "friends") hideChatTargetMenu();
   const log = document.getElementById(scope === "friends" ? "chatLogFriends" : "chatLog");
   log.scrollTop = log.scrollHeight;
+}
+
+/* ---- 친구 탭 귓속말 대상 선택 (전체 / 친구 개인) ---- */
+let chatTargetId = null;   // null = 친구 전체 채널
+let friendsCache = [];     // 최근 friendsInfo 의 친구 목록 (메뉴/대상 검증용)
+function setChatTarget(id, name) {
+  chatTargetId = id || null;
+  const pill = document.getElementById("chatTarget");
+  pill.textContent = chatTargetId ? name : "전체";
+  pill.title = chatTargetId ? `${name}님에게만 보이는 귓속말` : "친구 전체에게 전송";
+  hideChatTargetMenu();
+}
+function hideChatTargetMenu() {
+  document.getElementById("chatTargetMenu").classList.remove("show");
+}
+function toggleChatTargetMenu() {
+  const menu = document.getElementById("chatTargetMenu");
+  if (menu.classList.contains("show")) { hideChatTargetMenu(); return; }
+  requestFriendsInfo(); // 최신 온라인 상태 갱신 (응답 오면 메뉴 다시 그림)
+  renderChatTargetMenu();
+  menu.classList.add("show");
+}
+function renderChatTargetMenu() {
+  const menu = document.getElementById("chatTargetMenu");
+  menu.innerHTML = "";
+  const mk = (id, name, online, isAll) => {
+    const b = document.createElement("button");
+    b.className = "ct-row" + ((id || null) === chatTargetId ? " on" : "");
+    if (!isAll) {
+      const st = document.createElement("span");
+      st.className = "fr-status" + (online ? " on" : "");
+      b.appendChild(st);
+    }
+    const t = document.createElement("span");
+    t.textContent = isAll ? "친구 전체" : name;
+    b.appendChild(t);
+    b.addEventListener("click", () => { SFX.click(); setChatTarget(id, name); });
+    return b;
+  };
+  menu.appendChild(mk(null, "전체", true, true));
+  for (const f of friendsCache) menu.appendChild(mk(f.id, f.nickname, f.online, false));
 }
 
 /* ---- 상대 프로필 팝업 (차량 클릭) ---- */
@@ -4621,6 +4670,14 @@ function renderFriendsInfo(msg) {
   account.friendsCount = (msg.friends || []).length;
   account.friendReqCount = (msg.incoming || []).length;
   updateFriendUI();
+  // 귓속말 대상 캐시 갱신 + 대상이 친구 목록에서 사라졌으면 전체로 복귀
+  friendsCache = msg.friends || [];
+  if (chatTargetId) {
+    const cur = friendsCache.find((f) => f.id === chatTargetId);
+    if (!cur) setChatTarget(null);
+    else setChatTarget(cur.id, cur.nickname); // 닉변 반영
+  }
+  if (document.getElementById("chatTargetMenu").classList.contains("show")) renderChatTargetMenu();
   const nameEl = (n) => { const s = document.createElement("span"); s.className = "fr-name"; s.textContent = n; return s; };
   const fill = (elId, rows, empty) => {
     const box = document.getElementById(elId);
@@ -5756,6 +5813,7 @@ function sendLogout() {
   account.gift = null; account.spaceSkin = false;
   applySkinOwnership(); // 우주 스킨 스와치 제거 + 쓰던 중이면 기본색 복구
   account.friendsCount = 0; account.friendReqCount = 0;
+  friendsCache = []; setChatTarget(null);
   updateFriendUI();
   hideFriendsModal(); hidePlayerInfo(); // 친구 UI 정리 (게스트는 사용 불가)
   // 로그아웃 즉시 게스트 이름으로 전환 (저장된 게스트 이름 있으면 그것, 없으면 "게스트")
@@ -6026,6 +6084,12 @@ function setupAuth() {
   });
   document.getElementById("chatTabAll").addEventListener("click", () => setChatScope("all"));
   document.getElementById("chatTabFr").addEventListener("click", () => setChatScope("friends"));
+  document.getElementById("chatTarget").addEventListener("click", () => { SFX.click(); toggleChatTargetMenu(); });
+  // 메뉴 밖 클릭 → 닫기
+  document.addEventListener("pointerdown", (e) => {
+    const menu = document.getElementById("chatTargetMenu");
+    if (menu.classList.contains("show") && !menu.contains(e.target) && e.target.id !== "chatTarget") hideChatTargetMenu();
+  });
   // 계정 폼 : Enter 로 바로 전송
   const enterSubmit = (ids, fn) => ids.forEach((id) => {
     const el = document.getElementById(id);
