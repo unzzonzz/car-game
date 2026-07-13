@@ -2211,15 +2211,15 @@ function drawPlazaGround() {
   for (let y = sy; y <= sy + sh; y += 140) { ctx.moveTo(sx, y); ctx.lineTo(sx + sw, y); }
   ctx.stroke(); ctx.restore();
 
-  // 순환 도로 (도넛)
-  const rIn = PLAZA.roadIn, rOut = PLAZA.roadOut;
-  ctx.fillStyle = "#e3d4b4";
-  ctx.beginPath(); ctx.arc(cx, cy, rOut, 0, 7); ctx.arc(cx, cy, rIn, 0, 7, true); ctx.fill();
+  // 순환 도로 — 굵은 링 스트로크로 그려 이음새 노치 없이 깔끔하게 (도넛 fill 의 0~2π 초과 겹침 방지)
+  const rIn = PLAZA.roadIn, rOut = PLAZA.roadOut, rMid = (rOut + rIn) / 2, TAU = Math.PI * 2;
+  ctx.strokeStyle = "#e3d4b4"; ctx.lineWidth = rOut - rIn;
+  ctx.beginPath(); ctx.arc(cx, cy, rMid, 0, TAU); ctx.stroke();
   ctx.strokeStyle = "rgba(255,255,255,.7)"; ctx.lineWidth = 8;
-  ctx.beginPath(); ctx.arc(cx, cy, rOut - 8, 0, 7); ctx.stroke();
-  ctx.beginPath(); ctx.arc(cx, cy, rIn + 8, 0, 7); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, rOut - 8, 0, TAU); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, rIn + 8, 0, TAU); ctx.stroke();
   ctx.setLineDash([52, 44]); ctx.lineWidth = 8; ctx.strokeStyle = "rgba(255,255,255,.55)";
-  ctx.beginPath(); ctx.arc(cx, cy, (rOut + rIn) / 2, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+  ctx.beginPath(); ctx.arc(cx, cy, rMid, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
 
   // 중앙 시계 광장 : 12방위 방사 석재 문양
   ctx.save(); ctx.translate(cx, cy);
