@@ -2187,17 +2187,17 @@ const BOSS_HIT_BOXES = [
   { ox: -64, oy: -64, hl: 44, hw: 29 },
 ];
 const CAR_HIT_HL = 27.6, CAR_HIT_HW = 13.2; // 플레이어 시각 차체 반길이/반폭 (클라 carHalfExtents 와 동일)
-const BOSS_SPEED = 800;           // 추격 최고 속도 (플레이어 최고속 2667px/s 의 ~30%) — 너프: 1330→1000→800
+const BOSS_SPEED = 900;           // 추격 최고 속도 (플레이어 최고속 2667px/s 의 ~34%) — 800→900 살짝 상향
 // 트럭 운동 모델 : 가감속 + 속도에 따라 조향 반경이 커진다 (저속 민첩, 고속 둔중)
-const BOSS_ACCEL = 600;           // 가속 (px/s^2) — 너프: 800→600, 출발 더 묵직해 초반 도망 여유 큼
+const BOSS_ACCEL = 700;           // 가속 (px/s^2) — 600→700 살짝 상향
 const BOSS_DECEL = 2400;          // 감속 (px/s^2)
 const BOSS_TURN_LO = 3.2;         // 저속 조향 속도 (rad/s)
 const BOSS_TURN_HI = 1.4;         // 최고속 조향 속도 (rad/s) — 급턴으로 따돌릴 수 있게 넉넉한 반경
-const CHARGE_CD = 14000, CHARGE_PREP = 1200, CHARGE_SPEED = 2900, CHARGE_DIST = 1100, CHARGE_RECOVER = 800; // 너프: CD 10→14s, 속도 3500→2900
+const CHARGE_CD = 12000, CHARGE_PREP = 1200, CHARGE_SPEED = 3200, CHARGE_DIST = 1100, CHARGE_RECOVER = 800; // CD 14→12s, 속도 2900→3200 상향
 const GROGGY_MS = 1500;           // 돌진이 벽/기둥에 박히면 그로기 (접촉 킬도 꺼짐 = 보너스 타임)
-const SLAM_CD = 16000, SLAM_PREP = 900, SLAM_RADIUS = 340, SLAM_TRIGGER = 260, SLAM_KNOCK = 760, SLAM_STUN = 1200; // 너프: CD 12→16s
-const TIRE_CD = 13000, TIRE_FLIGHT = 1200, TIRE_RADIUS = 78; // 너프: CD 9→13s
-const ENRAGE_STEP_MS = 30000, ENRAGE_PER = 0.02, ENRAGE_MAX = 0.2; // 너프: 30초마다 +2%, 최대 +20% (기존 +4%/+40%)
+const SLAM_CD = 14000, SLAM_PREP = 900, SLAM_RADIUS = 340, SLAM_TRIGGER = 260, SLAM_KNOCK = 760, SLAM_STUN = 1200; // CD 16→14s 상향
+const TIRE_CD = 11000, TIRE_FLIGHT = 1200, TIRE_RADIUS = 78; // CD 13→11s 상향
+const ENRAGE_STEP_MS = 30000, ENRAGE_PER = 0.03, ENRAGE_MAX = 0.3; // 30초마다 +3%, 최대 +30% (상향)
 
 const bossWorld = {
   state: "idle", // idle | countdown | running | result
@@ -2237,7 +2237,7 @@ function bossEnrage(now) {
   if (bossWorld.state !== "running") return 1;
   return 1 + Math.min(ENRAGE_MAX, Math.floor((now - bossWorld.t0) / ENRAGE_STEP_MS) * ENRAGE_PER);
 }
-function bossCdScale(now) { return Math.pow(0.96, Math.floor((now - bossWorld.t0) / 60000)); } // 너프: 시간당 쿨감 0.9→0.96(거의 안 줄어듦)
+function bossCdScale(now) { return Math.pow(0.93, Math.floor((now - bossWorld.t0) / 60000)); } // 시간당 쿨감 0.96→0.93 상향
 
 // 플레이어 스폰 : 보스에서 가장 먼 아레나 코너 부근 (약간 랜덤)
 function bossSpawnPos() {
