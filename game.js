@@ -643,6 +643,13 @@ applyHudLayout();
 /* 현재 속력 표시 여부 : 기본 꺼짐. 설정에서 켜면 인게임 좌측 상단에 표시. localStorage 영속. */
 let showSpeed = false;
 try { showSpeed = localStorage.getItem("showSpeed") === "1"; } catch {}
+
+/* 차 밑 내 이름표(칭호 포함) 표시 여부 : 기본 끔 — 다른 사람에게는 설정과 무관하게 항상 보인다 */
+let showMyName = false;
+try { showMyName = localStorage.getItem("showMyName") === "1"; } catch {}
+/* 친구 접속/종료 알림 표시 여부 : 기본 켬 */
+let frNotice = true;
+try { frNotice = localStorage.getItem("frNotice") !== "0"; } catch {}
 function applySpeedVisibility() {
   const el = document.getElementById("speed");
   const ingame = gameState === "playing" && gameMode !== "lobby";
@@ -1805,6 +1812,10 @@ function render(car) {
   //  다른 플레이어만 표시 (내 이름은 안 보여줌, 로비에선 전부 미표시)
   if (gameMode !== "lobby" && drawOthers) {
     for (const [pid, r] of remotePlayers) drawName(r.name, r.x, r.y, pid);
+  }
+  // 내 이름표 (설정) : 내 차 밑에도 이름+칭호 — 보스전 사망/관전 중엔 차와 함께 숨김
+  if (gameMode !== "lobby" && showMyName && !(gameMode === "boss" && (bossCli.dead || bossCli.spec))) {
+    drawName(playerName, CAR.x, CAR.y, net.id);
   }
 
   // 폭발 이펙트 (차량 위에)
@@ -3814,6 +3825,7 @@ function savePrefs() {
       settings: {
         volume: SFX.getVolume(), fov: fov,
         showOthers: showOthers, showSpeed: showSpeed,
+        showMyName: showMyName, frNotice: frNotice,
         hudMm: hudLayout.mm, hudChat: hudLayout.chat,
       },
     }));
@@ -3832,6 +3844,8 @@ function applyAccountPrefs(color, settings) {
     }
     if (typeof settings.showOthers === "boolean") { showOthers = settings.showOthers; try { localStorage.setItem("showOthers", showOthers ? "1" : "0"); } catch {} applyOthersToggle(); }
     if (typeof settings.showSpeed === "boolean") { showSpeed = settings.showSpeed; try { localStorage.setItem("showSpeed", showSpeed ? "1" : "0"); } catch {} applySpeedVisibility(); }
+    if (typeof settings.showMyName === "boolean") { showMyName = settings.showMyName; try { localStorage.setItem("showMyName", showMyName ? "1" : "0"); } catch {} }
+    if (typeof settings.frNotice === "boolean") { frNotice = settings.frNotice; try { localStorage.setItem("frNotice", frNotice ? "1" : "0"); } catch {} }
     if (HUD_CORNERS.includes(settings.hudMm)) hudLayout.mm = settings.hudMm;
     if (HUD_CORNERS.includes(settings.hudChat)) hudLayout.chat = settings.hudChat;
     applyHudLayout(); saveHudLayout();
@@ -4191,8 +4205,8 @@ function connect() {
       } else if (msg.kind === "accept") {
         addChatLine("시스템", `${msg.nickname}님이 친구 신청을 수락했습니다.`, "#7a756b", Date.now());
       } else if (msg.kind === "online" || msg.kind === "offline") {
-        // 친구 로그에만 조용히 (귓속말 아님 → 탭 알림 점은 안 켠다)
-        addChatLine("시스템", `${msg.nickname}님이 ${msg.kind === "online" ? "접속했습니다." : "오프라인이 되었습니다."}`, "#7a756b", Date.now(), true);
+        // 친구 로그에만 조용히 (귓속말 아님 → 탭 알림 점은 안 켠다). 설정에서 끌 수 있다.
+        if (frNotice) addChatLine("시스템", `${msg.nickname}님이 ${msg.kind === "online" ? "접속했습니다." : "오프라인이 되었습니다."}`, "#7a756b", Date.now(), true);
       }
       updateFriendUI();
     } else if (msg.type === "titlesInfo") {
@@ -5767,6 +5781,26 @@ function setupLobbyUI() {
     savePrefs();
     SFX.click();
   });
+  // 내 이름표(칭호 포함) 켜기/끄기 — 내 차 밑에 이름을 그릴지 (다른 사람에겐 항상 보임)
+  document.getElementById("setMyName").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-val]");
+    if (!b) return;
+    showMyName = b.dataset.val === "on";
+    try { localStorage.setItem("showMyName", showMyName ? "1" : "0"); } catch {}
+    syncSettingsUI();
+    savePrefs();
+    SFX.click();
+  });
+  // 친구 접속/종료 알림 켜기/끄기
+  document.getElementById("setFrNotice").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-val]");
+    if (!b) return;
+    frNotice = b.dataset.val === "on";
+    try { localStorage.setItem("frNotice", frNotice ? "1" : "0"); } catch {}
+    syncSettingsUI();
+    savePrefs();
+    SFX.click();
+  });
   document.getElementById("lobDash").addEventListener("click", showDashboard);
   document.getElementById("lobRank").addEventListener("click", () => { SFX.resume(); showRankings(); });
   document.getElementById("rankClose").addEventListener("click", hideRankings);
@@ -6036,6 +6070,12 @@ function syncSettingsUI() {
   }
   for (const b of document.getElementById("setSpeed").querySelectorAll("button[data-val]")) {
     b.classList.toggle("on", b.dataset.val === (showSpeed ? "on" : "off"));
+  }
+  for (const b of document.getElementById("setMyName").querySelectorAll("button[data-val]")) {
+    b.classList.toggle("on", b.dataset.val === (showMyName ? "on" : "off"));
+  }
+  for (const b of document.getElementById("setFrNotice").querySelectorAll("button[data-val]")) {
+    b.classList.toggle("on", b.dataset.val === (frNotice ? "on" : "off"));
   }
 }
 function showSettingsModal() {

@@ -624,6 +624,8 @@ wss.on("connection", (ws) => {
         if (typeof s.fov === "number" && isFinite(s.fov)) clean.fov = Math.min(100, Math.max(40, Math.round(s.fov)));
         if (typeof s.showOthers === "boolean") clean.showOthers = s.showOthers;
         if (typeof s.showSpeed === "boolean") clean.showSpeed = s.showSpeed;
+        if (typeof s.showMyName === "boolean") clean.showMyName = s.showMyName;
+        if (typeof s.frNotice === "boolean") clean.frNotice = s.frNotice;
         if (["tl", "tr", "bl", "br"].includes(s.hudMm)) clean.hudMm = s.hudMm;
         if (["tl", "tr", "bl", "br"].includes(s.hudChat)) clean.hudChat = s.hudChat;
         u.settings = clean;
