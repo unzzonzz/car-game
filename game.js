@@ -2147,8 +2147,6 @@ const PLAZA = {
   faceR: 400, baseR: 480,      // 시계 판 / 받침 반경
   stone: [140, 140, 2520, 1720, 180], // 석재 광장 (x,y,w,h,r)
 };
-// 스폰 4곳 = 서버 PLAZA_SPAWNS 와 동일 (도로 진입점, P 표시)
-const PLAZA_SPAWNS = [[1400, 240], [1400, 1760], [640, 1000], [2160, 1000]];
 // 장식물 배치 (월드 좌표) — 시드 고정
 const PLAZA_TREES = [[380, 520], [2420, 520], [640, 300], [2160, 300], [640, 1700], [2160, 1700], [380, 1480], [2420, 1480], [300, 1000], [2500, 1000]];
 const PLAZA_STALLS = [[940, 300, "#e8604c"], [1860, 300, "#57b868"], [940, 1700, "#57b868"], [1860, 1700, "#e8604c"]];
@@ -2236,13 +2234,6 @@ function drawPlazaGround() {
   for (const [x, y, c] of PLAZA_STALLS) pzStall(x, y, c);
   for (const [x, y, a] of PLAZA_BENCHES) pzBench(x, y, a);
   for (const [x, y] of PLAZA_LAMPS) pzLamp(x, y);
-
-  // 스폰 표시 (도로 진입점 P)
-  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.font = "400 40px Jua, sans-serif";
-  for (const [x, y] of PLAZA_SPAWNS) {
-    ctx.fillStyle = "rgba(87,184,104,.22)"; ctx.beginPath(); ctx.arc(x, y, 52, 0, 7); ctx.fill();
-    ctx.fillStyle = "#3f8a4c"; ctx.fillText("P", x, y + 2);
-  }
 
   // 시계 받침 원반
   ctx.fillStyle = "rgba(58,54,46,.08)"; ctx.beginPath(); ctx.arc(cx + 12, cy + 16, PLAZA.baseR, 0, 7); ctx.fill();
