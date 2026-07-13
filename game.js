@@ -1102,6 +1102,12 @@ function updateInput(car, dt) {
     car.vx = 0; car.vy = 0; car.lf = 0; car.ll = 0;
     return;
   }
+  if (gameMode === "sumo" && performance.now() < (car.launchUntil || 0)) {
+    // 넉백 비행 중 : 조작 잠금 — 발사 속도(kvx/kvy)로만 미끄러진다
+    car.throttle = 0; car.braking = 0; car.reversing = 0; car.steerInput = 0;
+    car.vx = 0; car.vy = 0; car.lf = 0; car.ll = 0;
+    return;
+  }
   if (gameMode === "boss") {
     // 사망/관전/결과 화면 : 완전 정지
     if (bossCli.dead || bossCli.spec || bossCli.state === "result") {
@@ -2194,7 +2200,7 @@ const SUMO = {
 };
 // 스모 로컬 상태 : 주먹 애니(내 차) + 링밖 카운트다운 + 사망
 const sumo = { punchAt: 0, cdUntil: 0, outAt: 0, dead: false };
-function resetSumo() { sumo.punchAt = 0; sumo.cdUntil = 0; sumo.outAt = 0; sumo.dead = false; }
+function resetSumo() { sumo.punchAt = 0; sumo.cdUntil = 0; sumo.outAt = 0; sumo.dead = false; CAR.kvx = 0; CAR.kvy = 0; CAR.launchUntil = 0; CAR.spinV = 0; }
 // 주먹 뻗음 비율(0=접힘,1=최대) — 시작 시각으로부터 경과(ms)
 function punchPhase(elapsed) {
   if (elapsed < 0) return 0;
@@ -2489,6 +2495,14 @@ function drawCarPunch(x, y, angle, color, punchAt) {
 function updateSumo(dt) {
   if (gameMode !== "sumo") return;
   if (sumo.dead) { CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0; return; } // 부활 대기(서버 spawn)
+  // 넉백 비행 : 별도 발사 속도로 밀려남(주행 캡 무관) + 지수 감쇠 + 회전 플레어
+  if (CAR.kvx || CAR.kvy) {
+    CAR.x += CAR.kvx * dt; CAR.y += CAR.kvy * dt;
+    const decay = Math.exp(-dt / 0.5);                 // tau 0.5s → 발사속도×0.5 만큼 날아감
+    CAR.kvx *= decay; CAR.kvy *= decay;
+    if (CAR.spinV) { CAR.angle += CAR.spinV * dt; CAR.spinV *= decay; }
+    if (Math.hypot(CAR.kvx, CAR.kvy) < 24) { CAR.kvx = 0; CAR.kvy = 0; CAR.spinV = 0; } // 멈춤
+  }
   const now = performance.now();
   if (now < CAR.invulnUntil) { sumo.outAt = 0; return; } // 스폰 무적 동안엔 링밖 카운트다운 안 시작(전환 글리치 방어)
   const d = Math.hypot(CAR.x - SUMO.cx, CAR.y - SUMO.cy);
@@ -4446,15 +4460,19 @@ function connect() {
       CAR.invulnUntil = performance.now() + 1500;
       net.pendingTeleport = true; // 남들 화면에서 슬라이드 없이 스냅되도록
       if (gameMode === "boss") { bossCli.dead = false; bossCli.respawnAt = 0; updateCamera(CAR, 0); } // 보스전 부활/배치 복귀
-      if (gameMode === "sumo") { sumo.dead = false; sumo.outAt = 0; updateCamera(CAR, 0); } // 스모 부활 (링 위로)
+      if (gameMode === "sumo") { sumo.dead = false; sumo.outAt = 0; CAR.kvx = 0; CAR.kvy = 0; CAR.launchUntil = 0; CAR.spinV = 0; updateCamera(CAR, 0); } // 스모 부활 (가운데로)
     } else if (msg.type === "bump") {
       // 서버 권위 충돌 임펄스 → 내 차 속도에 반영(진짜 밀치기/밀려남)
       if (COLLISION_ENABLED && gameState === "playing" && gameMode !== "lobby") applyBump(Number(msg.vx) || 0, Number(msg.vy) || 0);
     } else if (msg.type === "sumoKnock") {
-      // 스모 : 주먹에 맞아 날아감 (bump 게이트와 무관하게 항상 적용)
+      // 스모 : 주먹에 맞아 시원하게 날아감 — 주행 캡과 무관한 별도 발사 속도(감쇠). 나는 동안 입력 잠금.
       if (gameMode === "sumo" && gameState === "playing" && !sumo.dead) {
-        applyBump(Number(msg.vx) || 0, Number(msg.vy) || 0);
-        addShake(16);
+        const vx = Number(msg.vx) || 0, vy = Number(msg.vy) || 0;
+        CAR.kvx = (CAR.kvx || 0) + vx; CAR.kvy = (CAR.kvy || 0) + vy;
+        CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0;                 // 기존 주행 관성 제거 → 넉백만 깔끔하게
+        CAR.launchUntil = performance.now() + 650;             // 나는 동안 조작 잠금
+        CAR.spinV = (Math.random() < 0.5 ? -1 : 1) * (5 + Math.random() * 4); // 빙글 도는 플레어
+        addShake(26); SFX.collision(0.95);
       }
     } else if (msg.type === "sumoPunch") {
       // 스모 : 원격 플레이어가 주먹을 뻗음 → 그 차의 주먹 애니 시작

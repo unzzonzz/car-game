@@ -60,8 +60,8 @@ const PUNCH_CD = 3000;      // 주먹 쿨다운(3초에 한 번)
 const PUNCH_REACH = 130;    // 글러브가 차 앞끝에서 더 뻗는 거리
 const PUNCH_FRONT = 30;     // 차 중심 → 앞 범퍼
 const PUNCH_EXTEND_MS = 120, PUNCH_HOLD_MS = 90; // 뻗기/유지 (히트 활성 구간 = 210ms)
-const PUNCH_HIT_R = 44;     // 글러브 히트 반경(+상대 차 반)
-const PUNCH_KNOCK = 1150;   // 넉백 임펄스(px/s)
+const PUNCH_HIT_R = 46;     // 글러브 히트 반경(+상대 차 반)
+const PUNCH_KNOCK = 2300;   // 넉백 발사 속도(px/s) — 클라가 주행 캡과 무관한 별도 속도로 시원하게 날림
 // 스폰 : 맵 가운데. 여럿이면 중앙 근처 작은 원에 흩어 겹치지 않게(가장 덜 붐비는 지점).
 function pickSumoSpawn(selfId) {
   const cands = [[SUMO_CX, SUMO_CY]]; // 1순위 = 정중앙
