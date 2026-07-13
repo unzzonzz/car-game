@@ -55,6 +55,9 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="7" r="4"/><path d="M2 21v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2"/><path d="M16 3.1a4 4 0 0 1 0 7.8"/><path d="M22 21v-2a4 4 0 0 0-3-3.85"/></svg>
         <span id="lobFriendsDot" class="fr-dot"></span>
       </button>
+      <button id="lobTitles" class="lob-btn" aria-label="칭호">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="6"/><path d="M15.5 13 17 22l-5-3-5 3 1.5-9"/><path d="M12 5.6l.85 1.55 1.75.3-1.25 1.25.3 1.75L12 9.6l-1.65.85.3-1.75L9.4 7.45l1.75-.3z"/></svg>
+      </button>
       <button id="lobRank" class="lob-btn" aria-label="랭킹">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10v5a5 5 0 0 1-10 0V4z"/><path d="M7 6H5a2 2 0 0 0 0 4h1"/><path d="M17 6h2a2 2 0 0 1 0 4h-1"/></svg>
       </button>
@@ -251,6 +254,8 @@
       <div class="dash-row"><span>접속 시간</span><span id="dashTime">-</span></div>
       <div class="dash-row" id="dashRankScoreRow"><span>경쟁전 점수</span><span id="dashRankScore">-</span></div>
       <div class="dash-row" id="dashRankRecordRow"><span>경쟁전 전적</span><span id="dashRankRecord">-</span></div>
+      <div class="dash-row"><span>연속 접속</span><span id="dashStreak">-</span></div>
+      <div class="dash-row"><span>보유 칭호</span><span id="dashTitles">-</span></div>
       <button id="dashClose" class="auth-btn auth-close">닫기</button>
     </div>
   </div>
@@ -301,6 +306,23 @@
         <button id="frAddBtn">신청</button>
       </div>
       <button id="frClose" class="auth-btn auth-close">닫기</button>
+    </div>
+  </div>
+
+  <!-- 칭호 패널 : 장착 중 + 보유/미획득 칩 (미획득은 비활성 + 호버 툴팁) -->
+  <div id="titlesModal">
+    <div class="dash-card titles-card">
+      <h2>칭호 <span id="ttCnt" class="tt-cnt"></span></h2>
+      <div id="ttEquipRow">
+        <span class="tt-lab">장착 중</span>
+        <span id="ttEquipName" class="none">없음</span>
+        <button id="ttUnequip">해제</button>
+      </div>
+      <div id="ttGrid"></div>
+      <div id="ttLegend">
+        <span style="--c:#b9b3a6">일반</span><span style="--c:#3d9be9">희귀</span><span style="--c:#e8604c">영웅</span><span style="--c:#d9a013">전설</span>
+      </div>
+      <button id="ttClose" class="auth-btn auth-close">닫기</button>
     </div>
   </div>
 

@@ -814,7 +814,7 @@ body.chat-friends #chatTarget { display: block; }
 #rankResultOutcome.draw { color: var(--muted); } /* 중간 등수(점수 변동 0) */
 
 /* 상대 프로필 팝업 (차량 클릭) + 친구 패널 : 대시보드와 같은 오버레이 */
-#playerModal, #friendsModal {
+#playerModal, #friendsModal, #titlesModal {
   position: absolute;
   inset: 0;
   display: none;
@@ -823,7 +823,46 @@ body.chat-friends #chatTarget { display: block; }
   background: rgba(58, 54, 46, 0.28);
   z-index: 46;
 }
-#playerModal.show, #friendsModal.show { display: flex; }
+#playerModal.show, #friendsModal.show, #titlesModal.show { display: flex; }
+
+/* ---- 칭호 패널 : 획득=희귀도색 칩 / 미획득=비활성 + 호버 툴팁 / 장착=잉크 테두리 ---- */
+.titles-card { max-height: min(560px, 86vh); overflow-y: auto; }
+.tt-cnt { font-size: 13px; color: var(--muted); margin-left: 6px; }
+#ttEquipRow {
+  display: flex; align-items: center; gap: 8px;
+  padding: 11px 14px; margin-bottom: 14px;
+  background: var(--hover); border: 1px solid var(--line); border-radius: 12px;
+  font-family: 'Jua', sans-serif; font-size: 14px; text-align: left;
+}
+#ttEquipRow .tt-lab { color: var(--muted); font-size: 12.5px; }
+#ttEquipName.none { color: #c6c0b2; }
+#ttUnequip {
+  margin-left: auto; border: 1px solid var(--line); background: var(--white);
+  border-radius: 999px; font-family: 'Jua', sans-serif; font-size: 11.5px;
+  color: var(--muted); padding: 4px 11px; cursor: pointer;
+}
+#ttGrid { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-start; }
+.tt-chip {
+  position: relative; border: 1px solid var(--line); background: var(--white);
+  border-radius: 999px; padding: 7px 14px; font-size: 13px;
+  cursor: pointer; font-family: 'Jua', sans-serif;
+}
+.tt-chip.locked { background: var(--hover); color: #c6c0b2; cursor: default; }
+.tt-chip.on { border: 1.5px solid var(--ink); padding: 6.5px 13.5px; }
+.tt-chip .tt-tip {
+  display: none; position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  width: max-content; max-width: 210px; background: var(--white); border: 1px solid var(--line);
+  border-radius: 12px; padding: 8px 12px; z-index: 5; text-align: left; pointer-events: none;
+}
+.tt-chip:hover .tt-tip { display: block; }
+.tt-tip .tt-name { font-size: 13px; }
+.tt-tip .tt-cond { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.tt-tip .tt-rar { font-size: 11px; margin-top: 3px; }
+#ttLegend { display: flex; gap: 14px; margin-top: 16px; font-size: 11.5px; color: var(--muted); font-family: 'Jua', sans-serif; }
+#ttLegend span::before {
+  content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+  margin-right: 5px; background: var(--c); border: 1px solid rgba(0, 0, 0, 0.08);
+}
 #piFriendBtn[disabled] { opacity: 0.45; cursor: default; }
 .friends-card { max-height: min(560px, 86vh); overflow-y: auto; }
 .fr-sec { margin-top: 14px; text-align: left; }

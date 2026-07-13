@@ -276,6 +276,15 @@ function loginPlayer(p, userId) {
   if (dms && dms.length) send(p, { type: "chatHistory", scope: "friends", messages: dms });
   // 이 계정의 첫 접속이면 친구들에게 접속 알림 (두 번째 탭 로그인은 조용히)
   if (connsOf(userId).length === 1) notifyFriendsPresence(userId, true);
+  // 칭호 : 연속 접속 갱신 → 재판정 → 오프라인 중 쌓인 수여 알림 전달
+  bumpStreak(u);
+  recomputeTitles(userId);
+  if (Array.isArray(u.titleNews) && u.titleNews.length) {
+    for (const k of u.titleNews) sendTitleGrant(p, k);
+    u.titleNews = [];
+    persistUser(userId);
+  }
+  sendStats(p); // 연속 접속/보유 칭호가 대시보드에 바로 보이게 (60초 주기 전에 1회)
 }
 
 // 접속 시간을 평생 누적(user.totalTime)에 반영하고 기준시각 리셋
@@ -303,7 +312,7 @@ function sendStats(p) {
   if (!p.account) return;
   const u = users[p.account.userId];
   if (!u) return;
-  send(p, { type: "stats", proWins: u.proWins || 0, proPlays: u.proPlays || 0, bestA1Ms: u.bestA1 || 0, bestA2Ms: u.bestA2 || 0, bestA3Ms: u.bestA3 || 0, bestMs: u.bestB1 || 0, bestHardMs: u.bestB2 || 0, bestSerpMs: u.bestB3 || 0, bestC1Ms: u.bestC1 || 0, bestC2Ms: u.bestC2 || 0, bestC3Ms: u.bestC3 || 0, totalTime: liveTotalTime(p), lastLogin: u.lastLogin || 0, rankScore: rankScoreOf(u), rankAllowed: rankAllowedOf(u, p.account.userId), rankWins: u.rankWins || 0, rankPlays: u.rankPlays || 0 });
+  send(p, { type: "stats", proWins: u.proWins || 0, proPlays: u.proPlays || 0, bestA1Ms: u.bestA1 || 0, bestA2Ms: u.bestA2 || 0, bestA3Ms: u.bestA3 || 0, bestMs: u.bestB1 || 0, bestHardMs: u.bestB2 || 0, bestSerpMs: u.bestB3 || 0, bestC1Ms: u.bestC1 || 0, bestC2Ms: u.bestC2 || 0, bestC3Ms: u.bestC3 || 0, totalTime: liveTotalTime(p), lastLogin: u.lastLogin || 0, rankScore: rankScoreOf(u), rankAllowed: rankAllowedOf(u, p.account.userId), rankWins: u.rankWins || 0, rankPlays: u.rankPlays || 0, streakDays: u.streakDays || 0, titlesCount: Array.isArray(u.titles) ? u.titles.length : 0 });
 }
 
 // --- 정적 파일 서버 ---------------------------------------------------------
@@ -626,6 +635,9 @@ wss.on("connection", (ws) => {
     if (msg.type === "join") {
       p.name = p.account ? p.account.nickname : sanitizeName(msg.name);
       p.rankMode = false;
+      // 칭호 : 입장자에게 접속자들의 장착 칭호 일람 + 내 칭호를 모두에게 (이름표 아래 표시용)
+      sendTitlesMap(p);
+      if (p.account) broadcastTitleOf(p.account.userId);
       if (msg.mode === "rank") { joinRank(id, p); return; } // 랭크전 : 자동 매치메이킹
       const mode = (msg.mode === "racing") ? "racing"
         : (msg.mode === "hard") ? "hard"
@@ -790,7 +802,24 @@ wss.on("connection", (ws) => {
         persistUser(p.account.userId);
         sendStats(p);              // 대시보드 최고기록 갱신
         broadcastRecords(p.mode);  // 해당 모드 TOP10 갱신
+        recomputeAllTitles();      // 순위가 밀린 다른 유저의 회수까지 — 전원 재판정
       }
+
+    } else if (msg.type === "titlesInfo") {
+      // 칭호 패널 데이터 요청
+      sendTitlesInfo(p);
+
+    } else if (msg.type === "equipTitle") {
+      // 칭호 장착/해제 : 보유한 것만 (null = 해제)
+      if (!p.account || !users[p.account.userId]) return;
+      const u = users[p.account.userId];
+      const key = typeof msg.key === "string" && msg.key ? msg.key : null;
+      if (key && !(Array.isArray(u.titles) && u.titles.includes(key))) return; // 미보유 → 무시
+      if ((u.title || null) === key) return;
+      u.title = key;
+      persistUser(p.account.userId);
+      for (const q of connsOf(p.account.userId)) sendTitlesInfo(q);
+      broadcastTitleOf(p.account.userId);
 
     } else if (msg.type === "friendsInfo") {
       // 친구 패널 데이터 요청
@@ -864,8 +893,10 @@ wss.on("connection", (ws) => {
         if (i >= 0) { tu.friends.splice(i, 1); persistUser(tid); }
         const oq = onlineOf(tid);
         if (oq) sendFriendsInfo(oq);
+        recomputeTitles(tid); // 친구 수 감소 → 마당발/인싸 회수 가능
       }
       sendFriendsInfo(p);
+      recomputeTitles(me);
 
     } else if (msg.type === "playerInfo") {
       // 차량 클릭 : 접속 id 로 상대 프로필 조회 (대시보드 + 친구 관계)
@@ -1220,6 +1251,7 @@ function leaveRoom(pid, p) {
     persistUser(p.account.userId);
     send(p, { type: "rankResult", win: false, delta, score: u.rankScore, n, dodge: true });
     sendStats(p);
+    recomputeTitles(p.account.userId); // 점수 변동 → 칭호 재판정
   }
   // 랭크전 : 카운트다운 중 3명 미만이 되면 취소 → 다시 대기
   if (room.type === "rank" && room.state === "countdown" && remain.length < RANK_MIN) {
@@ -1336,6 +1368,7 @@ function applyRankScores(room, placeMap) {
     out.set(s.id, { delta, score: u.rankScore, place });
     // 중도 탈주자도 접속 중이면 대시보드 점수 즉시 갱신
     for (const [, p2] of players) if (p2.account && p2.account.userId === s.uid) { sendStats(p2); break; }
+    recomputeTitles(s.uid); // 도전자/에이스/챔피언 즉시 재판정 (점수 하락 시 회수 포함)
   }
   return out;
 }
@@ -1507,6 +1540,136 @@ function acceptFriend(p, targetId) {
   sendFriendsInfo(p);
   const q = onlineOf(targetId);
   if (q) { send(q, { type: "friendEvent", kind: "accept", nickname: mu.nickname || me }); sendFriendsInfo(q); }
+  recomputeTitles(me); recomputeTitles(targetId); // 마당발/인싸 재판정
+}
+
+/* =============================================================================
+ *  칭호 — 조건 만족 시 자동 수여, 미달이 되면 자동 회수(회수는 알림 없음). 전부 서버 판정.
+ *  u.titles = 보유 key 목록 / u.title = 장착 key / u.streakDays, u.lastDay = 연속 접속.
+ *  오프라인 중 수여되면 u.titleNews 에 쌓았다가 다음 로그인 때 알림.
+ * ========================================================================== */
+const TITLE_COURSES = ["bestA1", "bestA2", "bestA3", "bestB1", "bestB2", "bestB3", "bestC1", "bestC2", "bestC3", "bestTime", "bestTimeHard"];
+const TITLE_DEFS = [
+  { key: "newbie",  name: "새내기",          cond: "회원가입",               rar: "common" },
+  { key: "record",  name: "기록 보유자",      cond: "아무 코스 기록 1개 등록", rar: "common" },
+  { key: "top10",   name: "스피드스타",       cond: "아무 코스 TOP10 진입",   rar: "rare" },
+  { key: "first",   name: "코스 정복자",      cond: "아무 코스 전체 1위",     rar: "epic" },
+  { key: "triple",  name: "전설의 드라이버",   cond: "코스 3개 동시 1위",      rar: "legend" },
+  { key: "rank1",   name: "도전자",          cond: "경쟁전 첫 완주",         rar: "common" },
+  { key: "rank150", name: "에이스",          cond: "경쟁전 점수 150 도달",   rar: "rare" },
+  { key: "rank200", name: "챔피언",          cond: "경쟁전 점수 200 도달",   rar: "legend" },
+  { key: "t10h",    name: "단골",            cond: "누적 접속 10시간",       rar: "common" },
+  { key: "t100h",   name: "고인물",          cond: "누적 접속 100시간",      rar: "rare" },
+  { key: "t200h",   name: "터줏대감",        cond: "누적 접속 200시간",      rar: "epic" },
+  { key: "streak7", name: "개근상",          cond: "7일 연속 접속",          rar: "rare" },
+  { key: "fr5",     name: "마당발",          cond: "친구 5명",              rar: "common" },
+  { key: "fr25",    name: "인싸",            cond: "친구 25명",             rar: "rare" },
+];
+const TITLE_BY_KEY = Object.fromEntries(TITLE_DEFS.map((d) => [d.key, d]));
+
+// 연속 접속 : 하루 한 번, 어제에 이어졌으면 +1 아니면 1부터 (로그인 + 60초 주기에서 호출)
+function localDay(t) { const d = new Date(t); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; }
+function bumpStreak(u) {
+  const today = localDay(Date.now());
+  if (u.lastDay === today) return;
+  u.streakDays = u.lastDay === localDay(Date.now() - 86400000) ? (u.streakDays || 0) + 1 : 1;
+  u.lastDay = today;
+}
+
+// 코스별 내 순위(1-base, 기록 없으면 0) — 동타이면 공동 순위
+function courseRanksOf(userId) {
+  const out = [];
+  for (const f of TITLE_COURSES) {
+    const my = users[userId][f];
+    if (!my) { out.push(0); continue; }
+    let rank = 1;
+    for (const uid in users) { const v = users[uid][f]; if (v && v < my) rank++; }
+    out.push(rank);
+  }
+  return out;
+}
+
+// 현재 상태 기준 보유해야 할 칭호 집합 (순수 계산 — 저장/알림 없음)
+function computeTitles(userId) {
+  const u = users[userId];
+  const got = new Set(["newbie"]);
+  const ranks = courseRanksOf(userId);
+  if (ranks.some((r) => r >= 1)) got.add("record");
+  if (ranks.some((r) => r >= 1 && r <= 10)) got.add("top10");
+  const firsts = ranks.filter((r) => r === 1).length;
+  if (firsts >= 1) got.add("first");
+  if (firsts >= 3) got.add("triple");
+  if ((u.rankPlays || 0) >= 1) got.add("rank1");
+  const rs = rankScoreOf(u);
+  if (rs >= 150) got.add("rank150");
+  if (rs >= 200) got.add("rank200");
+  const h = (u.totalTime || 0) / 3600000;
+  if (h >= 10) got.add("t10h");
+  if (h >= 100) got.add("t100h");
+  if (h >= 200) got.add("t200h");
+  if ((u.streakDays || 0) >= 7) got.add("streak7");
+  const fc = Array.isArray(u.friends) ? u.friends.length : 0;
+  if (fc >= 5) got.add("fr5");
+  if (fc >= 25) got.add("fr25");
+  return got;
+}
+
+// 재판정 : 새로 얻은 건 알림(오프라인이면 다음 로그인에), 잃은 건 조용히 회수 + 장착 해제
+function recomputeTitles(userId) {
+  const u = users[userId];
+  if (!u) return;
+  const got = computeTitles(userId);
+  const prev = new Set(Array.isArray(u.titles) ? u.titles : []);
+  const added = [...got].filter((k) => !prev.has(k));
+  const removed = [...prev].filter((k) => !got.has(k));
+  if (!added.length && !removed.length) return;
+  u.titles = TITLE_DEFS.map((d) => d.key).filter((k) => got.has(k)); // 정의 순서로 저장
+  if (u.title && !got.has(u.title)) u.title = null; // 압수된 칭호는 장착 해제 (조용히)
+  const conns = connsOf(userId);
+  if (added.length) {
+    if (conns.length) for (const q of conns) for (const k of added) sendTitleGrant(q, k);
+    else u.titleNews = [...(u.titleNews || []), ...added]; // 오프라인 → 다음 로그인 때 알림
+  }
+  persistUser(userId);
+  for (const q of conns) sendTitlesInfo(q);
+  broadcastTitleOf(userId); // 장착 변화(회수 해제 포함)를 인게임 이름표에 반영
+}
+function recomputeAllTitles() { for (const uid in users) recomputeTitles(uid); } // 기록/순위 변동은 전원에 영향
+
+function sendTitleGrant(p, key) {
+  const d = TITLE_BY_KEY[key];
+  if (d) send(p, { type: "titleGrant", key, name: d.name, rar: d.rar });
+}
+// 칭호 패널 데이터 : 전체 정의 + 보유 여부 + 장착
+function sendTitlesInfo(p) {
+  if (!p.account || !users[p.account.userId]) return;
+  const u = users[p.account.userId];
+  const owned = new Set(Array.isArray(u.titles) ? u.titles : []);
+  send(p, {
+    type: "titlesInfo",
+    defs: TITLE_DEFS.map((d) => ({ key: d.key, name: d.name, cond: d.cond, rar: d.rar, got: owned.has(d.key) })),
+    equipped: u.title || null,
+  });
+}
+// 장착 칭호를 모두에게 방송 (인게임 이름표 아래 표시용 — pid 기준)
+function broadcastTitleOf(userId) {
+  if (!userId || !users[userId]) return;
+  const d = users[userId].title ? TITLE_BY_KEY[users[userId].title] : null;
+  for (const [pid, q] of players) {
+    if (!q.account || q.account.userId !== userId) continue;
+    broadcastConnected({ type: "playerTitle", pid, title: d ? d.name : null, rar: d ? d.rar : null });
+  }
+}
+// 입장자에게 현재 접속자들의 장착 칭호 일람 전송
+function sendTitlesMap(p) {
+  const entries = [];
+  for (const [pid, q] of players) {
+    if (!q.account) continue;
+    const u = users[q.account.userId];
+    const d = u && u.title ? TITLE_BY_KEY[u.title] : null;
+    if (d) entries.push({ pid, title: d.name, rar: d.rar });
+  }
+  if (entries.length) send(p, { type: "titlesMap", entries });
 }
 
 // 관리자 명령 인자 파싱 : 큰따옴표로 감싸면 띄어쓰기 포함 닉네임도 한 인자로 취급.
@@ -1667,6 +1830,7 @@ function handleRecordDeleteCommand(p, text) {
   if (deleted.length) {
     persistUser(id);
     for (const [, p2] of players) if (p2.account && p2.account.userId === id) { sendStats(p2); break; } // 접속 중이면 개인 기록 갱신
+    recomputeAllTitles(); // 기록 삭제로 순위가 당겨진 유저까지 재판정
   }
   let out = deleted.length ? `${u.nickname || id} 기록 삭제 완료: ${deleted.join(", ")}` : "";
   if (none.length && parts[1] !== "전체") out += `${out ? " / " : ""}기록 없음: ${none.join(", ")}`;
@@ -1715,6 +1879,7 @@ function handleScoreResetCommand(p, text) {
     persistUser(id);
     // 접속 중이면 대시보드 점수 즉시 갱신
     for (const [, p2] of players) if (p2.account && p2.account.userId === id) { sendStats(p2); break; }
+    recomputeTitles(id); // 에이스/챔피언 회수 재판정
   };
   if (names.length === 1 && names[0] === "전체") {
     let cnt = 0;
@@ -2467,6 +2632,8 @@ setInterval(() => {
 setInterval(() => {
   for (const [, p] of players) {
     flushConnectedTime(p);
+    // 칭호 : 접속 중 누적 시간/자정 넘김(연속 접속)으로 조건이 바뀔 수 있어 주기 재판정
+    if (p.account && users[p.account.userId]) { bumpStreak(users[p.account.userId]); recomputeTitles(p.account.userId); }
     if (p.account && p.ws.readyState === p.ws.OPEN) sendStats(p); // 대시보드 실시간 갱신(접속시간·마지막접속)
   }
 }, 60000);

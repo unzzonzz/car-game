@@ -983,6 +983,7 @@ window.addEventListener("keydown", e => {
     ["giftModal", hideGiftModal], // 수령 안 하고 닫기 — 다음 로비 진입 때 다시 뜬다
     ["playerModal", hidePlayerInfo],
     ["friendsModal", hideFriendsModal],
+    ["titlesModal", hideTitlesModal],
     ["rankModal", hideRankings],
     ["authModal", hideAuthModal],
   ];
@@ -1803,7 +1804,7 @@ function render(car) {
   // 이름표 (차 아래) — 회전 영향 안 받게 차량 그린 뒤 별도로.
   //  다른 플레이어만 표시 (내 이름은 안 보여줌, 로비에선 전부 미표시)
   if (gameMode !== "lobby" && drawOthers) {
-    for (const r of remotePlayers.values()) drawName(r.name, r.x, r.y);
+    for (const [pid, r] of remotePlayers) drawName(r.name, r.x, r.y, pid);
   }
 
   // 폭발 이펙트 (차량 위에)
@@ -3121,7 +3122,8 @@ function drawRacingGround() {
 }
 
 // 차 아래에 이름표를 그린다 (회전 없이, 가독성 위해 어두운 외곽선 + 흰 글자)
-function drawName(text, x, y) {
+//  장착 칭호가 있으면 닉네임 아래 한 줄 더 (B 스타일 : 희귀도색 작은 글씨 + 외곽선)
+function drawName(text, x, y, pid) {
   if (!text) return;
   ctx.font = "400 14px Jua, sans-serif";
   ctx.textAlign = "center";
@@ -3132,6 +3134,15 @@ function drawName(text, x, y) {
   ctx.strokeText(text, x, ny);
   ctx.fillStyle = "#ffffff";
   ctx.fillText(text, x, ny);
+  const tt = pid != null ? titleMap.get(pid) : null;
+  if (tt) {
+    ctx.font = "400 11px Jua, sans-serif";
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = "rgba(0,0,0,0.8)";
+    ctx.strokeText(tt.title, x, ny + 19);
+    ctx.fillStyle = TITLE_RAR_WORLD[tt.rar] || "#ffffff";
+    ctx.fillText(tt.title, x, ny + 19);
+  }
 }
 
 function drawSkid() {
@@ -3946,6 +3957,8 @@ function connect() {
       account.proPlays = msg.proPlays || 0;
       if (typeof msg.lastLogin === "number") account.lastLogin = msg.lastLogin; // 마지막 접속 실시간 갱신
       if (typeof msg.totalTime === "number") { account.totalTime = msg.totalTime; account.totalTimeAt = Date.now(); }
+      if (typeof msg.streakDays === "number") account.streakDays = msg.streakDays;   // 연속 접속 (개근상 카운터)
+      if (typeof msg.titlesCount === "number") account.titlesCount = msg.titlesCount; // 보유 칭호 수
       if (typeof msg.bestA1Ms === "number") {
         const improved = msg.bestA1Ms > 0 && (!account.bestA1Ms || msg.bestA1Ms < account.bestA1Ms);
         account.bestA1Ms = msg.bestA1Ms;
@@ -4182,6 +4195,22 @@ function connect() {
         addChatLine("시스템", `${msg.nickname}님이 ${msg.kind === "online" ? "접속했습니다." : "오프라인이 되었습니다."}`, "#7a756b", Date.now(), true);
       }
       updateFriendUI();
+    } else if (msg.type === "titlesInfo") {
+      // 칭호 패널 데이터 (보유/장착) — 열려 있으면 즉시 다시 그림
+      titlesDefs = msg.defs || [];
+      equippedTitleKey = msg.equipped || null;
+      if (document.getElementById("titlesModal").classList.contains("show")) renderTitles();
+    } else if (msg.type === "titleGrant") {
+      // 새 칭호 자동 수여 (회수는 알림 없음)
+      addChatLine("시스템", `새 칭호 획득 — ${msg.name}`, "#7a756b", Date.now());
+      SFX.record(); // 기록 갱신과 같은 팡파레
+    } else if (msg.type === "playerTitle") {
+      // 누군가의 장착 칭호 변경 → 이름표 아래 표시 갱신
+      if (msg.title) titleMap.set(msg.pid, { title: msg.title, rar: msg.rar });
+      else titleMap.delete(msg.pid);
+    } else if (msg.type === "titlesMap") {
+      // 입장 직후 접속자 전원의 장착 칭호 일람
+      for (const e of (msg.entries || [])) titleMap.set(e.pid, { title: e.title, rar: e.rar });
     } else if (msg.type === "kicked") {
       // 관리자 추방/차단 또는 치트 자동 감지 — 즉시 재접속하지 않게 표시
       net.kicked = true;
@@ -4537,6 +4566,7 @@ let piCurrent = null; // 열려있는 프로필 팝업 대상 { pid, uid, rel }
 // 친구 UI 표시 상태 갱신 : 아이콘은 로그인 시에만, 탭은 로그인 + 친구 1명 이상
 function updateFriendUI() {
   document.getElementById("lobFriends").style.display = account.loggedIn ? "" : "none";
+  document.getElementById("lobTitles").style.display = account.loggedIn ? "" : "none"; // 칭호도 로그인 시에만
   const has = account.loggedIn && (account.friendsCount || 0) > 0;
   document.body.classList.toggle("has-friends", has);
   if (!has && chatScope === "friends") setChatScope("all");
@@ -4588,6 +4618,56 @@ function renderChatTargetMenu() {
     b.addEventListener("click", () => { SFX.click(); setChatTarget(f.id, f.nickname); hideChatTargetMenu(); });
     menu.appendChild(b);
   }
+}
+
+/* ---- 칭호 : 패널(장착/툴팁) + 인게임 이름표 아래 표시 ---- */
+const TITLE_RAR_UI = { common: "#8b857a", rare: "#3d9be9", epic: "#e8604c", legend: "#d9a013" };    // 패널(흰 배경)용
+const TITLE_RAR_WORLD = { common: "#f2efe8", rare: "#7cc4ff", epic: "#ff9a88", legend: "#ffd34d" }; // 인게임(어두운 외곽선 위)용
+const TITLE_RAR_LABEL = { common: "일반", rare: "희귀", epic: "영웅", legend: "전설" };
+let titlesDefs = [];         // 최근 titlesInfo 의 defs (+got)
+let equippedTitleKey = null; // 내 장착 칭호 key
+const titleMap = new Map();  // pid -> { title, rar } — 다른 플레이어 이름표 아래 표시용
+
+function requestTitlesInfo() {
+  if (net.connected && net.ws.readyState === WebSocket.OPEN) net.ws.send(JSON.stringify({ type: "titlesInfo" }));
+}
+function showTitlesModal() {
+  document.getElementById("titlesModal").classList.add("show");
+  requestTitlesInfo(); // 최신 보유/장착 갱신 (응답 오면 다시 그림)
+  renderTitles();
+}
+function hideTitlesModal() { document.getElementById("titlesModal").classList.remove("show"); }
+function renderTitles() {
+  const grid = document.getElementById("ttGrid");
+  grid.innerHTML = "";
+  for (const d of titlesDefs) {
+    const c = document.createElement("button");
+    c.className = "tt-chip" + (d.got ? "" : " locked") + (equippedTitleKey === d.key ? " on" : "");
+    if (d.got) c.style.color = TITLE_RAR_UI[d.rar] || "";
+    c.textContent = d.name;
+    const tip = document.createElement("span");
+    tip.className = "tt-tip";
+    const tn = document.createElement("div");
+    tn.className = "tt-name"; tn.style.color = TITLE_RAR_UI[d.rar] || ""; tn.textContent = d.name;
+    const tc = document.createElement("div");
+    tc.className = "tt-cond"; tc.textContent = d.cond + (d.got ? "" : " (미획득)");
+    const tr = document.createElement("div");
+    tr.className = "tt-rar"; tr.style.color = TITLE_RAR_UI[d.rar] || ""; tr.textContent = TITLE_RAR_LABEL[d.rar] || d.rar;
+    tip.append(tn, tc, tr);
+    c.appendChild(tip);
+    if (d.got) c.addEventListener("click", () => {
+      SFX.click();
+      const next = equippedTitleKey === d.key ? null : d.key; // 장착 중인 걸 다시 누르면 해제
+      if (net.connected && net.ws.readyState === WebSocket.OPEN) net.ws.send(JSON.stringify({ type: "equipTitle", key: next }));
+    });
+    grid.appendChild(c);
+  }
+  document.getElementById("ttCnt").textContent = titlesDefs.length ? `${titlesDefs.filter((d) => d.got).length} / ${titlesDefs.length} 보유` : "";
+  const en = document.getElementById("ttEquipName");
+  const eq = titlesDefs.find((d) => d.key === equippedTitleKey);
+  en.textContent = eq ? eq.name : "없음";
+  en.className = eq ? "" : "none";
+  en.style.color = eq ? TITLE_RAR_UI[eq.rar] || "" : "";
 }
 
 /* ---- 상대 프로필 팝업 (차량 클릭) ---- */
@@ -5827,8 +5907,9 @@ function sendLogout() {
   account.friendsCount = 0; account.friendReqCount = 0;
   friendsCache = []; setChatTarget(null);
   document.getElementById("chatLogFriends").innerHTML = ""; // 공용 PC 대비 : 귓속말 기록 지움
+  titlesDefs = []; equippedTitleKey = null; account.streakDays = 0; account.titlesCount = 0;
   updateFriendUI();
-  hideFriendsModal(); hidePlayerInfo(); // 친구 UI 정리 (게스트는 사용 불가)
+  hideFriendsModal(); hidePlayerInfo(); hideTitlesModal(); // 친구/칭호 UI 정리 (게스트는 사용 불가)
   // 로그아웃 즉시 게스트 이름으로 전환 (저장된 게스트 이름 있으면 그것, 없으면 "게스트")
   let guest = "";
   try { guest = (localStorage.getItem("carGameName") || "").trim().slice(0, 12); } catch {}
@@ -5895,6 +5976,10 @@ function updateDashboard() {
     const losses = Math.max(0, account.rankPlays - account.rankWins);
     document.getElementById("dashRankRecord").textContent = `${account.rankPlays}전 ${account.rankWins}승 ${losses}패`;
   }
+  // 연속 접속(개근상 카운터) + 보유 칭호
+  const sd = account.streakDays || 0;
+  document.getElementById("dashStreak").textContent = sd ? (sd >= 7 ? `${sd}일째` : `${sd}일째 (개근상까지 ${7 - sd}일)`) : "-";
+  document.getElementById("dashTitles").textContent = `${account.titlesCount || 0}개`;
 }
 
 // 랭크전 결과 팝업 : 등수 + 점수 변화 + 현재 점수 (색 = 점수 변동 방향)
@@ -6076,6 +6161,18 @@ function setupAuth() {
     showFriendsModal();
   });
   updateFriendUI(); // 초기 상태 : 비로그인 → 친구 아이콘 숨김
+  // ---- 칭호 UI 배선 ----
+  document.getElementById("lobTitles").addEventListener("click", () => {
+    if (!account.loggedIn) return;
+    showTitlesModal();
+  });
+  document.getElementById("ttClose").addEventListener("click", hideTitlesModal);
+  document.getElementById("ttUnequip").addEventListener("click", () => {
+    if (net.connected && net.ws.readyState === WebSocket.OPEN) net.ws.send(JSON.stringify({ type: "equipTitle", key: null }));
+  });
+  document.getElementById("titlesModal").addEventListener("pointerdown", (e) => {
+    if (e.target.id === "titlesModal") { SFX.click(); hideTitlesModal(); }
+  });
   document.getElementById("frClose").addEventListener("click", hideFriendsModal);
   document.getElementById("friendsModal").addEventListener("pointerdown", (e) => {
     if (e.target.id === "friendsModal") { SFX.click(); hideFriendsModal(); }
