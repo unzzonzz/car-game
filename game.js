@@ -2355,53 +2355,91 @@ function drawSumoGround() {
 
 /* 늘어나는 주먹 : 차 앞에 지그재그(아코디언) 팔 + 복싱 글러브. 색은 차 색과 동일(우주스킨이면 우주).
  *  phase 0=접힘 … 1=최대. 차 로컬 좌표(+x=전방)에서 그린 뒤 호출부에서 회전/이동 적용 가정. */
+// 색 밝기 조절 (f<0 어둡게, f>0 밝게) → rgb() 문자열
+function shadeHex(hex, f) {
+  if (typeof hex !== "string" || hex[0] !== "#") return hex;
+  const n = parseInt(hex.slice(1), 16);
+  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  if (f < 0) { const k = 1 + f; r *= k; g *= k; b *= k; }
+  else { r += (255 - r) * f; g += (255 - g) * f; b += (255 - b) * f; }
+  return `rgb(${r | 0},${g | 0},${b | 0})`;
+}
+// 우주 글러브 채색 : 주먹 원에 클립 후 딥스페이스 그라데이션 + 별
+function drawGloveSpace(gx, r) {
+  ctx.save();
+  ctx.beginPath(); ctx.arc(gx, 0, r, 0, 7); ctx.clip();
+  const g = ctx.createRadialGradient(gx - r * 0.3, -r * 0.3, 2, gx, 0, r * 1.3);
+  g.addColorStop(0, "#1b2450"); g.addColorStop(0.5, "#0b1026"); g.addColorStop(1, "#05070f");
+  ctx.fillStyle = g; ctx.fillRect(gx - r, -r, r * 2, r * 2);
+  const t = performance.now() / 1000;
+  for (const [ox, oy, sr, ph] of [[-7, -6, 1.6, 0], [6, 3, 1.3, 1.7], [-2, 8, 1.2, 3.1], [9, -7, 1.5, 4.4], [1, -2, 1.0, 5.6], [-9, 2, 1.1, 2.3]]) {
+    ctx.globalAlpha = 0.5 + 0.5 * Math.sin(t * 2 + ph);
+    ctx.fillStyle = "#dbe6ff"; ctx.beginPath(); ctx.arc(gx + ox, oy, sr, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+/* 늘어나는 주먹 : 차 앞 가위형(팬터그래프) 팔 + 복싱 글러브. 색은 차 색과 동일(우주스킨이면 우주).
+ *  phase 0=접힘…1=최대. 로컬 좌표(+x=전방)에서 그린다(호출부에서 회전/이동). */
 function drawPunchArm(color, phase) {
-  const front = 24;                       // 차 앞끝(로컬 +x)
-  const reach = SUMO.reach * phase;       // 뻗은 길이
   const isSpace = color === SPACE_SKIN;
-  const armCol = isSpace ? "#141b40" : color;
-  // 접힘 정도에 따라 지그재그 마디 수/진폭 (접힐수록 촘촘/큰 진폭, 뻗을수록 평평)
-  const segLen = 14;
-  const total = front + reach;
-  const gloveR = 20;
-  const armEnd = total - gloveR * 0.7;    // 글러브 직전까지 팔
-  const armLen = Math.max(1, armEnd - front);
-  const amp = 13 * (1 - 0.6 * phase);     // 뻗을수록 진폭↓(펴짐)
-  const n = Math.max(3, Math.round(armLen / (segLen)));
-  // 팔(지그재그) : 위/아래로 번갈아 꺾인 선
-  ctx.strokeStyle = armCol; ctx.lineWidth = 9; ctx.lineJoin = "round"; ctx.lineCap = "round";
-  ctx.beginPath(); ctx.moveTo(front, 0);
-  for (let i = 1; i <= n; i++) {
-    const px = front + (armLen * i) / n;
-    const py = (i % 2 === 0) ? 0 : (i % 4 === 1 ? amp : -amp);
-    ctx.lineTo(px, py);
+  const gloveR = 21;
+  const gx = 30 + SUMO.reach * phase;          // 글러브 중심 (서버 히트와 정렬)
+  const base = 16;                             // 팔 뿌리 x
+  const cuffX = gx - gloveR * 0.95;            // 손목/커프
+  const armLen = Math.max(8, cuffX - base);
+  // 팬터그래프 : 펴질수록 셀 길이↑·진폭↓
+  const amp = 12 * (1 - 0.55 * phase) + 2;
+  const cellW = 11 + 30 * phase;
+  const cells = Math.max(2, Math.round(armLen / cellW));
+  const dx = armLen / cells;
+  const linkCol = isSpace ? "#232c72" : shadeHex(color, -0.16);
+  const linkEdge = isSpace ? "#0e1330" : shadeHex(color, -0.42);
+
+  // 뿌리 마운트
+  ctx.fillStyle = isSpace ? "#0e1330" : shadeHex(color, -0.32);
+  ctx.beginPath(); ctx.arc(base, 0, 8, 0, 7); ctx.fill();
+
+  // 가위 링크(위상 반대 두 레일 → X 교차)
+  const yAt = (i, up) => (i % 2 === 0 ? (up ? amp : -amp) : (up ? -amp : amp));
+  const railStroke = (up, w, col) => {
+    ctx.strokeStyle = col; ctx.lineWidth = w; ctx.lineJoin = "round"; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(base, yAt(0, up));
+    for (let i = 1; i <= cells; i++) ctx.lineTo(base + dx * i, yAt(i, up));
+    ctx.stroke();
+  };
+  railStroke(true, 9, linkEdge); railStroke(false, 9, linkEdge); // 테두리(음영)
+  railStroke(true, 6, linkCol);  railStroke(false, 6, linkCol);  // 링크 안쪽
+  // 피벗 리벳 (꺾임점 + 중앙 교차)
+  ctx.fillStyle = "#efe9da";
+  for (let i = 0; i <= cells; i++) {
+    ctx.beginPath(); ctx.arc(base + dx * i, yAt(i, true), 2.3, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(base + dx * i, yAt(i, false), 2.3, 0, 7); ctx.fill();
+    if (i < cells) { ctx.beginPath(); ctx.arc(base + dx * (i + 0.5), 0, 2.1, 0, 7); ctx.fill(); }
   }
-  ctx.lineTo(armEnd, 0);
-  ctx.stroke();
-  // 마디 힌지 점(금속 리벳 느낌)
-  ctx.fillStyle = "rgba(0,0,0,0.25)";
-  for (let i = 1; i < n; i++) {
-    const px = front + (armLen * i) / n;
-    const py = (i % 2 === 0) ? 0 : (i % 4 === 1 ? amp : -amp);
-    ctx.beginPath(); ctx.arc(px, py, 2.6, 0, 7); ctx.fill();
-  }
-  // 손목 밴드
-  ctx.fillStyle = "#f2c94c"; ctx.beginPath(); ctx.arc(armEnd, 0, 8, 0, 7); ctx.fill();
-  // 글러브 : 둥근 몸통 + 엄지
-  const gx = total;
-  ctx.fillStyle = isSpace ? "#0b1026" : color;
+
+  // ---- 복싱 글러브 ----
+  // 커프(손목 밴드)
+  ctx.fillStyle = isSpace ? "#232c72" : shadeHex(color, -0.12);
+  roundRect(cuffX - 6, -gloveR * 0.72, 12, gloveR * 1.44, 5); ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.45)";
+  roundRect(cuffX - 6, -gloveR * 0.72, 3.5, gloveR * 1.44, 2.5); ctx.fill();
+  // 글러브 몸통 : 주먹 + 너클(앞위) + 엄지(뒤아래)
+  const gcol = isSpace ? "#0b1026" : color;
+  ctx.fillStyle = gcol;
   ctx.beginPath(); ctx.arc(gx, 0, gloveR, 0, 7); ctx.fill();
-  ctx.beginPath(); ctx.arc(gx - gloveR * 0.5, gloveR * 0.7, gloveR * 0.5, 0, 7); ctx.fill(); // 엄지
-  if (isSpace) { // 우주 글러브 : 작은 별 몇 개
-    ctx.fillStyle = "#dbe6ff";
-    for (const [ox, oy] of [[-6, -5], [5, 2], [-2, 7], [8, -6]]) { ctx.beginPath(); ctx.arc(gx + ox, oy, 1.4, 0, 7); ctx.fill(); }
-  } else { // 하이라이트
-    ctx.fillStyle = "rgba(255,255,255,0.22)";
-    ctx.beginPath(); ctx.arc(gx - 6, -6, gloveR * 0.42, 0, 7); ctx.fill();
-  }
-  // 글러브 끈 라인
-  ctx.strokeStyle = "rgba(0,0,0,0.18)"; ctx.lineWidth = 2.5;
-  ctx.beginPath(); ctx.arc(gx - gloveR * 0.55, 0, gloveR * 0.7, -0.7, 0.7); ctx.stroke();
+  ctx.beginPath(); ctx.arc(gx + gloveR * 0.34, -gloveR * 0.42, gloveR * 0.6, 0, 7); ctx.fill(); // 너클 롤
+  ctx.beginPath(); ctx.arc(gx - gloveR * 0.3, gloveR * 0.66, gloveR * 0.52, 0, 7); ctx.fill();  // 엄지
+  // 음영(아래) + 하이라이트/우주
+  ctx.save(); ctx.beginPath(); ctx.arc(gx, 0, gloveR, 0, 7); ctx.clip();
+  ctx.fillStyle = "rgba(0,0,0,0.16)"; ctx.beginPath(); ctx.ellipse(gx, gloveR * 0.55, gloveR, gloveR * 0.7, 0, 0, 7); ctx.fill();
+  ctx.restore();
+  if (isSpace) drawGloveSpace(gx, gloveR);
+  else { ctx.fillStyle = "rgba(255,255,255,0.30)"; ctx.beginPath(); ctx.arc(gx - gloveR * 0.32, -gloveR * 0.34, gloveR * 0.4, 0, 7); ctx.fill(); }
+  // 엄지 구분선
+  ctx.strokeStyle = "rgba(0,0,0,0.22)"; ctx.lineWidth = 2.4; ctx.lineCap = "round";
+  ctx.beginPath(); ctx.arc(gx - gloveR * 0.02, gloveR * 0.18, gloveR * 0.72, -0.55, 0.85); ctx.stroke();
 }
 
 // 스모 HUD (화면 좌표) : 링 밖 카운트다운(2자리) + 주먹 쿨다운 알약
@@ -2451,8 +2489,9 @@ function drawCarPunch(x, y, angle, color, punchAt) {
 function updateSumo(dt) {
   if (gameMode !== "sumo") return;
   if (sumo.dead) { CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0; return; } // 부활 대기(서버 spawn)
-  const d = Math.hypot(CAR.x - SUMO.cx, CAR.y - SUMO.cy);
   const now = performance.now();
+  if (now < CAR.invulnUntil) { sumo.outAt = 0; return; } // 스폰 무적 동안엔 링밖 카운트다운 안 시작(전환 글리치 방어)
+  const d = Math.hypot(CAR.x - SUMO.cx, CAR.y - SUMO.cy);
   if (d > SUMO.ringR) {
     if (!sumo.outAt) sumo.outAt = now;                 // 링 밖 진입 시각 기록
     else if (now - sumo.outAt >= SUMO.outMs) {         // 1초 경과 → 자멸
@@ -5688,10 +5727,11 @@ function startGame(mode) {
     net.pendingTeleport = true;
     updateCamera(CAR, 0);
   } else if (mode === "sumo") {
-    // 스모 : 서버 spawn 이 링 위로 재배치 (임시로 중앙에 둠)
+    // 스모 : 맵 가운데 스폰 (서버 spawn 이 확정). 무적 동안은 링밖 판정 안 함.
     resetSumo();
-    CAR.x = SUMO.cx; CAR.y = SUMO.cy + SUMO.ringR - 200; CAR.angle = -Math.PI / 2;
+    CAR.x = SUMO.cx; CAR.y = SUMO.cy; CAR.angle = -Math.PI / 2;
     CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0;
+    CAR.invulnUntil = performance.now() + 1500;
     net.pendingTeleport = true;
     updateCamera(CAR, 0);
   }

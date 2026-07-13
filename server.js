@@ -56,17 +56,16 @@ function pickPlazaSpawn(selfId) {
 // 스모(프로토타입) : 원형 링에서 늘어나는 주먹으로 상대를 링 밖으로 밀어내는 PvP. 클라 SUMO 상수와 일치.
 //  월드는 크게 두고 경계 없음(링 밖으로 나가면 클라가 1초 카운트다운 후 자멸). 넉백만 서버 권위.
 const SUMO_W = 5000, SUMO_H = 5000, SUMO_CX = 2500, SUMO_CY = 2500, SUMO_RING_R = 1050;
-const SUMO_SPAWN_R = 720;   // 스폰은 링 안쪽 원 위 (중앙을 바라봄)
 const PUNCH_CD = 3000;      // 주먹 쿨다운(3초에 한 번)
 const PUNCH_REACH = 130;    // 글러브가 차 앞끝에서 더 뻗는 거리
 const PUNCH_FRONT = 30;     // 차 중심 → 앞 범퍼
 const PUNCH_EXTEND_MS = 120, PUNCH_HOLD_MS = 90; // 뻗기/유지 (히트 활성 구간 = 210ms)
 const PUNCH_HIT_R = 44;     // 글러브 히트 반경(+상대 차 반)
 const PUNCH_KNOCK = 1150;   // 넉백 임펄스(px/s)
-// 링 위 스폰 : 가장 덜 붐비는 지점을 골라 중앙을 바라보게
+// 스폰 : 맵 가운데. 여럿이면 중앙 근처 작은 원에 흩어 겹치지 않게(가장 덜 붐비는 지점).
 function pickSumoSpawn(selfId) {
-  const cands = [];
-  for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4; cands.push([SUMO_CX + Math.cos(a) * SUMO_SPAWN_R, SUMO_CY + Math.sin(a) * SUMO_SPAWN_R]); }
+  const cands = [[SUMO_CX, SUMO_CY]]; // 1순위 = 정중앙
+  for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4; cands.push([SUMO_CX + Math.cos(a) * 160, SUMO_CY + Math.sin(a) * 160]); }
   let best = cands[0], bestD = -1;
   for (const [x, y] of cands) {
     let minD = Infinity;
@@ -78,7 +77,7 @@ function pickSumoSpawn(selfId) {
     if (minD > bestD) { bestD = minD; best = [x, y]; }
   }
   const [x, y] = best;
-  return { x, y, angle: Math.atan2(SUMO_CY - y, SUMO_CX - x) };
+  return { x, y, angle: Math.random() * Math.PI * 2 }; // 중앙이라 아무 방향
 }
 
 const INVULN_MS = 1500;     // 부활/입장 후 무적 시간 (이 동안 죽지도 죽이지도 못함)
