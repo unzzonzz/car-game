@@ -2187,7 +2187,7 @@ const BOSS_HIT_BOXES = [
   { ox: -64, oy: -64, hl: 44, hw: 29 },
 ];
 const CAR_HIT_HL = 27.6, CAR_HIT_HW = 13.2; // 플레이어 시각 차체 반길이/반폭 (클라 carHalfExtents 와 동일)
-const BOSS_SPEED = 1330;          // 추격 최고 속도 (플레이어 최고속 2667px/s 의 ~50%)
+const BOSS_SPEED = 1000;          // 추격 최고 속도 (플레이어 최고속 2667px/s 의 ~37%) — 너프: 1330→1000
 // 트럭 운동 모델 : 가감속 + 속도에 따라 조향 반경이 커진다 (저속 민첩, 고속 둔중)
 const BOSS_ACCEL = 800;           // 가속 (px/s^2) — 0→최고속 약 1.7초, 출발이 묵직해 초반 도망 여유
 const BOSS_DECEL = 2400;          // 감속 (px/s^2)
