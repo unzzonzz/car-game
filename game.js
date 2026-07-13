@@ -1317,6 +1317,7 @@ function updateCollision(car) {
     if (preSpeed > 60 && now - lastWallSfx > 250) { lastWallSfx = now; SFX.collision(clamp(preSpeed / 700, 0.3, 1)); }
   }
   if (gameMode === "boss") bossPillarCollision(car); // 아레나 기둥
+  else if (gameMode === "plaza") plazaObstacleCollision(car); // 광장 장애물
 }
 
 /* 두 방향성 사각형(OBB)의 최소 분리 벡터(MTV) — 분리축 정리(SAT).
@@ -2147,12 +2148,22 @@ const PLAZA = {
   faceR: 400, baseR: 480,      // 시계 판 / 받침 반경
   stone: [140, 140, 2520, 1720, 180], // 석재 광장 (x,y,w,h,r)
 };
-// 장식물 배치 (월드 좌표) — 시드 고정
-const PLAZA_TREES = [[380, 520], [2420, 520], [640, 300], [2160, 300], [640, 1700], [2160, 1700], [380, 1480], [2420, 1480], [300, 1000], [2500, 1000]];
-const PLAZA_STALLS = [[940, 300, "#e8604c"], [1860, 300, "#57b868"], [940, 1700, "#57b868"], [1860, 1700, "#e8604c"]];
-const PLAZA_BENCHES = [[300, 760, Math.PI / 2], [300, 1240, Math.PI / 2], [2500, 760, Math.PI / 2], [2500, 1240, Math.PI / 2]];
-const PLAZA_FOUNTAINS = [[440, 440], [2360, 440], [440, 1560], [2360, 1560]];
-const PLAZA_LAMPS = [[250, 250], [2550, 250], [250, 1750], [2550, 1750], [1400, 250], [1400, 1750]];
+// 장식물 배치 (월드 좌표) — 시드 고정. 도로 링(중심 반경 660~860)은 좌우로만 여유가 있어(위아래는 도로가
+//  거의 꽉 참) 모든 장식은 좌/우 석재 스트립과 네 모서리(반경 >860)에만 둔다 → 도로 한복판에 놓이지 않게.
+const PLAZA_FOUNTAINS = [[460, 460], [2340, 460], [460, 1540], [2340, 1540]];
+const PLAZA_STALLS = [[800, 240, "#e8604c"], [2000, 240, "#57b868"], [800, 1760, "#57b868"], [2000, 1760, "#e8604c"]];
+const PLAZA_TREES = [[320, 700], [320, 1000], [320, 1300], [2480, 700], [2480, 1000], [2480, 1300], [960, 200], [1840, 200], [960, 1800], [1840, 1800]];
+const PLAZA_BENCHES = [[480, 820, Math.PI / 2], [480, 1180, Math.PI / 2], [2320, 820, Math.PI / 2], [2320, 1180, Math.PI / 2]];
+const PLAZA_LAMPS = [[230, 460], [230, 1000], [230, 1540], [2570, 460], [2570, 1000], [2570, 1540]];
+// 원형 충돌 장애물 (x,y,r) — 시계 섬(중앙 로터리) + 분수/노점/나무/벤치/가로등. 클라 권위(각자 자기 차만 밀어냄).
+const PLAZA_OBSTACLES = [
+  { x: 1400, y: 1000, r: 486 }, // 중앙 시계 섬 (로터리) — 도로가 이 둘레를 돈다
+  ...PLAZA_FOUNTAINS.map(([x, y]) => ({ x, y, r: 82 })),
+  ...PLAZA_STALLS.map(([x, y]) => ({ x, y, r: 56 })),
+  ...PLAZA_TREES.map(([x, y]) => ({ x, y, r: 46 })),
+  ...PLAZA_BENCHES.map(([x, y]) => ({ x, y, r: 30 })),
+  ...PLAZA_LAMPS.map(([x, y]) => ({ x, y, r: 16 })),
+];
 
 function pzRR(x, y, w, h, r) {
   ctx.beginPath();
@@ -2274,32 +2285,44 @@ function drawPlazaClock() {
   ctx.fillStyle = "#e8604c"; ctx.beginPath(); ctx.arc(x, y, 10, 0, 7); ctx.fill();
 }
 
-// 기둥 충돌 : 시각 차체(OBB)의 최근접점 기준 원 충돌 — 어느 각도로 박아도
-//  차 가장자리가 기둥에 파고들지 않고 딱 맞닿는다.
+// 원형 장애물(px,py,pr) 밖으로 차(OBB)를 밀어냄 + 파고드는 속도 성분 제거. 밀어낸 깊이(0=충돌 없음) 반환.
+//  시각 차체 최근접점 기준이라 어느 각도로 박아도 가장자리가 딱 맞닿는다. (보스 기둥/광장 장애물 공용)
+function collideCircle(car, hl, hw, cos, sin, px, py, pr) {
+  const dx = px - car.x, dy = py - car.y;
+  const lx = dx * cos + dy * sin, ly = -dx * sin + dy * cos;   // 장애물 중심 → 차 로컬
+  const nx = clamp(lx, -hl, hl), ny = clamp(ly, -hw, hw);      // OBB 내 최근접점
+  const ddx = lx - nx, ddy = ly - ny;
+  const d = Math.hypot(ddx, ddy);
+  if (d >= pr) return 0;
+  let ux, uy;
+  if (d < 0.001) { // 중심이 차체 안 : 차 중심 기준으로 밀어냄 (정확히 겹치면 기본 +x 로 탈출)
+    const dd = Math.hypot(dx, dy);
+    if (dd < 0.001) { ux = 1; uy = 0; } else { ux = -dx / dd; uy = -dy / dd; }
+  } else { const wx = ddx * cos - ddy * sin, wy = ddx * sin + ddy * cos; const n = Math.hypot(wx, wy); ux = -wx / n; uy = -wy / n; }
+  const push = pr - d;
+  car.x += ux * push; car.y += uy * push;
+  const vr = car.vx * ux + car.vy * uy;                        // 장애물 쪽 속도 성분 제거
+  if (vr < 0) { car.vx -= vr * ux; car.vy -= vr * uy; decompose(car); }
+  return push;
+}
+
+// 기둥 충돌 : 아레나 기둥을 원형 장애물로 밀어냄
 function bossPillarCollision(car) {
   const { hl, hw } = carHalfExtents(car);
   const cos = Math.cos(car.angle), sin = Math.sin(car.angle);
-  for (const p of BOSS_CLI_PILLARS) {
-    // 기둥 중심을 차 로컬 좌표로 → OBB 내 최근접점
-    const dx = p.x - car.x, dy = p.y - car.y;
-    const lx = dx * cos + dy * sin, ly = -dx * sin + dy * cos;
-    const nx = clamp(lx, -hl, hl), ny = clamp(ly, -hw, hw);
-    let ddx = lx - nx, ddy = ly - ny; // 최근접점 → 기둥 중심 (로컬)
-    const d = Math.hypot(ddx, ddy);
-    if (d >= p.r) continue;
-    let ux, uy;
-    if (d < 0.001) { // 기둥 중심이 차체 안 (드묾) : 차 중심 기준으로 밀어냄
-      const dd = Math.hypot(dx, dy) || 1;
-      ux = -dx / dd; uy = -dy / dd;
-    } else {       // 로컬 방향 → 월드 방향, 기둥 반대쪽으로
-      const wx = ddx * cos - ddy * sin, wy = ddx * sin + ddy * cos;
-      const n = Math.hypot(wx, wy);
-      ux = -wx / n; uy = -wy / n;
-    }
-    const push = p.r - d;
-    car.x += ux * push; car.y += uy * push;
-    const vr = car.vx * ux + car.vy * uy; // 기둥 쪽 속도 성분 제거
-    if (vr < 0) { car.vx -= vr * ux; car.vy -= vr * uy; decompose(car); }
+  for (const p of BOSS_CLI_PILLARS) collideCircle(car, hl, hw, cos, sin, p.x, p.y, p.r);
+}
+
+// 광장 장애물 충돌 : 시계 섬/분수/노점/나무/벤치/가로등에 부딪힘 (박으면 충돌음)
+function plazaObstacleCollision(car) {
+  const { hl, hw } = carHalfExtents(car);
+  const cos = Math.cos(car.angle), sin = Math.sin(car.angle);
+  const preSpeed = Math.hypot(car.vx, car.vy);
+  let hit = 0;
+  for (const o of PLAZA_OBSTACLES) hit = Math.max(hit, collideCircle(car, hl, hw, cos, sin, o.x, o.y, o.r));
+  if (hit > 0.5 && preSpeed > 60) {
+    const now = performance.now();
+    if (now - lastWallSfx > 250) { lastWallSfx = now; SFX.collision(clamp(preSpeed / 700, 0.3, 1)); }
   }
 }
 
