@@ -61,6 +61,7 @@ const WORLD = {
   soccer: { w: 1800, h: 3000, type: "soccer", track: null },  // 축구(베타) — 싱글, 풋살장 크기
   boss: { w: 3400, h: 2600, type: "boss" },                   // 보스전 아레나 (서버 BOSS_ARENA 와 동일)
   plaza: { w: 2800, h: 2000, type: "plaza" },                 // 광장(만남의 광장) — 자유 주행, 중앙 실시간 시계
+  sumo: { w: 5000, h: 5000, type: "sumo" },                   // 스모(프로토타입) — 원형 링, 늘어나는 주먹 PvP
 };
 
 /* 로비 : 접속하자마자 차를 몰 수 있는 웜 화이트 월드. 게이트에 들어가면 모드 입장.
@@ -187,6 +188,7 @@ const MAP_GROUPS = {
     desc: "개발 중인 신규 모드 (싱글)",
     maps: [
       { name: "축구", desc: "공을 골대에 넣는 단독 연습", mode: "soccer" },
+      { name: "스모", desc: "늘어나는 주먹으로 링 밖으로 밀어내기", mode: "sumo" },
     ],
   },
   // 레트로 = 예전 코스 2종. 기록은 옛 컬럼(bestTime/bestTimeHard)을 그대로 쓴다.
@@ -1020,6 +1022,9 @@ window.addEventListener("keydown", (e) => {
       if (!e.repeat && gameState === "playing" && isTimeAttackMode()) { SFX.click(); startAttack(); }
       break;
     case "KeyJ": keys.j = true; break; // 축구 : 누르는 동안만 공 그랩(드리블). 떼면 momentum 으로 나감
+    case "ShiftLeft": case "ShiftRight":
+      if (!e.repeat && gameMode === "sumo") { throwPunch(); e.preventDefault(); } // 스모 : 주먹 뻗기
+      break;
   }
 });
 window.addEventListener("keyup", (e) => {
@@ -1180,7 +1185,7 @@ function updateEngine(car, dt) {
   let driveAccel = car.enginePower / v;
   driveAccel = Math.min(driveAccel, car.acceleration); // 트랙션 한계
 
-  car.lf += driveAccel * car.throttle * dt;
+  car.lf += driveAccel * car.throttle * dt * modeSpeedScale(); // 스모는 가속도 톤도 함께 낮춤
 }
 
 /* 4) 브레이크 ----------------------------------------------------------------
@@ -1278,10 +1283,14 @@ function updateGrip(car, dt) {
 /* 7) 속도/위치 계산 ----------------------------------------------------------
  *  분해·가공된 전진/측면 성분(lf, ll)을 다시 월드 속도 벡터로 합성하고,
  *  최고속도를 넘지 않도록 전진성분을 제한한 뒤 위치를 적분한다. */
+// 모드별 속도 배율 (스모는 1/6 로 느리게). 최고속도 캡·엔진 가속에 함께 적용.
+function modeSpeedScale() { return gameMode === "sumo" ? SUMO.speedScale : 1; }
+
 function updatePhysics(car, dt) {
   // 전진 성분 캡 : 전진은 최고속도, 후진은 후진 최고속도까지 (측면 드리프트 속도는 별도)
-  const vmax = car.maxSpeed * KMH_TO_PXS;
-  const reverseMax = car.reverseSpeed * KMH_TO_PXS;
+  const s = modeSpeedScale();
+  const vmax = car.maxSpeed * KMH_TO_PXS * s;
+  const reverseMax = car.reverseSpeed * KMH_TO_PXS * s;
   car.lf = clamp(car.lf, -reverseMax, vmax);
 
   // local(lf, ll) → world(vx, vy) 합성
@@ -1299,6 +1308,7 @@ function updatePhysics(car, dt) {
  *  두 모드 모두 맵 밖으로 못 나가게 차체를 벽 안쪽에 가둔다(죽음 없음). */
 let lastWallSfx = 0; // 벽 충돌음 쿨다운(연속 마찰 시 스팸 방지)
 function updateCollision(car) {
+  if (gameMode === "sumo") return; // 스모는 경계 없음(링 밖으로 자유 이동 → 카운트다운 후 자멸)
   // 시각 차체(OBB)와 일치하는 회전 반영 반경 — 예전 car.length/2 원형 근사는
   //  머리부터 박을 때 차 앞코가 벽/요소에 파고들어 보였다.
   const { hl, hw } = carHalfExtents(car);
@@ -1790,11 +1800,13 @@ function render(car) {
   if (drawOthers) {
     for (const [id, r] of remotePlayers) {
       if (gameMode === "boss" && id === BOSS_EID) continue; // 보스는 차들 위에 따로 그린다
+      if (gameMode === "sumo") drawCarPunch(r.x, r.y, r.angle, r.color || colorForId(id), r.punchAt); // 원격 주먹(차 밑 마운트)
       drawCar(r, r.color || colorForId(id));
     }
   }
   // 내 차량 (보스전 사망/관전 중엔 숨김)
-  if (!(gameMode === "boss" && (bossCli.dead || bossCli.spec))) drawCar(car, myColor());
+  if (gameMode === "sumo" && !sumo.dead) drawCarPunch(car.x, car.y, car.angle, myColor(), sumo.punchAt); // 내 주먹
+  if (!((gameMode === "boss" && (bossCli.dead || bossCli.spec)) || (gameMode === "sumo" && sumo.dead))) drawCar(car, myColor());
   // 보스 : 설정의 "다른 차 숨김"과 무관하게 항상 보인다
   if (gameMode === "boss") {
     const bent = remotePlayers.get(BOSS_EID);
@@ -1826,6 +1838,7 @@ function render(car) {
   drawSpeed(car);
   drawRaceHud(); // 프로 레이싱 신호등/GO
   drawBossHud(); // 보스전 타이머/카운트다운/결과
+  drawSumoHud(); // 스모 : 링밖 카운트다운 + 주먹 쿨다운
   updateTimeHud(); // 우측 하단 #time (프로 현재 랩 / 타임어택)
   updateProTimer(); // 상단 종료 카운트다운 (#proTimer DOM)
 }
@@ -1930,6 +1943,7 @@ function drawGround() {
   else if (gameMode === "soccer") drawSoccerGround();
   else if (gameMode === "boss") drawBossGround();
   else if (gameMode === "plaza") drawPlazaGround();
+  else if (gameMode === "sumo") drawSumoGround();
   else if (isFlatTrackMode()) drawFlatTrackGround();
   else if (isTrackWorld()) drawRacingGround();
 }
@@ -2165,6 +2179,32 @@ const PLAZA_OBSTACLES = [
   ...PLAZA_LAMPS.map(([x, y]) => ({ x, y, r: 16 })),
 ];
 
+/* =============================================================================
+ *  스모(프로토타입) — 원형 링 위에서 늘어나는 주먹으로 상대를 링 밖으로 밀어낸다.
+ *  차 속도 1/6, Shift 로 주먹(3초 쿨), 넉백은 서버 권위, 링 밖 1초(2자리 카운트다운) 후 자멸.
+ *  서버 SUMO_* 상수와 일치.
+ * ========================================================================== */
+const SUMO = {
+  cx: 2500, cy: 2500, ringR: 1050,   // 링 중심/반경
+  speedScale: 1 / 6,                 // 차 속도 = 평소의 1/6
+  punchCd: 3000,                     // 주먹 쿨다운(ms)
+  reach: 130, front: 30,             // 글러브 최대 뻗음 / 차 앞끝
+  extendMs: 120, holdMs: 90, retractMs: 200, // 뻗기/유지/접기
+  outMs: 1000,                       // 링 밖 사망까지(ms)
+};
+// 스모 로컬 상태 : 주먹 애니(내 차) + 링밖 카운트다운 + 사망
+const sumo = { punchAt: 0, cdUntil: 0, outAt: 0, dead: false };
+function resetSumo() { sumo.punchAt = 0; sumo.cdUntil = 0; sumo.outAt = 0; sumo.dead = false; }
+// 주먹 뻗음 비율(0=접힘,1=최대) — 시작 시각으로부터 경과(ms)
+function punchPhase(elapsed) {
+  if (elapsed < 0) return 0;
+  if (elapsed < SUMO.extendMs) return elapsed / SUMO.extendMs;
+  if (elapsed < SUMO.extendMs + SUMO.holdMs) return 1;
+  const r = elapsed - SUMO.extendMs - SUMO.holdMs;
+  if (r < SUMO.retractMs) return 1 - r / SUMO.retractMs;
+  return 0;
+}
+
 function pzRR(x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
@@ -2283,6 +2323,155 @@ function drawPlazaClock() {
   hand(sec * Math.PI / 30, r * 0.82, 6, "#e8604c", 60);
   ctx.fillStyle = "#3a3a3a"; ctx.beginPath(); ctx.arc(x, y, 20, 0, 7); ctx.fill();
   ctx.fillStyle = "#e8604c"; ctx.beginPath(); ctx.arc(x, y, 10, 0, 7); ctx.fill();
+}
+
+/* 스모 링 바닥 : 밖은 어두운 공허(떨어지는 곳), 안은 밝은 원형 도장(스모판). 경계는 굵은 코랄 링. */
+function drawSumoGround() {
+  const W = world.w, H = world.h, cx = SUMO.cx, cy = SUMO.cy, r = SUMO.ringR;
+  ctx.fillStyle = "#2b2f3a"; ctx.fillRect(0, 0, W, H);       // 공허(링 밖)
+  // 링 밖 은은한 격자 (떨어지는 느낌의 깊이감)
+  ctx.strokeStyle = "rgba(255,255,255,0.03)"; ctx.lineWidth = 2;
+  const g = 140, vx0 = Math.max(0, camera.x), vx1 = Math.min(W, camera.x + viewW / camera.zoom);
+  const vy0 = Math.max(0, camera.y), vy1 = Math.min(H, camera.y + viewH / camera.zoom);
+  ctx.beginPath();
+  for (let x = Math.ceil(vx0 / g) * g; x <= vx1; x += g) { ctx.moveTo(x, vy0); ctx.lineTo(x, vy1); }
+  for (let y = Math.ceil(vy0 / g) * g; y <= vy1; y += g) { ctx.moveTo(vx0, y); ctx.lineTo(vx1, y); }
+  ctx.stroke();
+  // 링 그림자(살짝 띄운 느낌)
+  ctx.fillStyle = "rgba(0,0,0,0.35)"; ctx.beginPath(); ctx.arc(cx + 14, cy + 20, r + 8, 0, 7); ctx.fill();
+  // 도장 바닥 (모래빛)
+  ctx.fillStyle = "#f0e2c2"; ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.fill();
+  // 동심원 결
+  ctx.strokeStyle = "rgba(58,54,46,0.06)"; ctx.lineWidth = 3;
+  for (let rr = 220; rr < r; rr += 220) { ctx.beginPath(); ctx.arc(cx, cy, rr, 0, 7); ctx.stroke(); }
+  // 중앙 시작 표식 (두 개의 짧은 흰 선 — 스모 시작선 느낌)
+  ctx.strokeStyle = "rgba(255,255,255,0.6)"; ctx.lineWidth = 8; ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(cx - 70, cy - 40); ctx.lineTo(cx + 70, cy - 40); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx - 70, cy + 40); ctx.lineTo(cx + 70, cy + 40); ctx.stroke();
+  // 경계 링 (코랄 굵은 테 — 이 밖으로 나가면 카운트다운)
+  ctx.strokeStyle = "#e8604c"; ctx.lineWidth = 16; ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.stroke();
+  ctx.strokeStyle = "rgba(255,255,255,0.55)"; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(cx, cy, r - 12, 0, 7); ctx.stroke();
+}
+
+/* 늘어나는 주먹 : 차 앞에 지그재그(아코디언) 팔 + 복싱 글러브. 색은 차 색과 동일(우주스킨이면 우주).
+ *  phase 0=접힘 … 1=최대. 차 로컬 좌표(+x=전방)에서 그린 뒤 호출부에서 회전/이동 적용 가정. */
+function drawPunchArm(color, phase) {
+  const front = 24;                       // 차 앞끝(로컬 +x)
+  const reach = SUMO.reach * phase;       // 뻗은 길이
+  const isSpace = color === SPACE_SKIN;
+  const armCol = isSpace ? "#141b40" : color;
+  // 접힘 정도에 따라 지그재그 마디 수/진폭 (접힐수록 촘촘/큰 진폭, 뻗을수록 평평)
+  const segLen = 14;
+  const total = front + reach;
+  const gloveR = 20;
+  const armEnd = total - gloveR * 0.7;    // 글러브 직전까지 팔
+  const armLen = Math.max(1, armEnd - front);
+  const amp = 13 * (1 - 0.6 * phase);     // 뻗을수록 진폭↓(펴짐)
+  const n = Math.max(3, Math.round(armLen / (segLen)));
+  // 팔(지그재그) : 위/아래로 번갈아 꺾인 선
+  ctx.strokeStyle = armCol; ctx.lineWidth = 9; ctx.lineJoin = "round"; ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(front, 0);
+  for (let i = 1; i <= n; i++) {
+    const px = front + (armLen * i) / n;
+    const py = (i % 2 === 0) ? 0 : (i % 4 === 1 ? amp : -amp);
+    ctx.lineTo(px, py);
+  }
+  ctx.lineTo(armEnd, 0);
+  ctx.stroke();
+  // 마디 힌지 점(금속 리벳 느낌)
+  ctx.fillStyle = "rgba(0,0,0,0.25)";
+  for (let i = 1; i < n; i++) {
+    const px = front + (armLen * i) / n;
+    const py = (i % 2 === 0) ? 0 : (i % 4 === 1 ? amp : -amp);
+    ctx.beginPath(); ctx.arc(px, py, 2.6, 0, 7); ctx.fill();
+  }
+  // 손목 밴드
+  ctx.fillStyle = "#f2c94c"; ctx.beginPath(); ctx.arc(armEnd, 0, 8, 0, 7); ctx.fill();
+  // 글러브 : 둥근 몸통 + 엄지
+  const gx = total;
+  ctx.fillStyle = isSpace ? "#0b1026" : color;
+  ctx.beginPath(); ctx.arc(gx, 0, gloveR, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(gx - gloveR * 0.5, gloveR * 0.7, gloveR * 0.5, 0, 7); ctx.fill(); // 엄지
+  if (isSpace) { // 우주 글러브 : 작은 별 몇 개
+    ctx.fillStyle = "#dbe6ff";
+    for (const [ox, oy] of [[-6, -5], [5, 2], [-2, 7], [8, -6]]) { ctx.beginPath(); ctx.arc(gx + ox, oy, 1.4, 0, 7); ctx.fill(); }
+  } else { // 하이라이트
+    ctx.fillStyle = "rgba(255,255,255,0.22)";
+    ctx.beginPath(); ctx.arc(gx - 6, -6, gloveR * 0.42, 0, 7); ctx.fill();
+  }
+  // 글러브 끈 라인
+  ctx.strokeStyle = "rgba(0,0,0,0.18)"; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.arc(gx - gloveR * 0.55, 0, gloveR * 0.7, -0.7, 0.7); ctx.stroke();
+}
+
+// 스모 HUD (화면 좌표) : 링 밖 카운트다운(2자리) + 주먹 쿨다운 알약
+function drawSumoHud() {
+  if (gameMode !== "sumo") return;
+  const now = performance.now();
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  // 링 밖 카운트다운 : 큰 숫자(소수 2자리)
+  if (sumo.outAt && !sumo.dead) {
+    const remain = Math.max(0, (SUMO.outMs - (now - sumo.outAt)) / 1000);
+    ctx.font = "400 15px Jua, sans-serif";
+    ctx.fillStyle = "#e8604c";
+    ctx.fillText("링 밖!", viewW / 2, viewH * 0.30);
+    ctx.font = "700 64px Jua, sans-serif";
+    ctx.fillStyle = remain < 0.4 ? "#e8604c" : "#3a3a3a";
+    ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = 6;
+    const txt = remain.toFixed(2);
+    ctx.strokeText(txt, viewW / 2, viewH * 0.30 + 46);
+    ctx.fillText(txt, viewW / 2, viewH * 0.30 + 46);
+  }
+  // 주먹 쿨다운 알약 (하단 가운데)
+  const cx = viewW / 2, cy = viewH - 40, pw = 128, ph = 30;
+  const ready = now >= sumo.cdUntil;
+  const frac = ready ? 1 : clamp(1 - (sumo.cdUntil - now) / SUMO.punchCd, 0, 1);
+  ctx.fillStyle = "#ffffff"; roundRect(cx - pw / 2, cy - ph / 2, pw, ph, 15); ctx.fill();
+  if (!ready) { // 차오르는 진행
+    ctx.save(); roundRect(cx - pw / 2, cy - ph / 2, pw, ph, 15); ctx.clip();
+    ctx.fillStyle = "#f4ede0"; ctx.fillRect(cx - pw / 2, cy - ph / 2, pw * frac, ph); ctx.restore();
+  }
+  ctx.strokeStyle = ready ? "#57b868" : "#ece8df"; ctx.lineWidth = ready ? 2 : 1;
+  roundRect(cx - pw / 2, cy - ph / 2, pw, ph, 15); ctx.stroke();
+  ctx.font = "400 14px Jua, sans-serif";
+  ctx.fillStyle = ready ? "#3f8a4c" : "#9a948a";
+  ctx.fillText(ready ? "주먹 준비 (Shift)" : `충전 ${((sumo.cdUntil - now) / 1000).toFixed(1)}s`, cx, cy + 1);
+}
+
+// 차 앞에 주먹 그리기 : 차 위치/각도로 이동·회전 후 현재 뻗음 위상으로 drawPunchArm
+function drawCarPunch(x, y, angle, color, punchAt) {
+  const phase = punchAt ? punchPhase(performance.now() - punchAt) : 0;
+  ctx.save();
+  ctx.translate(x, y); ctx.rotate(angle);
+  drawPunchArm(color, phase);
+  ctx.restore();
+}
+
+// 스모 갱신 : 링 밖 카운트다운(1초, 2자리) → 자멸 요청, 주먹 쿨다운/애니는 상태값만.
+function updateSumo(dt) {
+  if (gameMode !== "sumo") return;
+  if (sumo.dead) { CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0; return; } // 부활 대기(서버 spawn)
+  const d = Math.hypot(CAR.x - SUMO.cx, CAR.y - SUMO.cy);
+  const now = performance.now();
+  if (d > SUMO.ringR) {
+    if (!sumo.outAt) sumo.outAt = now;                 // 링 밖 진입 시각 기록
+    else if (now - sumo.outAt >= SUMO.outMs) {         // 1초 경과 → 자멸
+      sumo.dead = true; sumo.outAt = 0;
+      spawnExplosion(CAR.x, CAR.y, myColor()); SFX.explosion(); addShake(20);
+      if (net.connected && net.ws.readyState === WebSocket.OPEN) net.ws.send(JSON.stringify({ type: "sumoDead" }));
+    }
+  } else sumo.outAt = 0;                               // 다시 안으로 → 취소
+}
+
+// 주먹 발사 (Shift) : 쿨다운 준비되면 로컬 애니 시작 + 서버 전송
+function throwPunch() {
+  if (gameMode !== "sumo" || gameState !== "playing" || sumo.dead) return;
+  const now = performance.now();
+  if (now < sumo.cdUntil) return;
+  sumo.cdUntil = now + SUMO.punchCd;
+  sumo.punchAt = now;
+  SFX.click();
+  if (net.connected && net.ws.readyState === WebSocket.OPEN) net.ws.send(JSON.stringify({ type: "punch" }));
 }
 
 // 원형 장애물(px,py,pr) 밖으로 차(OBB)를 밀어냄 + 파고드는 속도 성분 제거. 밀어낸 깊이(0=충돌 없음) 반환.
@@ -4201,6 +4390,7 @@ function connect() {
       modeCounts.test = msg.test || 0;
       modeCounts.rank = msg.rank || 0;
       modeCounts.plaza = msg.plaza || 0;
+      modeCounts.sumo = msg.sumo || 0;
       modeCounts.total = typeof msg.total === "number"
         ? msg.total
         : modeCounts.a1 + modeCounts.a2 + modeCounts.a3 + modeCounts.racing + modeCounts.hard + modeCounts.serp + modeCounts.c1 + modeCounts.c2 + modeCounts.c3 + modeCounts.retro1 + modeCounts.retro2 + modeCounts.pro;
@@ -4217,9 +4407,20 @@ function connect() {
       CAR.invulnUntil = performance.now() + 1500;
       net.pendingTeleport = true; // 남들 화면에서 슬라이드 없이 스냅되도록
       if (gameMode === "boss") { bossCli.dead = false; bossCli.respawnAt = 0; updateCamera(CAR, 0); } // 보스전 부활/배치 복귀
+      if (gameMode === "sumo") { sumo.dead = false; sumo.outAt = 0; updateCamera(CAR, 0); } // 스모 부활 (링 위로)
     } else if (msg.type === "bump") {
       // 서버 권위 충돌 임펄스 → 내 차 속도에 반영(진짜 밀치기/밀려남)
       if (COLLISION_ENABLED && gameState === "playing" && gameMode !== "lobby") applyBump(Number(msg.vx) || 0, Number(msg.vy) || 0);
+    } else if (msg.type === "sumoKnock") {
+      // 스모 : 주먹에 맞아 날아감 (bump 게이트와 무관하게 항상 적용)
+      if (gameMode === "sumo" && gameState === "playing" && !sumo.dead) {
+        applyBump(Number(msg.vx) || 0, Number(msg.vy) || 0);
+        addShake(16);
+      }
+    } else if (msg.type === "sumoPunch") {
+      // 스모 : 원격 플레이어가 주먹을 뻗음 → 그 차의 주먹 애니 시작
+      if (msg.id === net.id) sumo.punchAt = performance.now();  // 내 주먹은 로컬에서 이미 시작했지만 보정
+      else { const r = remotePlayers.get(msg.id); if (r) r.punchAt = performance.now(); }
     } else if (msg.type === "death") {
       // 서버 판정: 내가 죽었다 → 모드 선택 화면으로 복귀
       handleDeath();
@@ -5356,6 +5557,7 @@ function frame(now) {
   updateSkid(CAR);            // 스키드 마크
   if (gameMode === "lobby") updateLobby(dt); // 로비: 오버레이 상태 + 게이트 진입 판정
   else if (gameMode === "soccer") { updateSoccerCar(CAR); updateBall(dt); } // 축구: 차 벽가둠 + 공 물리
+  else if (gameMode === "sumo") updateSumo(dt); // 스모: 링 밖 카운트다운/자멸
   const spdKmh = Math.abs(CAR.lf) * PXS_TO_KMH;
   updateDriftSfx();           // 드리프트 스크리치(지속음) 시작/정지
   updateEngineSfx(spdKmh);    // 엔진 드론 (속도 → 피치)
@@ -5482,6 +5684,13 @@ function startGame(mode) {
   } else if (mode === "plaza") {
     // 광장 : 서버 spawn 이 진입점으로 재배치 (임시로 중앙 아래에 둠)
     CAR.x = WORLD.plaza.w / 2; CAR.y = WORLD.plaza.h - 240; CAR.angle = -Math.PI / 2;
+    CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0;
+    net.pendingTeleport = true;
+    updateCamera(CAR, 0);
+  } else if (mode === "sumo") {
+    // 스모 : 서버 spawn 이 링 위로 재배치 (임시로 중앙에 둠)
+    resetSumo();
+    CAR.x = SUMO.cx; CAR.y = SUMO.cy + SUMO.ringR - 200; CAR.angle = -Math.PI / 2;
     CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0;
     net.pendingTeleport = true;
     updateCamera(CAR, 0);

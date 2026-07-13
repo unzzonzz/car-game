@@ -53,6 +53,34 @@ function pickPlazaSpawn(selfId) {
   const [x, y] = best;
   return { x, y, angle: Math.atan2(PLAZA_H / 2 - y, PLAZA_W / 2 - x) }; // 중앙(시계)을 바라봄
 }
+// 스모(프로토타입) : 원형 링에서 늘어나는 주먹으로 상대를 링 밖으로 밀어내는 PvP. 클라 SUMO 상수와 일치.
+//  월드는 크게 두고 경계 없음(링 밖으로 나가면 클라가 1초 카운트다운 후 자멸). 넉백만 서버 권위.
+const SUMO_W = 5000, SUMO_H = 5000, SUMO_CX = 2500, SUMO_CY = 2500, SUMO_RING_R = 1050;
+const SUMO_SPAWN_R = 720;   // 스폰은 링 안쪽 원 위 (중앙을 바라봄)
+const PUNCH_CD = 3000;      // 주먹 쿨다운(3초에 한 번)
+const PUNCH_REACH = 130;    // 글러브가 차 앞끝에서 더 뻗는 거리
+const PUNCH_FRONT = 30;     // 차 중심 → 앞 범퍼
+const PUNCH_EXTEND_MS = 120, PUNCH_HOLD_MS = 90; // 뻗기/유지 (히트 활성 구간 = 210ms)
+const PUNCH_HIT_R = 44;     // 글러브 히트 반경(+상대 차 반)
+const PUNCH_KNOCK = 1150;   // 넉백 임펄스(px/s)
+// 링 위 스폰 : 가장 덜 붐비는 지점을 골라 중앙을 바라보게
+function pickSumoSpawn(selfId) {
+  const cands = [];
+  for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4; cands.push([SUMO_CX + Math.cos(a) * SUMO_SPAWN_R, SUMO_CY + Math.sin(a) * SUMO_SPAWN_R]); }
+  let best = cands[0], bestD = -1;
+  for (const [x, y] of cands) {
+    let minD = Infinity;
+    for (const [pid, p] of players) {
+      if (pid === selfId || !p.active || p.mode !== "sumo" || !p.state) continue;
+      const d = Math.hypot(x - p.state.x, y - p.state.y);
+      if (d < minD) minD = d;
+    }
+    if (minD > bestD) { bestD = minD; best = [x, y]; }
+  }
+  const [x, y] = best;
+  return { x, y, angle: Math.atan2(SUMO_CY - y, SUMO_CX - x) };
+}
+
 const INVULN_MS = 1500;     // 부활/입장 후 무적 시간 (이 동안 죽지도 죽이지도 못함)
 const GRACE_MS = 500;       // 입장 직후 클라이언트의 옛 위치 전송을 무시하는 시간
 const TELEPORT_DIST = 200;  // 한 틱에 이 이상 움직이면 텔레포트로 간주(스윕 생략)
@@ -674,6 +702,7 @@ wss.on("connection", (ws) => {
         : (msg.mode === "test") ? "test"
         : (msg.mode === "boss") ? "boss"
         : (msg.mode === "plaza") ? "plaza"
+        : (msg.mode === "sumo") ? "sumo"
         : (msg.mode === "pro") ? "pro" : "survival";
 
       if (mode === "pro") {
@@ -711,6 +740,14 @@ wss.on("connection", (ws) => {
         p.state = { x: spawn.x, y: spawn.y, angle: spawn.angle, drifting: false, teleport: true };
         p.prevHead = headOf(p.state);
         p.invulnUntil = 0; p.graceUntil = Date.now() + GRACE_MS;
+        send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
+      } else if (mode === "sumo") {
+        // 스모 : 원형 링 위 스폰. 넉백은 서버 권위, 링 밖 죽음/부활은 클라 판정 후 sumoDead 로 요청.
+        const spawn = pickSumoSpawn(id);
+        p.state = { x: spawn.x, y: spawn.y, angle: spawn.angle, drifting: false, teleport: true };
+        p.prevHead = headOf(p.state);
+        p.invulnUntil = Date.now() + INVULN_MS; p.graceUntil = Date.now() + GRACE_MS;
+        p.punchCd = 0; p.punchStart = 0; p.punchHit = false;
         send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
       } else { // racing/hard : 고정 맵. 타임어택 모드는 각자 TOP10 기록도 전송
         p.state = null; p.invulnUntil = 0; p.graceUntil = 0;
@@ -849,6 +886,28 @@ wss.on("connection", (ws) => {
       persistUser(p.account.userId);
       for (const q of connsOf(p.account.userId)) sendTitlesInfo(q);
       broadcastTitleOf(p.account.userId);
+
+    } else if (msg.type === "punch") {
+      // 스모 : 주먹 뻗기 (3초 쿨다운). 유효하면 상태 기록 + 모든 스모 참가자에게 애니 브로드캐스트.
+      if (p.mode !== "sumo" || !p.active || !p.state) return;
+      const now = Date.now();
+      if (now < (p.punchCd || 0)) return;      // 쿨다운 중
+      p.punchCd = now + PUNCH_CD;
+      p.punchStart = now; p.punchHit = false;  // sumoTick 이 히트 판정
+      broadcastMode("sumo", { type: "sumoPunch", id, at: now });
+
+    } else if (msg.type === "sumoDead") {
+      // 스모 : 클라가 링 밖 1초 카운트다운 후 자멸 요청 → 폭발 통지 + 링 위 부활
+      if (p.mode !== "sumo" || !p.active) return;
+      const dx = p.state ? p.state.x : SUMO_CX, dy = p.state ? p.state.y : SUMO_CY;
+      broadcastMode("sumo", { type: "killed", victimId: id, killerId: 0, x: dx, y: dy });
+      const spawn = pickSumoSpawn(id);
+      p.state = { x: spawn.x, y: spawn.y, angle: spawn.angle, drifting: false, teleport: true };
+      p.prevHead = headOf(p.state);
+      const rt = Date.now();
+      p.invulnUntil = rt + INVULN_MS; p.graceUntil = rt + GRACE_MS;
+      p.punchStart = 0; p.punchHit = false;
+      send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
 
     } else if (msg.type === "friendsInfo") {
       // 친구 패널 데이터 요청
@@ -1098,7 +1157,7 @@ function broadcastConnected(obj) {
 
 // 모드별 참가 인원을 "모든 접속자"(메뉴 화면 포함)에게 알린다 → 모드 버튼에 표시
 function broadcastCounts() {
-  const counts = { survival: 0, a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, retro1: 0, retro2: 0, pro: 0, test: 0, rank: 0, boss: 0, plaza: 0 };
+  const counts = { survival: 0, a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, retro1: 0, retro2: 0, pro: 0, test: 0, rank: 0, boss: 0, plaza: 0, sumo: 0 };
   for (const [, p] of players) {
     if (!p.active) continue;
     if (p.rankMode) { counts.rank++; continue; } // 랭크전은 내부적으로 pro — 따로 집계
@@ -1450,7 +1509,7 @@ const MODE_LABEL = {
   racing: "연습 B-1", hard: "연습 B-2", serp: "연습 B-3",
   c1: "연습 C-1", c2: "연습 C-2", c3: "연습 C-3",
   retro1: "레트로 초보자 코스", retro2: "레트로 어려움 코스",
-  boss: "보스전", plaza: "광장",
+  boss: "보스전", plaza: "광장", sumo: "스모",
 };
 function activityOf(p) {
   if (!p.active) return "로비";
@@ -2590,7 +2649,7 @@ setInterval(syncAllBoss, 200); // 5Hz 상태 동기 (타이머/인원 갱신)
 //  (서바이벌/레이싱 플레이어는 서로 보이지 않도록 분리)
 setInterval(() => {
   const now = Date.now();
-  const byMode = { survival: [], a1: [], a2: [], a3: [], racing: [], hard: [], serp: [], c1: [], c2: [], c3: [], retro1: [], retro2: [], test: [], boss: [], plaza: [] };
+  const byMode = { survival: [], a1: [], a2: [], a3: [], racing: [], hard: [], serp: [], c1: [], c2: [], c3: [], retro1: [], retro2: [], test: [], boss: [], plaza: [], sumo: [] };
   const byRoom = new Map(); // roomId -> entries (프로는 같은 방끼리만 본다)
 
   // 보스 엔티티 : 특수 id 0 엔트리 — 클라 보간 파이프라인을 그대로 탄다
@@ -2655,6 +2714,33 @@ setInterval(() => {
     if (p.state) p.state.teleport = false;
   }
 }, 1000 / TICK_RATE);
+
+// 스모 주먹 히트 판정 (서버 권위 넉백) : 활성 주먹의 글러브 위치를 매 틱 계산해
+//  다른 스모 차와 겹치면 상대에게 sumoKnock(임펄스)을 보낸다. 주먹당 1회만 명중.
+function sumoTick() {
+  const now = Date.now();
+  const list = [];
+  for (const [id, p] of players) if (p.active && p.mode === "sumo" && p.state) list.push({ id, p });
+  for (const { id, p } of list) {
+    if (!p.punchStart || p.punchHit || now > p.punchStart + PUNCH_EXTEND_MS + PUNCH_HOLD_MS) continue;
+    const t = now - p.punchStart;
+    const reach = PUNCH_REACH * Math.min(1, t / PUNCH_EXTEND_MS); // 뻗는 동안 선형 → 유지
+    const gx = p.state.x + Math.cos(p.state.angle) * (PUNCH_FRONT + reach);
+    const gy = p.state.y + Math.sin(p.state.angle) * (PUNCH_FRONT + reach);
+    for (const o of list) {
+      if (o.id === id || now < (o.p.invulnUntil || 0)) continue;
+      const d = Math.hypot(gx - o.p.state.x, gy - o.p.state.y);
+      if (d < PUNCH_HIT_R + CAR_LEN / 2) {
+        let ux = o.p.state.x - p.state.x, uy = o.p.state.y - p.state.y;
+        const n = Math.hypot(ux, uy) || 1; ux /= n; uy /= n; // 주먹 주인 → 상대 방향으로 날림
+        send(o.p, { type: "sumoKnock", vx: Math.round(ux * PUNCH_KNOCK), vy: Math.round(uy * PUNCH_KNOCK) });
+        p.punchHit = true;
+        break;
+      }
+    }
+  }
+}
+setInterval(sumoTick, 1000 / 60);
 
 // 접속 중인 로그인 유저의 평생 접속 시간을 주기적으로 누적 저장(1분마다).
 //  (연결이 오래 유지돼도 중간중간 반영되도록 — 크래시/강제종료 대비)
