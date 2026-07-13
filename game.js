@@ -60,6 +60,7 @@ const WORLD = {
   test: { w: 6000, h: 3400, type: "stadium", track: null },   // 테스트 : 가로로 긴 운동장 트랙 (새 플랫 디자인)
   soccer: { w: 1800, h: 3000, type: "soccer", track: null },  // 축구(베타) — 싱글, 풋살장 크기
   boss: { w: 3400, h: 2600, type: "boss" },                   // 보스전 아레나 (서버 BOSS_ARENA 와 동일)
+  plaza: { w: 2800, h: 2000, type: "plaza" },                 // 광장(만남의 광장) — 자유 주행, 중앙 실시간 시계
 };
 
 /* 로비 : 접속하자마자 차를 몰 수 있는 웜 화이트 월드. 게이트에 들어가면 모드 입장.
@@ -144,15 +145,7 @@ const MAP_GROUPS = {
       { name: "캐주얼", desc: "특별한 규칙의 이색 레이스", mode: null },
     ],
   },
-  plaza: {
-    title: "광장",
-    desc: "다른 사용자들과 어울리는 자유 공간",
-    maps: [
-      { name: "채널 1", desc: "자유롭게 대화하는 만남 광장", mode: null },
-      { name: "채널 2", desc: "자유롭게 대화하는 만남 광장", mode: null },
-      { name: "채널 3", desc: "자유롭게 대화하는 만남 광장", mode: null },
-    ],
-  },
+  // 광장은 팝업 없이 게이트에서 바로 입장한다 (주행 테스트와 동일).
   // 커스텀 그룹은 팝업 없이 게이트에서 바로 방 목록(pro)으로 직행한다.
   // 연습 = 이중 구조 : 카테고리(코스 A/B/C) → 각 코스의 X-1~3 로 드릴다운해 직접 진입
   practice: {
@@ -241,7 +234,7 @@ function applySkinOwnership() {
 
 const CUSTOM_RING_R = 175; // 링 반지름(월드 px)
 const custom = { active: false, cx: 0, cy: 0, selAnim: null }; // selAnim = 픽커(선택 링) 슬라이드 애니메이션
-const modeCounts = { a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, retro1: 0, retro2: 0, pro: 0, test: 0, rank: 0, boss: 0, total: 0 };
+const modeCounts = { a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, retro1: 0, retro2: 0, pro: 0, test: 0, rank: 0, boss: 0, plaza: 0, total: 0 };
 
 // 현재 모드/월드/게임 상태 (실제 시작은 하단 enterLobby() 가 로비로 설정)
 let gameMode = "lobby";      // "lobby" | "racing" | "hard" | "serp" | "pro" | "test"
@@ -1935,6 +1928,7 @@ function drawGround() {
   if (gameMode === "lobby") drawLobbyGround();
   else if (gameMode === "soccer") drawSoccerGround();
   else if (gameMode === "boss") drawBossGround();
+  else if (gameMode === "plaza") drawPlazaGround();
   else if (isFlatTrackMode()) drawFlatTrackGround();
   else if (isTrackWorld()) drawRacingGround();
 }
@@ -2141,6 +2135,152 @@ function drawBossGround() {
     ctx.lineWidth = 6;
     ctx.beginPath(); ctx.arc(p.x, p.y, p.r - 16, 0, Math.PI * 2); ctx.stroke();
   }
+}
+
+/* =============================================================================
+ *  광장(만남의 광장) — 자유 주행 사교 공간. 중앙 바닥에 실시간 아날로그 시계.
+ *  승패/기록/판정 없음. 경계는 월드 사각형(updateCollision)만. 시계·순환도로는 바닥 데칼.
+ * ========================================================================== */
+const PLAZA = {
+  cx: 1400, cy: 1000,          // 중앙(시계)
+  roadIn: 660, roadOut: 860,   // 순환 도로 안/바깥 반경
+  faceR: 400, baseR: 480,      // 시계 판 / 받침 반경
+  stone: [140, 140, 2520, 1720, 180], // 석재 광장 (x,y,w,h,r)
+};
+// 스폰 4곳 = 서버 PLAZA_SPAWNS 와 동일 (도로 진입점, P 표시)
+const PLAZA_SPAWNS = [[1400, 240], [1400, 1760], [640, 1000], [2160, 1000]];
+// 장식물 배치 (월드 좌표) — 시드 고정
+const PLAZA_TREES = [[380, 520], [2420, 520], [640, 300], [2160, 300], [640, 1700], [2160, 1700], [380, 1480], [2420, 1480], [300, 1000], [2500, 1000]];
+const PLAZA_STALLS = [[940, 300, "#e8604c"], [1860, 300, "#57b868"], [940, 1700, "#57b868"], [1860, 1700, "#e8604c"]];
+const PLAZA_BENCHES = [[300, 760, Math.PI / 2], [300, 1240, Math.PI / 2], [2500, 760, Math.PI / 2], [2500, 1240, Math.PI / 2]];
+const PLAZA_FOUNTAINS = [[440, 440], [2360, 440], [440, 1560], [2360, 1560]];
+const PLAZA_LAMPS = [[250, 250], [2550, 250], [250, 1750], [2550, 1750], [1400, 250], [1400, 1750]];
+
+function pzRR(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function pzTree(x, y, s = 2.6) {
+  ctx.fillStyle = "rgba(58,54,46,.10)"; ctx.beginPath(); ctx.ellipse(x + 4 * s, y + 6 * s, 20 * s, 15 * s, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = "#4a9c4e";
+  for (const [dx, dy, r] of [[-11, -2, 13], [11, -2, 13], [0, -11, 14], [0, 6, 13]]) { ctx.beginPath(); ctx.arc(x + dx * s, y + dy * s, r * s, 0, 7); ctx.fill(); }
+  ctx.fillStyle = "#63c064";
+  for (const [dx, dy, r] of [[-8, -4, 7], [7, -6, 6], [-2, 4, 6]]) { ctx.beginPath(); ctx.arc(x + dx * s, y + dy * s, r * s, 0, 7); ctx.fill(); }
+}
+function pzBench(x, y, a) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(a);
+  ctx.fillStyle = "rgba(58,54,46,.10)"; pzRR(-52, -16 + 6, 104, 32, 14); ctx.fill();
+  ctx.fillStyle = "#c79a5e"; pzRR(-52, -16, 104, 32, 14); ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,.18)"; pzRR(-48, -12, 96, 8, 6); ctx.fill();
+  ctx.restore();
+}
+function pzLamp(x, y) {
+  ctx.fillStyle = "rgba(58,54,46,.12)"; ctx.beginPath(); ctx.ellipse(x + 6, y + 8, 28, 20, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = "rgba(242,201,76,.35)"; ctx.beginPath(); ctx.arc(x, y, 32, 0, 7); ctx.fill();
+  ctx.fillStyle = "#f2c94c"; ctx.beginPath(); ctx.arc(x, y, 14, 0, 7); ctx.fill();
+  ctx.fillStyle = "#5a5348"; ctx.beginPath(); ctx.arc(x, y, 6, 0, 7); ctx.fill();
+}
+function pzStall(x, y, c) {
+  ctx.fillStyle = "rgba(58,54,46,.12)"; pzRR(x - 60 + 8, y - 44 + 10, 120, 88, 16); ctx.fill();
+  ctx.fillStyle = "#ead9bd"; pzRR(x - 60, y - 44, 120, 88, 16); ctx.fill();          // 좌판
+  ctx.fillStyle = c; pzRR(x - 64, y - 60, 128, 36, 14); ctx.fill();                    // 차양
+  ctx.fillStyle = "rgba(255,255,255,.85)";
+  for (let i = -2; i <= 2; i++) { pzRR(x + i * 26 - 6, y - 60, 12, 36, 4); ctx.fill(); } // 줄무늬
+}
+function pzFountain(x, y, r = 70) {
+  ctx.fillStyle = "rgba(58,54,46,.10)"; ctx.beginPath(); ctx.ellipse(x + 10, y + 14, r + 12, r + 4, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = "#d8cbb0"; ctx.beginPath(); ctx.arc(x, y, r + 12, 0, 7); ctx.fill();  // 돌 테두리
+  ctx.fillStyle = "#8ecae6"; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();       // 물
+  ctx.fillStyle = "#afd8ee"; ctx.beginPath(); ctx.arc(x - r * .25, y - r * .25, r * .5, 0, 7); ctx.fill();
+  ctx.fillStyle = "#cfa15c"; ctx.beginPath(); ctx.arc(x, y, r * .28, 0, 7); ctx.fill();  // 중앙 조각
+  ctx.fillStyle = "#eaf6fc"; ctx.beginPath(); ctx.arc(x, y, r * .13, 0, 7); ctx.fill();
+}
+
+function drawPlazaGround() {
+  const W = world.w, H = world.h, cx = PLAZA.cx, cy = PLAZA.cy;
+  // 바깥 잔디
+  ctx.fillStyle = "#8ec24f"; ctx.fillRect(0, 0, W, H);
+  // 석재 광장
+  const [sx, sy, sw, sh, sr] = PLAZA.stone;
+  ctx.fillStyle = "#f5eee0"; pzRR(sx, sy, sw, sh, sr); ctx.fill();
+  // 석재 이음선 (은은한 격자, 광장 안쪽만 클립)
+  ctx.save(); pzRR(sx, sy, sw, sh, sr); ctx.clip();
+  ctx.strokeStyle = "rgba(58,54,46,.05)"; ctx.lineWidth = 3; ctx.beginPath();
+  for (let x = sx; x <= sx + sw; x += 140) { ctx.moveTo(x, sy); ctx.lineTo(x, sy + sh); }
+  for (let y = sy; y <= sy + sh; y += 140) { ctx.moveTo(sx, y); ctx.lineTo(sx + sw, y); }
+  ctx.stroke(); ctx.restore();
+
+  // 순환 도로 (도넛)
+  const rIn = PLAZA.roadIn, rOut = PLAZA.roadOut;
+  ctx.fillStyle = "#e3d4b4";
+  ctx.beginPath(); ctx.arc(cx, cy, rOut, 0, 7); ctx.arc(cx, cy, rIn, 0, 7, true); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,.7)"; ctx.lineWidth = 8;
+  ctx.beginPath(); ctx.arc(cx, cy, rOut - 8, 0, 7); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, rIn + 8, 0, 7); ctx.stroke();
+  ctx.setLineDash([52, 44]); ctx.lineWidth = 8; ctx.strokeStyle = "rgba(255,255,255,.55)";
+  ctx.beginPath(); ctx.arc(cx, cy, (rOut + rIn) / 2, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+
+  // 중앙 시계 광장 : 12방위 방사 석재 문양
+  ctx.save(); ctx.translate(cx, cy);
+  for (let i = 0; i < 12; i++) {
+    ctx.rotate(Math.PI / 6);
+    ctx.fillStyle = i % 2 ? "#efe3ca" : "#f7f0e2";
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, rIn - 16, -Math.PI / 12, Math.PI / 12); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+
+  // ---- 장식물 (석재 위) ----
+  for (const [x, y] of PLAZA_FOUNTAINS) pzFountain(x, y);
+  for (const [x, y, s] of PLAZA_TREES) pzTree(x, y, s);
+  for (const [x, y, c] of PLAZA_STALLS) pzStall(x, y, c);
+  for (const [x, y, a] of PLAZA_BENCHES) pzBench(x, y, a);
+  for (const [x, y] of PLAZA_LAMPS) pzLamp(x, y);
+
+  // 스폰 표시 (도로 진입점 P)
+  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.font = "400 40px Jua, sans-serif";
+  for (const [x, y] of PLAZA_SPAWNS) {
+    ctx.fillStyle = "rgba(87,184,104,.22)"; ctx.beginPath(); ctx.arc(x, y, 52, 0, 7); ctx.fill();
+    ctx.fillStyle = "#3f8a4c"; ctx.fillText("P", x, y + 2);
+  }
+
+  // 시계 받침 원반
+  ctx.fillStyle = "rgba(58,54,46,.08)"; ctx.beginPath(); ctx.arc(cx + 12, cy + 16, PLAZA.baseR, 0, 7); ctx.fill();
+  ctx.fillStyle = "#efe7d6"; ctx.beginPath(); ctx.arc(cx, cy, PLAZA.baseR, 0, 7); ctx.fill();
+  ctx.strokeStyle = "#d8cbb0"; ctx.lineWidth = 16; ctx.beginPath(); ctx.arc(cx, cy, PLAZA.baseR, 0, 7); ctx.stroke();
+
+  drawPlazaClock(); // 실시간 시계 (매 프레임 현재 시각)
+}
+
+// 중앙 바닥 시계 — 진짜 현재 시각으로 시·분·초침이 돈다 (초침은 코랄)
+function drawPlazaClock() {
+  const x = PLAZA.cx, y = PLAZA.cy, r = PLAZA.faceR;
+  ctx.fillStyle = "#fbf7ee"; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+  ctx.strokeStyle = "#3a3a3a"; ctx.lineWidth = 10; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.stroke();
+  // 눈금 (분 60 / 시 12 강조)
+  for (let i = 0; i < 60; i++) {
+    const a = i * Math.PI / 30 - Math.PI / 2, big = i % 5 === 0;
+    const r1 = big ? r - 52 : r - 32, r2 = r - 16;
+    ctx.strokeStyle = big ? "#3a3a3a" : "#b6ac98"; ctx.lineWidth = big ? 8 : 4;
+    ctx.beginPath(); ctx.moveTo(x + Math.cos(a) * r1, y + Math.sin(a) * r1); ctx.lineTo(x + Math.cos(a) * r2, y + Math.sin(a) * r2); ctx.stroke();
+  }
+  ctx.fillStyle = "#3a3a3a"; ctx.font = "400 60px Jua, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (let h = 1; h <= 12; h++) { const a = h * Math.PI / 6 - Math.PI / 2; ctx.fillText(String(h), x + Math.cos(a) * (r - 108), y + Math.sin(a) * (r - 108) + 4); }
+  // 바늘
+  const now = new Date();
+  const sec = now.getSeconds() + now.getMilliseconds() / 1000;
+  const min = now.getMinutes() + sec / 60;
+  const hr = (now.getHours() % 12) + min / 60;
+  const hand = (ang, len, wid, col, back) => {
+    const a = ang - Math.PI / 2;
+    ctx.strokeStyle = col; ctx.lineWidth = wid; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(x - Math.cos(a) * back, y - Math.sin(a) * back); ctx.lineTo(x + Math.cos(a) * len, y + Math.sin(a) * len); ctx.stroke();
+  };
+  hand(hr * Math.PI / 6, r * 0.5, 22, "#3a3a3a", 44);
+  hand(min * Math.PI / 30, r * 0.72, 16, "#3a3a3a", 44);
+  hand(sec * Math.PI / 30, r * 0.82, 6, "#e8604c", 60);
+  ctx.fillStyle = "#3a3a3a"; ctx.beginPath(); ctx.arc(x, y, 20, 0, 7); ctx.fill();
+  ctx.fillStyle = "#e8604c"; ctx.beginPath(); ctx.arc(x, y, 10, 0, 7); ctx.fill();
 }
 
 // 기둥 충돌 : 시각 차체(OBB)의 최근접점 기준 원 충돌 — 어느 각도로 박아도
@@ -2990,7 +3130,7 @@ function gateSub(g) {
     case "retro": return `${(modeCounts.retro1 || 0) + (modeCounts.retro2 || 0)}명 접속 중`; // 레트로 = 초보자+어려움
     case "arcade": return `${modeCounts.boss || 0}명 접속 중`; // 보스전 접속 수 (다른 맵은 준비 중)
     case "racing": return `${modeCounts.rank || 0}명 접속 중`; // 경쟁전(랭크) 접속 수 (일반전/캐주얼은 아직 준비 중)
-    case "plaza": return "준비 중";
+    case "plaza": return `${modeCounts.plaza || 0}명 접속 중`;
     case "custom": return `${modeCounts.pro || 0}명 접속 중`;
     // 연습 = 실제 코스(A-1~3 + B-1~3 + C-1~3) 멀티플레이 접속 수
     case "practice": return `${(modeCounts.a1 || 0) + (modeCounts.a2 || 0) + (modeCounts.a3 || 0) + (modeCounts.racing || 0) + (modeCounts.hard || 0) + (modeCounts.serp || 0) + (modeCounts.c1 || 0) + (modeCounts.c2 || 0) + (modeCounts.c3 || 0)}명 접속 중`;
@@ -3617,10 +3757,17 @@ function drawMinimap(car) {
 
   mctx.clearRect(0, 0, size, size);
 
-  // 월드 영역 바닥 (플랫 트랙은 밝은 잔디색)
+  // 월드 영역 바닥 (플랫 트랙은 밝은 잔디색, 광장은 웜 석재색)
   const flat = isFlatTrackMode();
-  mctx.fillStyle = flat ? PALETTE.grass : "rgba(40,45,42,0.9)";
+  mctx.fillStyle = gameMode === "plaza" ? "#8ec24f" : (flat ? PALETTE.grass : "rgba(40,45,42,0.9)");
   mctx.fillRect(ox, oy, world.w * scale, world.h * scale);
+  // 광장 : 석재 바닥 + 중앙 시계 링을 랜드마크로
+  if (gameMode === "plaza") {
+    const [sx, sy, sw, sh] = PLAZA.stone;
+    mctx.fillStyle = "#f5eee0"; mctx.fillRect(ox + sx * scale, oy + sy * scale, sw * scale, sh * scale);
+    mctx.strokeStyle = "#c9bea3"; mctx.lineWidth = 2;
+    mctx.beginPath(); mctx.arc(ox + PLAZA.cx * scale, oy + PLAZA.cy * scale, PLAZA.baseR * scale, 0, Math.PI * 2); mctx.stroke();
+  }
 
   // 레이싱 트랙 (중심선을 굵게 stroke → 미니맵 트랙 모양) + 시작선
   if (isTrackWorld() && world.track) {
@@ -4039,6 +4186,7 @@ function connect() {
       modeCounts.pro = msg.pro || 0;
       modeCounts.test = msg.test || 0;
       modeCounts.rank = msg.rank || 0;
+      modeCounts.plaza = msg.plaza || 0;
       modeCounts.total = typeof msg.total === "number"
         ? msg.total
         : modeCounts.a1 + modeCounts.a2 + modeCounts.a3 + modeCounts.racing + modeCounts.hard + modeCounts.serp + modeCounts.c1 + modeCounts.c2 + modeCounts.c3 + modeCounts.retro1 + modeCounts.retro2 + modeCounts.pro;
@@ -5317,6 +5465,12 @@ function startGame(mode) {
     CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0;
     net.pendingTeleport = true;
     updateCamera(CAR, 0);
+  } else if (mode === "plaza") {
+    // 광장 : 서버 spawn 이 진입점으로 재배치 (임시로 중앙 아래에 둠)
+    CAR.x = WORLD.plaza.w / 2; CAR.y = WORLD.plaza.h - 240; CAR.angle = -Math.PI / 2;
+    CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0;
+    net.pendingTeleport = true;
+    updateCamera(CAR, 0);
   }
 
   if (isTimeAttackMode()) resetAttack();
@@ -5486,6 +5640,7 @@ function updateLobby(dt) {
       if (grp === "garage") openCustom();
       else if (grp === "custom") openCustomRooms(); // 커스텀: 로비 위에 방 목록 팝업만
       else if (grp === "test") wipeTo(() => startGame("test"), { title: "주행 테스트", desc: "테스트 입니다" }); // 테스트 트랙 바로 입장
+      else if (grp === "plaza") wipeTo(() => startGame("plaza"), { title: "광장", desc: "자유롭게 어울리는 만남의 광장" }); // 광장 바로 입장
       else openMapPopup(grp);
     }
   }
@@ -5848,6 +6003,7 @@ function setupLobbyUI() {
         if (g.group === "garage") openCustom();
         else if (g.group === "custom") openCustomRooms(); // 커스텀: 로비 위에 방 목록 팝업만
         else if (g.group === "test") wipeTo(() => startGame("test"), { title: "주행 테스트", desc: "테스트 입니다" }); // 테스트 트랙 바로 입장
+        else if (g.group === "plaza") wipeTo(() => startGame("plaza"), { title: "광장", desc: "자유롭게 어울리는 만남의 광장" }); // 광장 바로 입장
         else openMapPopup(g.group);
         return;
       }

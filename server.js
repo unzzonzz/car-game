@@ -34,6 +34,25 @@ const COLLISION_HZ = 60;    // 초당 충돌 판정 횟수
 const MAP_SIZE = 5000;      // 서바이벌 맵 크기 (정사각형)
 const CAR_LEN = 38;
 const CAR_WID = 18;
+// 광장(만남의 광장) : 자유 주행 사교 공간 — 승패/기록 없음. 클라 WORLD.plaza 와 일치.
+const PLAZA_W = 2800, PLAZA_H = 2000;
+//  네 곳 순환도로 진입점(스폰). 클라 PLAZA_SPAWNS 와 동일 좌표.
+const PLAZA_SPAWNS = [[1400, 240], [1400, 1760], [640, 1000], [2160, 1000]];
+// 가장 덜 붐비는 스폰을 골라 중앙 시계를 바라보게 배치
+function pickPlazaSpawn(selfId) {
+  let best = PLAZA_SPAWNS[0], bestD = -1;
+  for (const [x, y] of PLAZA_SPAWNS) {
+    let minD = Infinity;
+    for (const [pid, p] of players) {
+      if (pid === selfId || !p.active || p.mode !== "plaza" || !p.state) continue;
+      const d = Math.hypot(x - p.state.x, y - p.state.y);
+      if (d < minD) minD = d;
+    }
+    if (minD > bestD) { bestD = minD; best = [x, y]; }
+  }
+  const [x, y] = best;
+  return { x, y, angle: Math.atan2(PLAZA_H / 2 - y, PLAZA_W / 2 - x) }; // 중앙(시계)을 바라봄
+}
 const INVULN_MS = 1500;     // 부활/입장 후 무적 시간 (이 동안 죽지도 죽이지도 못함)
 const GRACE_MS = 500;       // 입장 직후 클라이언트의 옛 위치 전송을 무시하는 시간
 const TELEPORT_DIST = 200;  // 한 틱에 이 이상 움직이면 텔레포트로 간주(스윕 생략)
@@ -654,6 +673,7 @@ wss.on("connection", (ws) => {
         : (msg.mode === "retro2") ? "retro2"
         : (msg.mode === "test") ? "test"
         : (msg.mode === "boss") ? "boss"
+        : (msg.mode === "plaza") ? "plaza"
         : (msg.mode === "pro") ? "pro" : "survival";
 
       if (mode === "pro") {
@@ -684,6 +704,13 @@ wss.on("connection", (ws) => {
         p.prevHead = headOf(p.state);
         p.invulnUntil = Date.now() + INVULN_MS;
         p.graceUntil = Date.now() + GRACE_MS;
+        send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
+      } else if (mode === "plaza") {
+        // 광장 : 자유 주행(승패·기록·판정 없음). 스폰만 배치하고 나머지는 서바이벌과 동일한 자유 월드.
+        const spawn = pickPlazaSpawn(id);
+        p.state = { x: spawn.x, y: spawn.y, angle: spawn.angle, drifting: false, teleport: true };
+        p.prevHead = headOf(p.state);
+        p.invulnUntil = 0; p.graceUntil = Date.now() + GRACE_MS;
         send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
       } else { // racing/hard : 고정 맵. 타임어택 모드는 각자 TOP10 기록도 전송
         p.state = null; p.invulnUntil = 0; p.graceUntil = 0;
@@ -1071,7 +1098,7 @@ function broadcastConnected(obj) {
 
 // 모드별 참가 인원을 "모든 접속자"(메뉴 화면 포함)에게 알린다 → 모드 버튼에 표시
 function broadcastCounts() {
-  const counts = { survival: 0, a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, retro1: 0, retro2: 0, pro: 0, test: 0, rank: 0, boss: 0 };
+  const counts = { survival: 0, a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, retro1: 0, retro2: 0, pro: 0, test: 0, rank: 0, boss: 0, plaza: 0 };
   for (const [, p] of players) {
     if (!p.active) continue;
     if (p.rankMode) { counts.rank++; continue; } // 랭크전은 내부적으로 pro — 따로 집계
@@ -1423,7 +1450,7 @@ const MODE_LABEL = {
   racing: "연습 B-1", hard: "연습 B-2", serp: "연습 B-3",
   c1: "연습 C-1", c2: "연습 C-2", c3: "연습 C-3",
   retro1: "레트로 초보자 코스", retro2: "레트로 어려움 코스",
-  boss: "보스전",
+  boss: "보스전", plaza: "광장",
 };
 function activityOf(p) {
   if (!p.active) return "로비";
@@ -2563,7 +2590,7 @@ setInterval(syncAllBoss, 200); // 5Hz 상태 동기 (타이머/인원 갱신)
 //  (서바이벌/레이싱 플레이어는 서로 보이지 않도록 분리)
 setInterval(() => {
   const now = Date.now();
-  const byMode = { survival: [], a1: [], a2: [], a3: [], racing: [], hard: [], serp: [], c1: [], c2: [], c3: [], retro1: [], retro2: [], test: [], boss: [] };
+  const byMode = { survival: [], a1: [], a2: [], a3: [], racing: [], hard: [], serp: [], c1: [], c2: [], c3: [], retro1: [], retro2: [], test: [], boss: [], plaza: [] };
   const byRoom = new Map(); // roomId -> entries (프로는 같은 방끼리만 본다)
 
   // 보스 엔티티 : 특수 id 0 엔트리 — 클라 보간 파이프라인을 그대로 탄다
