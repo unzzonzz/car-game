@@ -53,6 +53,7 @@ const WORLD = {
   c1: { w: 10000, h: 6000, type: "track", track: null },      // 연습 C-1 (하드코어)
   c2: { w: 10000, h: 6000, type: "track", track: null },      // 연습 C-2 (헤어핀)
   c3: { w: 10000, h: 6000, type: "track", track: null },      // 연습 C-3 (테크니컬)
+  d1: { w: 10000, h: 6000, type: "track", track: null },      // 연습 D-1 (핸드메이드 초장거리)
   retro1: { w: 10000, h: 6000, type: "track", track: null },  // 레트로 초보자 (옛 자유 코스)
   retro2: { w: 18000, h: 11500, type: "track", track: null }, // 레트로 어려움 (옛 하드 코스)
   pro: { w: 10000, h: 6000, type: "track", track: null },     // 프로 레이싱(다른 서킷)
@@ -156,6 +157,7 @@ const MAP_GROUPS = {
       { name: "코스 A", desc: "넓고 완만한 입문 코스", group: "courseA" },
       { name: "코스 B", desc: "좁고 급코너의 도전 코스", group: "courseB" },
       { name: "코스 C", desc: "가장 좁고 어려운 코스", group: "courseC" },
+      { name: "코스 D", desc: "손으로 그린 초장거리 서킷", group: "courseD" },
     ],
   },
   courseA: {
@@ -180,6 +182,12 @@ const MAP_GROUPS = {
       { name: "C-1", desc: "좁은 폭에 연속 급코너", mode: "c1" },
       { name: "C-2", desc: "날카로운 헤어핀 코스", mode: "c2" },
       { name: "C-3", desc: "촘촘한 급코너 기술 코스", mode: "c3" },
+    ],
+  },
+  courseD: {
+    title: "코스 D", desc: "C 폭 · 손으로 그린 초장거리", back: "practice",
+    maps: [
+      { name: "D-1", desc: "펜으로 그린 긴 서킷 (C 폭)", mode: "d1" },
     ],
   },
   // 베타 테스트 = 개발 중인 신규 모드(멀티 없이 싱글로 먼저)
@@ -236,7 +244,7 @@ function applySkinOwnership() {
 
 const CUSTOM_RING_R = 175; // 링 반지름(월드 px)
 const custom = { active: false, cx: 0, cy: 0, selAnim: null }; // selAnim = 픽커(선택 링) 슬라이드 애니메이션
-const modeCounts = { a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, retro1: 0, retro2: 0, pro: 0, test: 0, rank: 0, boss: 0, plaza: 0, total: 0 };
+const modeCounts = { a1: 0, a2: 0, a3: 0, racing: 0, hard: 0, serp: 0, c1: 0, c2: 0, c3: 0, d1: 0, retro1: 0, retro2: 0, pro: 0, test: 0, rank: 0, boss: 0, plaza: 0, total: 0 };
 
 // 현재 모드/월드/게임 상태 (실제 시작은 하단 enterLobby() 가 로비로 설정)
 let gameMode = "lobby";      // "lobby" | "racing" | "hard" | "serp" | "pro" | "test"
@@ -299,6 +307,7 @@ const account = {
   bestC1Ms: 0,    // C-1 개인 최고 기록(ms) — 서버 bestC1
   bestC2Ms: 0,    // C-2 개인 최고 기록(ms) — 서버 bestC2
   bestC3Ms: 0,    // C-3 개인 최고 기록(ms) — 서버 bestC3
+  bestD1Ms: 0,    // D-1 개인 최고 기록(ms) — 서버 bestD1
   lastLogin: 0,   // 직전 접속 시각(ms epoch, 0=처음)
   gift: null,     // 미수령 이벤트 선물 {msg} — 수령 전까지 로비에 올 때마다 팝업
   spaceSkin: false, // 우주 스킨 소유 (이벤트 선물 수령) — 소유자만 차고 스와치에 표시
@@ -810,6 +819,25 @@ const HARD_POINTS = [
   { x: 1150, y: 6650 }, { x: 2400, y: 5350 }, { x: 1400, y: 4050 }, { x: 2450, y: 2750 },
 ];
 
+/* 연습 D-1 — 피그마 펜툴로 그린 서킷 (d-1.svg 1398×910 → 10000×6000 피팅, inset 207).
+ *  C조와 같은 폭(75/12). 67개 컨트롤포인트를 Catmull-Rom 으로 부드럽게(레트로 어려움과 동일 로직).
+ *  검증됨 : 자기교차 0건, 비인접 통로 최소 중심거리 348px(전폭 174 대비 여유 174), 총 길이 ~37.6k px.
+ *  시작선 = 하단의 가장 긴 직선(인덱스 59, 1287px). */
+const D1_POINTS = [
+  { x: 3890, y: 5577 }, { x: 3338, y: 5250 }, { x: 2704, y: 5147 }, { x: 2130, y: 5423 }, { x: 1406, y: 5216 }, { x: 1070, y: 4745 },
+  { x: 1434, y: 4231 }, { x: 1961, y: 4347 }, { x: 2397, y: 4181 }, { x: 2513, y: 3751 }, { x: 2130, y: 3403 }, { x: 1559, y: 3146 },
+  { x: 1283, y: 2418 }, { x: 1669, y: 1863 }, { x: 1472, y: 1330 }, { x: 941, y: 1151 }, { x: 678, y: 731 }, { x: 797, y: 395 },
+  { x: 1158, y: 480 }, { x: 1359, y: 207 }, { x: 2074, y: 207 }, { x: 2444, y: 505 }, { x: 2513, y: 988 }, { x: 2983, y: 1255 },
+  { x: 3469, y: 1038 }, { x: 3840, y: 1361 }, { x: 3890, y: 1822 }, { x: 4558, y: 2164 }, { x: 5216, y: 2070 }, { x: 5405, y: 1609 },
+  { x: 5216, y: 1022 }, { x: 5539, y: 580 }, { x: 6032, y: 317 }, { x: 6593, y: 242 }, { x: 7214, y: 213 }, { x: 7675, y: 242 },
+  { x: 8183, y: 358 }, { x: 8475, y: 756 }, { x: 8359, y: 1367 }, { x: 7829, y: 1684 }, { x: 7117, y: 1863 }, { x: 6763, y: 2079 },
+  { x: 6593, y: 2418 }, { x: 6763, y: 2697 }, { x: 7214, y: 2857 }, { x: 7675, y: 2697 }, { x: 7741, y: 2261 }, { x: 8071, y: 1957 },
+  { x: 8544, y: 1957 }, { x: 8986, y: 2164 }, { x: 9140, y: 2697 }, { x: 9030, y: 3136 }, { x: 8698, y: 3403 }, { x: 8601, y: 3751 },
+  { x: 8735, y: 4102 }, { x: 9062, y: 4303 }, { x: 9322, y: 4673 }, { x: 9322, y: 5301 }, { x: 8855, y: 5705 }, { x: 7804, y: 5793 },
+  { x: 6518, y: 5746 }, { x: 5963, y: 5423 }, { x: 5963, y: 4736 }, { x: 5583, y: 4347 }, { x: 5085, y: 4485 }, { x: 4774, y: 5034 },
+  { x: 4432, y: 5423 },
+];
+
 /* 커스텀(프로) 방 코스 = 연습 코스 6종(A-1~B-3)을 그대로 사용. 서버가 인덱스(0~5)를 정해
  *  같은 방의 모든 플레이어가 같은 맵을 보게 한다. server.js 의 NAMED_COURSES 와 개수를 맞춰야 한다. */
 const PRO_COURSES = [PRACTICE_A1, PRACTICE_A2, PRACTICE_A3, PRACTICE_B1, PRACTICE_B2, PRACTICE_B3, PRACTICE_C1, PRACTICE_C2, PRACTICE_C3];
@@ -833,6 +861,9 @@ function generateTrack() {
   WORLD.c1.track     = makeTrack(PRACTICE_C1); // 연습 C-1 (하드코어)
   WORLD.c2.track     = makeTrack(PRACTICE_C2); // 연습 C-2 (헤어핀)
   WORLD.c3.track     = makeTrack(PRACTICE_C3); // 연습 C-3 (테크니컬)
+  WORLD.d1.track     = makeHardTrack(D1_POINTS, { // 연습 D-1 (핸드메이드 초장거리, C 폭)
+    halfWidth: 75, kerb: 12, samplesPerSegment: 14, startPointIndex: 59, tension: 0.36,
+  });
   WORLD.retro1.track = makeTrack(FREE_RECIPE); // 레트로 초보자 (옛 자유 코스)
   WORLD.retro2.track = makeHardTrack(HARD_POINTS, { // 레트로 어려움 (옛 하드 코스)
     halfWidth: 112, kerb: 16, samplesPerSegment: 28, startPointIndex: 1, tension: 0.34,
@@ -1061,7 +1092,7 @@ function isFlatTrackMode() {
       || gameMode === "serp" || gameMode === "pro"
       || gameMode === "a1" || gameMode === "a2" || gameMode === "a3"
       || gameMode === "c1" || gameMode === "c2" || gameMode === "c3"
-      || gameMode === "retro1" || gameMode === "retro2";
+      || gameMode === "d1" || gameMode === "retro1" || gameMode === "retro2";
 }
 
 
@@ -1479,7 +1510,7 @@ function isTimeAttackMode() {
   return gameMode === "a1" || gameMode === "a2" || gameMode === "a3"
       || gameMode === "racing" || gameMode === "hard" || gameMode === "serp"
       || gameMode === "c1" || gameMode === "c2" || gameMode === "c3"
-      || gameMode === "retro1" || gameMode === "retro2";
+      || gameMode === "d1" || gameMode === "retro1" || gameMode === "retro2";
 }
 
 // 타임어택 상태 초기화 (모드 진입/이탈 시)
@@ -3389,7 +3420,7 @@ function gateSub(g) {
     case "plaza": return `${modeCounts.plaza || 0}명 접속 중`;
     case "custom": return `${modeCounts.pro || 0}명 접속 중`;
     // 연습 = 실제 코스(A-1~3 + B-1~3 + C-1~3) 멀티플레이 접속 수
-    case "practice": return `${(modeCounts.a1 || 0) + (modeCounts.a2 || 0) + (modeCounts.a3 || 0) + (modeCounts.racing || 0) + (modeCounts.hard || 0) + (modeCounts.serp || 0) + (modeCounts.c1 || 0) + (modeCounts.c2 || 0) + (modeCounts.c3 || 0)}명 접속 중`;
+    case "practice": return `${(modeCounts.a1 || 0) + (modeCounts.a2 || 0) + (modeCounts.a3 || 0) + (modeCounts.racing || 0) + (modeCounts.hard || 0) + (modeCounts.serp || 0) + (modeCounts.c1 || 0) + (modeCounts.c2 || 0) + (modeCounts.c3 || 0) + (modeCounts.d1 || 0)}명 접속 중`;
     case "test": return `${modeCounts.test || 0}명 접속 중`;
     case "beta": return "1인 플레이";
     case "garage": return "차 색상 바꾸기";
@@ -4336,6 +4367,7 @@ function connect() {
       account.bestC1Ms = msg.bestC1Ms || 0;
       account.bestC2Ms = msg.bestC2Ms || 0;
       account.bestC3Ms = msg.bestC3Ms || 0;
+      account.bestD1Ms = msg.bestD1Ms || 0;
       account.lastLogin = msg.lastLogin || 0; // 직전 접속 시각(0=처음)
       account.rankScore = typeof msg.rankScore === "number" ? msg.rankScore : 100;
       account.rankAllowed = !!msg.rankAllowed;
@@ -4421,6 +4453,11 @@ function connect() {
         account.bestC3Ms = msg.bestC3Ms;
         if (improved) SFX.record(); // C-3 기록 갱신 팡파레
       }
+      if (typeof msg.bestD1Ms === "number") {
+        const improved = msg.bestD1Ms > 0 && (!account.bestD1Ms || msg.bestD1Ms < account.bestD1Ms);
+        account.bestD1Ms = msg.bestD1Ms;
+        if (improved) SFX.record(); // D-1 기록 갱신 팡파레
+      }
       if (typeof msg.rankScore === "number") account.rankScore = msg.rankScore;
       if (typeof msg.rankAllowed === "boolean") account.rankAllowed = msg.rankAllowed;
       if (typeof msg.rankWins === "number") account.rankWins = msg.rankWins;
@@ -4437,6 +4474,7 @@ function connect() {
       modeCounts.c1 = msg.c1 || 0;
       modeCounts.c2 = msg.c2 || 0;
       modeCounts.c3 = msg.c3 || 0;
+      modeCounts.d1 = msg.d1 || 0;
       modeCounts.retro1 = msg.retro1 || 0;
       modeCounts.retro2 = msg.retro2 || 0;
       modeCounts.pro = msg.pro || 0;
@@ -4446,7 +4484,7 @@ function connect() {
       modeCounts.sumo = msg.sumo || 0;
       modeCounts.total = typeof msg.total === "number"
         ? msg.total
-        : modeCounts.a1 + modeCounts.a2 + modeCounts.a3 + modeCounts.racing + modeCounts.hard + modeCounts.serp + modeCounts.c1 + modeCounts.c2 + modeCounts.c3 + modeCounts.retro1 + modeCounts.retro2 + modeCounts.pro;
+        : modeCounts.a1 + modeCounts.a2 + modeCounts.a3 + modeCounts.racing + modeCounts.hard + modeCounts.serp + modeCounts.c1 + modeCounts.c2 + modeCounts.c3 + modeCounts.d1 + modeCounts.retro1 + modeCounts.retro2 + modeCounts.pro;
       const on = document.getElementById("lobOnline");
       if (on) on.textContent = `온라인 ${modeCounts.total}`;
       updateMapPopupCounts(); // 맵 팝업이 열려 있으면 카드별 인원도 갱신
@@ -6372,7 +6410,7 @@ function sendLogout() {
   account.loggedIn = false; account.isAdmin = false; account.userId = null;
   account.proWins = 0; account.proPlays = 0;
   account.rankScore = 100; account.rankAllowed = false; account.rankWins = 0; account.rankPlays = 0;
-  account.totalTime = 0; account.totalTimeAt = 0; account.bestA1Ms = 0; account.bestA2Ms = 0; account.bestA3Ms = 0; account.bestMs = 0; account.bestHardMs = 0; account.bestSerpMs = 0; account.bestC1Ms = 0; account.bestC2Ms = 0; account.bestC3Ms = 0; account.loginTime = 0;
+  account.totalTime = 0; account.totalTimeAt = 0; account.bestA1Ms = 0; account.bestA2Ms = 0; account.bestA3Ms = 0; account.bestMs = 0; account.bestHardMs = 0; account.bestSerpMs = 0; account.bestC1Ms = 0; account.bestC2Ms = 0; account.bestC3Ms = 0; account.bestD1Ms = 0; account.loginTime = 0;
   account.gift = null; account.spaceSkin = false;
   applySkinOwnership(); // 우주 스킨 스와치 제거 + 쓰던 중이면 기본색 복구
   account.friendsCount = 0; account.friendReqCount = 0;
@@ -6538,7 +6576,7 @@ function hideDashboard() {
 const RANK_COURSES = [
   ["A-1", "a1"], ["A-2", "a2"], ["A-3", "a3"],
   ["B-1", "racing"], ["B-2", "hard"], ["B-3", "serp"],
-  ["C-1", "c1"], ["C-2", "c2"], ["C-3", "c3"],
+  ["C-1", "c1"], ["C-2", "c2"], ["C-3", "c3"], ["D-1", "d1"],
   ["초보자", "retro1"], ["어려움", "retro2"], // 레트로(옛 기록 재활용)
   ["보스전", "boss"], // 최고 생존 시간 (내림차순 — 서버가 정렬)
 ];
