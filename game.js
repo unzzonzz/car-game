@@ -53,7 +53,7 @@ const WORLD = {
   c1: { w: 10000, h: 6000, type: "track", track: null },      // 연습 C-1 (하드코어)
   c2: { w: 10000, h: 6000, type: "track", track: null },      // 연습 C-2 (헤어핀)
   c3: { w: 10000, h: 6000, type: "track", track: null },      // 연습 C-3 (테크니컬)
-  d1: { w: 10000, h: 6000, type: "track", track: null },      // 연습 D-1 (핸드메이드 초장거리)
+  d1: { w: 10000, h: 6000, type: "track", track: null },      // 연습 D-1 (최고 난도 초장거리)
   retro1: { w: 10000, h: 6000, type: "track", track: null },  // 레트로 초보자 (옛 자유 코스)
   retro2: { w: 18000, h: 11500, type: "track", track: null }, // 레트로 어려움 (옛 하드 코스)
   pro: { w: 10000, h: 6000, type: "track", track: null },     // 프로 레이싱(다른 서킷)
@@ -157,7 +157,7 @@ const MAP_GROUPS = {
       { name: "코스 A", desc: "넓고 완만한 입문 코스", group: "courseA" },
       { name: "코스 B", desc: "좁고 급코너의 도전 코스", group: "courseB" },
       { name: "코스 C", desc: "가장 좁고 어려운 코스", group: "courseC" },
-      { name: "코스 D", desc: "손으로 그린 초장거리 서킷", group: "courseD" },
+      { name: "코스 D", desc: "최고 난도의 초장거리 서킷", group: "courseD" },
     ],
   },
   courseA: {
@@ -185,9 +185,9 @@ const MAP_GROUPS = {
     ],
   },
   courseD: {
-    title: "코스 D", desc: "C 폭 · 손으로 그린 초장거리", back: "practice",
+    title: "코스 D", desc: "가장 좁은 폭 · 최고 난도 초장거리", back: "practice",
     maps: [
-      { name: "D-1", desc: "펜으로 그린 긴 서킷 (C 폭)", mode: "d1" },
+      { name: "D-1", desc: "끝없는 코너의 극한 내구 서킷", mode: "d1" },
     ],
   },
   // 베타 테스트 = 개발 중인 신규 모드(멀티 없이 싱글로 먼저)
@@ -820,7 +820,7 @@ const HARD_POINTS = [
 ];
 
 /* Chaikin 코너-커팅(폐곡선) : 각 변을 1/4·3/4 지점으로 잘라 꼭짓점을 둥글린다.
- *  펜툴로 그린 각진 폴리라인을 반복 적용으로 완전히 매끈하게 — D-1 에서 2회 사용. */
+ *  각진 폴리라인을 반복 적용으로 완전히 매끈하게 — D-1 에서 2회 사용. */
 function chaikinClosed(pts, iterations = 1) {
   let cur = pts;
   for (let k = 0; k < iterations; k++) {
@@ -836,7 +836,7 @@ function chaikinClosed(pts, iterations = 1) {
   return cur;
 }
 
-/* 연습 D-1 — 피그마 펜툴로 그린 서킷 (d-1.svg 1398×910 → 10000×6000 피팅, inset 207).
+/* 연습 D-1 — 최고 난도 초장거리 서킷 (d-1.svg 1398×910 → 10000×6000 피팅, inset 207).
  *  C조와 같은 폭(75/12). 67개 컨트롤포인트를 Chaikin 2회로 둥글린 뒤(268점) Catmull-Rom —
  *  각진 느낌이 완전히 사라진다 (최소 곡률 반경 89→159px).
  *  검증됨 : 자기교차 0건, 비인접 통로 최소 중심거리 409px(전폭 174 대비 여유 235), 총 길이 ~37.6k px.
@@ -879,8 +879,8 @@ function generateTrack() {
   WORLD.c1.track     = makeTrack(PRACTICE_C1); // 연습 C-1 (하드코어)
   WORLD.c2.track     = makeTrack(PRACTICE_C2); // 연습 C-2 (헤어핀)
   WORLD.c3.track     = makeTrack(PRACTICE_C3); // 연습 C-3 (테크니컬)
-  WORLD.d1.track     = makeHardTrack(chaikinClosed(D1_POINTS, 2), { // 연습 D-1 (핸드메이드 초장거리, C 폭)
-    halfWidth: 75, kerb: 12, samplesPerSegment: 4, startPointIndex: 234, tension: 0.38, // Chaikin 2회 → 268점, 시작=우측 하단
+  WORLD.d1.track     = makeHardTrack(chaikinClosed(D1_POINTS, 2), { // 연습 D-1 (고난도 초장거리, C 폭)
+    halfWidth: 75, kerb: 12, samplesPerSegment: 4, startPointIndex: 236, tension: 0.38, // 시작=우측 하단 직선 한가운데(앞뒤 완전 직선)
   });
   WORLD.retro1.track = makeTrack(FREE_RECIPE); // 레트로 초보자 (옛 자유 코스)
   WORLD.retro2.track = makeHardTrack(HARD_POINTS, { // 레트로 어려움 (옛 하드 코스)
