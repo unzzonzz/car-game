@@ -4508,9 +4508,9 @@ function connect() {
       updateMapPopupCounts(); // 맵 팝업이 열려 있으면 카드별 인원도 갱신
     } else if (msg.type === "spawn") {
       // 서버가 정한 입장/부활 위치 → 거기서 시작.
-      //  로비(서버 미입장)와 테스트(클라이언트가 스타트 라인 뒤에 직접 배치,
-      //  구버전 서버가 test 를 서바이벌로 오인해 보내는 spawn 무시)에선 무시.
-      if (gameMode === "lobby" || gameMode === "test") return;
+      //  로비(서버 미입장)·테스트·타임어택 코스(전부 클라이언트가 스타트 라인 뒤에 직접 배치)에선 무시 —
+      //  구버전 서버가 새 코스 모드를 서바이벌로 오인해 보내는 랜덤 spawn 에 안 끌려가게(혼재 배포 방어).
+      if (gameMode === "lobby" || gameMode === "test" || isTimeAttackMode()) return;
       CAR.x = msg.x; CAR.y = msg.y; CAR.angle = msg.angle;
       CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
       CAR.invulnUntil = performance.now() + 1500;
