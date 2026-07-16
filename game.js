@@ -819,10 +819,28 @@ const HARD_POINTS = [
   { x: 1150, y: 6650 }, { x: 2400, y: 5350 }, { x: 1400, y: 4050 }, { x: 2450, y: 2750 },
 ];
 
+/* Chaikin 코너-커팅(폐곡선) : 각 변을 1/4·3/4 지점으로 잘라 꼭짓점을 둥글린다.
+ *  펜툴로 그린 각진 폴리라인을 반복 적용으로 완전히 매끈하게 — D-1 에서 2회 사용. */
+function chaikinClosed(pts, iterations = 1) {
+  let cur = pts;
+  for (let k = 0; k < iterations; k++) {
+    const out = [];
+    const n = cur.length;
+    for (let i = 0; i < n; i++) {
+      const a = cur[i], b = cur[(i + 1) % n];
+      out.push({ x: a.x * 0.75 + b.x * 0.25, y: a.y * 0.75 + b.y * 0.25 });
+      out.push({ x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 });
+    }
+    cur = out;
+  }
+  return cur;
+}
+
 /* 연습 D-1 — 피그마 펜툴로 그린 서킷 (d-1.svg 1398×910 → 10000×6000 피팅, inset 207).
- *  C조와 같은 폭(75/12). 67개 컨트롤포인트를 Catmull-Rom 으로 부드럽게(레트로 어려움과 동일 로직).
- *  검증됨 : 자기교차 0건, 비인접 통로 최소 중심거리 348px(전폭 174 대비 여유 174), 총 길이 ~37.6k px.
- *  시작선 = 하단의 가장 긴 직선(인덱스 59, 1287px). */
+ *  C조와 같은 폭(75/12). 67개 컨트롤포인트를 Chaikin 2회로 둥글린 뒤(268점) Catmull-Rom —
+ *  각진 느낌이 완전히 사라진다 (최소 곡률 반경 89→159px).
+ *  검증됨 : 자기교차 0건, 비인접 통로 최소 중심거리 409px(전폭 174 대비 여유 235), 총 길이 ~37.6k px.
+ *  시작선 = 우측 하단 직선의 오른쪽 끝(스무딩 점 234, {7921,5774}) — 하단 직선 전체가 정면에. */
 const D1_POINTS = [
   { x: 3890, y: 5577 }, { x: 3338, y: 5250 }, { x: 2704, y: 5147 }, { x: 2130, y: 5423 }, { x: 1406, y: 5216 }, { x: 1070, y: 4745 },
   { x: 1434, y: 4231 }, { x: 1961, y: 4347 }, { x: 2397, y: 4181 }, { x: 2513, y: 3751 }, { x: 2130, y: 3403 }, { x: 1559, y: 3146 },
@@ -861,8 +879,8 @@ function generateTrack() {
   WORLD.c1.track     = makeTrack(PRACTICE_C1); // 연습 C-1 (하드코어)
   WORLD.c2.track     = makeTrack(PRACTICE_C2); // 연습 C-2 (헤어핀)
   WORLD.c3.track     = makeTrack(PRACTICE_C3); // 연습 C-3 (테크니컬)
-  WORLD.d1.track     = makeHardTrack(D1_POINTS, { // 연습 D-1 (핸드메이드 초장거리, C 폭)
-    halfWidth: 75, kerb: 12, samplesPerSegment: 14, startPointIndex: 59, tension: 0.36,
+  WORLD.d1.track     = makeHardTrack(chaikinClosed(D1_POINTS, 2), { // 연습 D-1 (핸드메이드 초장거리, C 폭)
+    halfWidth: 75, kerb: 12, samplesPerSegment: 4, startPointIndex: 234, tension: 0.38, // Chaikin 2회 → 268점, 시작=우측 하단
   });
   WORLD.retro1.track = makeTrack(FREE_RECIPE); // 레트로 초보자 (옛 자유 코스)
   WORLD.retro2.track = makeHardTrack(HARD_POINTS, { // 레트로 어려움 (옛 하드 코스)
