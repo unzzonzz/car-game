@@ -265,6 +265,7 @@ const race = {
   isHost: false,
   rooms: [],         // 방 목록(브라우저용)
   roomName: "", course: 0, timeLimit: 0, maxPlayers: 7, // 현재 방 설정
+  startTick: 0,      // v4 : 레이스 시작 서버 틱 — 입력 해제/신호등 공용 시계
   countdownEnd: 0,   // 로컬 시각(performance.now): 카운트다운 끝
   endEnd: 0,         // 로컬 시각: 종료 타이머 끝 (0=없음)
   goFlashUntil: 0,   // "GO!" 표시 끝 시각
@@ -893,7 +894,7 @@ window.addEventListener("keydown", (e) => {
     case "Space": keys.space = true; e.preventDefault(); break;
     case "KeyM": if (!e.repeat) toggleMute(); break; // 음소거 토글 (길게 눌러도 1회)
     case "KeyR": // 타임어택 모드에서 R : 기록 시작/다시 (출발선 뒤로 → 재계측). 버튼과 동일
-      if (!e.repeat && gameState === "playing" && isTimeAttackMode()) { SFX.click(); startAttack(); }
+      if (!e.repeat && gameState === "playing" && isTimeAttackMode()) { SFX.click(); startAttack(); pendingRestart = true; }
       break;
     case "KeyJ": keys.j = true; break; // 축구 : 누르는 동안만 공 그랩(드리블). 떼면 momentum 으로 나감
     case "ShiftLeft": case "ShiftRight":
@@ -963,13 +964,15 @@ function init() {
 const decompose = SIM.decompose; // 외부에서 vx/vy/angle 변경 후 lf/ll 재동기용
 
 // 키 상태 -> 입력 버튼 비트 (시뮬의 유일한 입력 형식)
-function sampleButtons() {
+let pendingRestart = false; // R 키 → 다음 틱 입력에 RESTART 비트 1회 동봉(서버도 같은 틱에 복귀 예측)
+function sampleButtons(consumeEdges) {
   let b = 0;
   if (keys.w) b |= SIM.BTN.W;
   if (keys.space) b |= SIM.BTN.SPACE;
   if (keys.a) b |= SIM.BTN.A;
   if (keys.d) b |= SIM.BTN.D;
   if (keys.s) b |= SIM.BTN.S;
+  if (consumeEdges && pendingRestart) { b |= SIM.BTN.RESTART; pendingRestart = false; }
   return b;
 }
 
@@ -984,10 +987,17 @@ function buildEnv(tick) {
              : gameMode === "plaza" ? SIM.PLAZA_OBSTACLES : null,
     speedScale: gameMode === "sumo" ? SIM.SUMO.speedScale : 1,
     noBounds: gameMode === "sumo",
-    freeze: (gameMode === "pro" && race.state !== "racing")
+    freeze: (gameMode === "pro" && raceFrozen())
          || (gameMode === "boss" && (bossCli.dead || bossCli.spec || bossCli.state === "result"))
          || (gameMode === "sumo" && sumo.dead),
   };
+}
+
+/* 프로 레이스 입력 정지 게이트 — 서버와 같은 "시작 틱" 기준(신호등과 같은 시계) */
+function raceFrozen() {
+  if (race.state === "racing") return false;
+  if (race.state === "countdown" && race.startTick && estServerTick(performance.now()) >= race.startTick) return false;
+  return true;
 }
 
 // 시뮬 이벤트 소비 : 벽/장애물 충돌음 (연속 마찰 스팸 방지 쿨다운은 기존 그대로)
@@ -2067,12 +2077,8 @@ function updateSumo(dt) {
   if (now < CAR.invulnUntil) { sumo.outAt = 0; return; } // 스폰 무적 동안엔 링밖 카운트다운 안 시작(전환 글리치 방어)
   const d = Math.hypot(CAR.x - SUMO.cx, CAR.y - SUMO.cy);
   if (d > SUMO.ringR) {
-    if (!sumo.outAt) sumo.outAt = now;                 // 링 밖 진입 시각 기록
-    else if (now - sumo.outAt >= SUMO.outMs) {         // 1초 경과 → 자멸
-      sumo.dead = true; sumo.outAt = 0;
-      spawnExplosion(CAR.x, CAR.y, myColor()); SFX.explosion(); addShake(20);
-      if (net.connected && net.ws.readyState === WebSocket.OPEN) net.ws.send(JSON.stringify({ type: "sumoDead" }));
-    }
+    if (!sumo.outAt) sumo.outAt = now;                 // 링 밖 진입 시각 (HUD 카운트다운 표시용)
+    // v4 : 실제 사망 판정은 서버(killed 수신) — 여기선 표시만
   } else sumo.outAt = 0;                               // 다시 안으로 → 취소
 }
 
@@ -3701,13 +3707,13 @@ function drawBossMinimap(car) {
  * ========================================================================== */
 const net = {
   ws: null,
-  id: null,             // 서버가 부여한 내 플레이어 id
+  id: null,               // 서버가 부여한 내 플레이어 id
   connected: false,
-  lastSend: 0,            // 마지막 상태 송신 시각(매 프레임 전송, 6ms 안전 상한)
-  pendingTeleport: false, // true면 다음 상태 송신에 teleport 플래그를 실어 보낸다
-  hasServerTime: false,   // 서버가 스냅샷에 st(송신시각)를 넣어주는지 (재배포 여부)
-  serverNewest: 0,        // 가장 최근에 받은 서버 타임스탬프(st)
-  playT: null,            // 원격 보간용 재생 시계(서버시간 도메인, INTERP_DELAY 만큼 과거)
+  pendingTeleport: false, // (v4 잔재 — 텔레포트는 서버 spawn 이벤트가 처리. 대입만 남음)
+  lastSnapTick: 0,        // 마지막으로 적용한 스냅샷 틱 (입력 ack 동봉용)
+  lastSnapAt: 0,          // 마지막 스냅샷 도착 시각(performance.now)
+  lastInputAck: 0,        // 서버가 소화한 내 마지막 입력 틱
+  rttMs: 0,               // ping/pong 왕복 지연(ms)
 };
 
 // 다른 플레이어 : id -> { x, y, angle (렌더값), tx, ty, tangle (목표값), drifting }
@@ -3734,6 +3740,9 @@ function myColor() {
 function setCarColor(c) {
   carColorCache = c;
   try { localStorage.setItem("carColor", c); } catch {}
+  if (net.connected && net.ws && net.ws.readyState === WebSocket.OPEN) {
+    net.ws.send(JSON.stringify({ type: "setColor", color: c })); // v4 : 스냅샷 키프레임으로 릴레이
+  }
 }
 
 /* 계정 환경설정(차 색 + 설정)을 서버(DB)에 저장 — 로그인 유저만. 비로그인은 localStorage 유지.
@@ -3804,6 +3813,8 @@ function connect() {
 
   net.ws.onopen = () => {
     net.connected = true;
+    net.ws.send(JSON.stringify({ type: "hello", v: 4 }));          // v4 핸드셰이크
+    net.ws.send(JSON.stringify({ type: "setColor", color: myColor() })); // 차 색은 입력에 안 실린다
     // 저장된 토큰이 있으면 자동 로그인
     try {
       const tk = localStorage.getItem("carGameToken");
@@ -3818,10 +3829,7 @@ function connect() {
     if (ev.data instanceof ArrayBuffer) {
       try {
         const t = new Uint8Array(ev.data, 0, 1)[0];
-        if (t === MSG_SNAPSHOT3 || t === MSG_SNAPSHOT) {
-          const dec = decodeSnapshot(ev.data);
-          applySnapshot(dec.st, dec.players);
-        }
+        if (t === MSG_SNAP4) applySnap4(decodeSnap4(ev.data));
       } catch (e) { /* 손상/버전 불일치 패킷 폐기 */ }
       return;
     }
@@ -3830,6 +3838,12 @@ function connect() {
 
     if (msg.type === "welcome") {
       net.id = msg.id;
+      if (typeof msg.tick === "number") { // v4 : 서버 틱 사전 잠금 (스냅샷 max-필터가 이후 정밀화)
+        noteServerTick(msg.tick, performance.now());
+        simTick = msg.tick + clock.lead;
+        simAcc = 0;
+        clearPrediction();
+      }
       // 초대 링크(?room=ID)로 들어온 경우 : 방 목록 팝업 열고 해당 방으로 바로 참가 시도
       if (pendingRoomJoin != null) {
         const rid = pendingRoomJoin;
@@ -3980,10 +3994,9 @@ function connect() {
       if (on) on.textContent = `온라인 ${modeCounts.total}`;
       updateMapPopupCounts(); // 맵 팝업이 열려 있으면 카드별 인원도 갱신
     } else if (msg.type === "spawn") {
-      // 서버가 정한 입장/부활 위치 → 거기서 시작.
-      //  로비(서버 미입장)·테스트·타임어택 코스(전부 클라이언트가 스타트 라인 뒤에 직접 배치)에선 무시 —
-      //  구버전 서버가 새 코스 모드를 서바이벌로 오인해 보내는 랜덤 spawn 에 안 끌려가게(혼재 배포 방어).
-      if (gameMode === "lobby" || gameMode === "test" || isTimeAttackMode()) return;
+      // 서버가 정한 입장/부활 위치 → 거기서 시작. (v4 : 전 모드 서버 권위 — 타임어택도
+      //  서버가 같은 출발선 좌표를 계산하므로 클라 예측과 일치, 스냅 없음)
+      if (gameMode === "lobby") return;
       SIM.teleport(CAR, msg.x, msg.y, msg.angle); // 운동/외부속도/트랙힌트까지 완전 리셋
       CAR.invulnUntil = performance.now() + 1500;
       net.pendingTeleport = true; // 남들 화면에서 슬라이드 없이 스냅되도록
@@ -4014,6 +4027,9 @@ function connect() {
       const color = msg.victimId === net.id ? myColor() : colorForId(msg.victimId);
       spawnExplosion(msg.x, msg.y, color);
       SFX.explosion(); // 폭발음
+      if (msg.victimId === net.id && gameMode === "sumo") { // v4 : 링아웃은 서버 판정
+        sumo.dead = true; sumo.outAt = 0; addShake(20);
+      }
       // 내가 죽인 경우 내 화면을 흔든다 (타격감)
       if (msg.killerId === net.id) addShake(34);
     } else if (msg.type === "chat") {
@@ -4174,11 +4190,20 @@ function connect() {
       // 입장 직후 접속자 전원의 장착 칭호 일람
       for (const e of (msg.entries || [])) titleMap.set(e.pid, { title: e.title, rar: e.rar });
     } else if (msg.type === "kicked") {
-      // 관리자 추방/차단 또는 치트 자동 감지 — 즉시 재접속하지 않게 표시
+      if (msg.reason === "update") {
+        // 프로토콜 버전 불일치(배포 직후) → 세션당 1회 캐시버스팅 새로고침 (리로드 루프 방지)
+        net.kicked = true;
+        try {
+          if (!sessionStorage.getItem("v4reload")) {
+            sessionStorage.setItem("v4reload", "1");
+            location.replace(location.pathname + "?u=" + Date.now());
+          }
+        } catch {}
+        return;
+      }
+      // 관리자 추방/차단 — 즉시 재접속하지 않게 표시
       net.kicked = true;
       alert(msg.reason || "관리자에 의해 연결이 종료되었습니다.");
-    } else if (msg.type === "snapshot") {
-      applySnapshot(msg.st, msg.players); // (구버전/폴백) JSON 스냅샷 — 신규 서버는 바이너리로 보냄
     }
   };
 
@@ -4243,6 +4268,7 @@ function handleRaceMessage(msg) {
   const prevState = race.state;
   race.state = msg.state;
   race.laps = msg.laps || race.laps;
+  race.startTick = msg.startTick || 0; // v4 : 입력 해제 기준 틱 (신호등과 같은 시계)
   race.list = msg.players || [];
   race.canReady = !!msg.canReady;
   if (typeof msg.rank === "boolean") race.isRank = msg.rank; // 서버가 방 타입을 확정
@@ -4834,256 +4860,304 @@ function setupChat() {
 /* =============================================================================
  *  바이너리 프로토콜 (클라) — state 인코딩 송신 / snapshot 디코딩 수신 (빅엔디안). 나머지 JSON.
  * ========================================================================== */
-const MSG_STATE = 1, MSG_SNAPSHOT = 2, MSG_SNAPSHOT3 = 3; // 3 = v3(플레이어별 age 포함)
+/* =============================================================================
+ *  넷코드 v4 클라이언트 — 예측 / 조정 / 상대 전방 시뮬 (NETCODE.md)
+ * -----------------------------------------------------------------------------
+ *  - 위치가 아니라 "입력"(MSG_INPUT)을 보낸다. 서버가 60Hz 권위 시뮬.
+ *  - 내 차 : 예측 틱 P = 추정 서버틱 + lead 에서 즉시 시뮬(입력지연 0).
+ *    스냅샷 도착 시 히스토리[T] 와 비교 → 불일치만 되감기+재생(reconciliation),
+ *    렌더 차이는 errorOffset 으로 흘려 순간이동 없이 수렴.
+ *  - 상대 차 : 서버 상태를 기준으로 "내 예측 틱 - 1" 까지 shared 물리로 전방 시뮬
+ *    → 한 화면의 모든 차가 같은 시간 영역 (고속 시점차 해소의 핵심).
+ * ========================================================================== */
+const MSG_INPUT = 4, MSG_SNAP4 = 5;
 const A2I = 32767 / Math.PI; // 각도 ↔ int16 스케일
-const clampI16 = (v) => (v < -32768 ? -32768 : v > 32767 ? 32767 : v);
 const normAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-function hexToRgb(hex) { if (typeof hex !== "string" || hex[0] !== "#" || hex.length < 7) return [232, 96, 76]; const n = parseInt(hex.slice(1, 7), 16); if (!Number.isFinite(n)) return [232, 96, 76]; return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
 function rgbToHex(r, g, b) { return "#" + (((1 << 24) | ((r & 255) << 16) | ((g & 255) << 8) | (b & 255)).toString(16)).slice(1); }
 const _td = new TextDecoder();
 
-// state 인코딩 (car + 부가정보 → ArrayBuffer). extra:{drifting,teleport,collide,color,pro:{lap,prog,lapMs}|null}
-//  v3 : 좌표 int32 1/4px + (pro 블록 뒤) 송신시각 u32 + viewDelay u8.
-//  ※ 구서버는 이 포맷을 못 읽는다 — 배포는 반드시 "git pull && pm2 restart" 한 번에(서버·클라 동시 교체).
-function encodeState(car, extra) {
-  const hasPro = !!extra.pro;
-  const buf = new ArrayBuffer(hasPro ? 31 : 24); // v3 : 좌표 int32 1/4px + 송신시각 u32 + viewDelay u8
-  const dv = new DataView(buf); let o = 0;
-  dv.setUint8(o, MSG_STATE); o += 1;
-  dv.setInt32(o, Math.round(car.x * 4)); o += 4;
-  dv.setInt32(o, Math.round(car.y * 4)); o += 4;
-  dv.setInt16(o, Math.round(normAngle(car.angle) * A2I)); o += 2;
-  dv.setInt16(o, clampI16(Math.round(car.vx))); o += 2;
-  dv.setInt16(o, clampI16(Math.round(car.vy))); o += 2;
-  dv.setUint8(o, (extra.drifting ? 1 : 0) | (extra.teleport ? 2 : 0) | (extra.collide ? 4 : 0) | (hasPro ? 8 : 0)); o += 1;
-  const [r, g, b] = hexToRgb(extra.color); dv.setUint8(o, r); dv.setUint8(o + 1, g); dv.setUint8(o + 2, b); o += 3;
-  if (hasPro) {
-    dv.setUint8(o, clamp(extra.pro.lap, 0, 255)); o += 1;
-    dv.setUint16(o, clamp(Math.round(extra.pro.prog * 1000), 0, 65535)); o += 2;
-    dv.setUint32(o, clamp(Math.round(extra.pro.lapMs), 0, 4294967295)); o += 4;
-  }
-  dv.setUint32(o, Math.floor(performance.now()) >>> 0); o += 4; // 송신 시각 — 서버가 업링크 지터 제거에 사용
-  dv.setUint8(o, clamp(Math.round(interpDelay / 4), 0, 255)); o += 1; // viewDelay
-  return buf;
+/* ---- 시계 동기 : 서버 틱 추정 (max-필터 오프셋 + 완만 드리프트) ---- */
+const clock = {
+  off: null,        // serverTick - (performance.now()/TICK_MS) 의 최대(=최소지연) 추정
+  lead: 3,          // 입력 리드(틱) — phase 피드백으로 1~8 적응
+  phaseWin: [],     // 최근 위상 표본 [{t, v}]
+  leadDownAt: 0,    // 마지막 lead 하향 시각
+};
+function estServerTick(nowMs) {
+  return clock.off === null ? simTick : nowMs / SIM.TICK_MS + clock.off;
 }
-// snapshot 디코딩 (ArrayBuffer → {st, players}). v3(타입 3)=age 포함, v2(타입 2)=구서버 폴백(age 0).
-function decodeSnapshot(ab) {
+function noteServerTick(tick, atMs) {
+  const off = tick - atMs / SIM.TICK_MS;
+  if (clock.off === null || off > clock.off) clock.off = off;          // 더 빠른 경로 발견 → 즉시 채택
+  else clock.off = Math.max(off, clock.off - 0.0008);                  // 완만 하강(드리프트/경로 변화 적응)
+}
+// 서버가 스냅샷 헤더로 알려주는 입력 도착 위상(+지각/-여유) → lead 적응
+function notePhase(v) {
+  const now = performance.now();
+  clock.phaseWin.push({ t: now, v });
+  while (clock.phaseWin.length && clock.phaseWin[0].t < now - 2000) clock.phaseWin.shift();
+  // 2등 최대(단발 스파이크 무시, 재발만 반영 — v3 jitWin 패턴)
+  let m1 = -127, m2 = -127;
+  for (const s of clock.phaseWin) { if (s.v > m1) { m2 = m1; m1 = s.v; } else if (s.v > m2) m2 = s.v; }
+  if (m2 >= 0) {                       // 지각 재발 → lead 즉시 상향
+    clock.lead = Math.min(8, clock.lead + 1);
+    clock.phaseWin.length = 0;
+  } else if (m1 <= -3 && now - clock.leadDownAt > 5000 && clock.lead > 1) {
+    clock.lead -= 1; clock.leadDownAt = now; // 여유 과다 → 5초당 1틱 완만 하향
+  }
+}
+
+/* ---- 입력 기록/전송 ---- */
+const recentInputs = []; // [{tick, buttons}] — 프레임당 1 WS 프레임에 최근 3틱 중복 동봉(유실 공백 메움)
+function pushInputRecord(tick, buttons) {
+  recentInputs.push({ tick, buttons });
+  while (recentInputs.length > 3) recentInputs.shift();
+}
+function netInputActive() {
+  return net.connected && net.ws && net.ws.readyState === WebSocket.OPEN
+      && gameState === "playing" && gameMode !== "lobby" && gameMode !== "soccer";
+}
+function sendInputFrame() {
+  if (!netInputActive() || recentInputs.length === 0) return;
+  const n = recentInputs.length;
+  const buf = new ArrayBuffer(6 + n * 5);
+  const dv = new DataView(buf);
+  dv.setUint8(0, MSG_INPUT);
+  dv.setUint32(1, (net.lastSnapTick || 0) >>> 0);
+  dv.setUint8(5, n);
+  let o = 6;
+  for (const r of recentInputs) {
+    dv.setUint32(o, r.tick >>> 0); o += 4;
+    dv.setUint8(o, r.buttons & 255); o += 1;
+  }
+  net.ws.send(buf);
+}
+
+/* ---- 예측 히스토리 (링 128틱 ≈ 2.1초) ---- */
+const HIST_N = 128;
+const predHist = new Array(HIST_N).fill(null);
+const SIM_FIELDS = ["x", "y", "angle", "vx", "vy", "lf", "ll", "steerInput", "throttle", "braking", "reversing",
+  "drifting", "driftBoostT", "evx", "evy", "spinV", "invulnUntilTick", "lockUntilTick", "stunUntilTick",
+  "punchReadyTick", "respawnReadyTick", "impactSlideUntilTick", "contactTick", "trackHint", "lastPhase01"];
+function copySimState(dst, src) { for (const f of SIM_FIELDS) dst[f] = src[f]; return dst; }
+function recordHist(tick, buttons) {
+  let h = predHist[tick % HIST_N];
+  if (!h) { h = {}; predHist[tick % HIST_N] = h; }
+  h.tick = tick; h.buttons = buttons;
+  copySimState(h, CAR);
+}
+function clearPrediction() {
+  predHist.fill(null);
+  errOff.x = 0; errOff.y = 0; errOff.a = 0;
+  recentInputs.length = 0;
+}
+
+/* ---- 렌더 오차 오프셋 : 보정을 "미끄러짐"으로만 보이게 ---- */
+const errOff = { x: 0, y: 0, a: 0 };
+const ERR_SNAP_POS = 150, ERR_SNAP_ANG = 0.44; // 상한 초과 → 깔끔한 스냅(수백 ms 슬라이드 금지)
+
+/* ---- MSG_SNAP4 디코드 ---- */
+function decodeSnap4(ab) {
   const dv = new DataView(ab), u8 = new Uint8Array(ab);
-  const v3 = u8[0] === MSG_SNAPSHOT3; let o = 1;
-  const st = dv.getFloat64(o); o += 8;
+  let o = 1;
+  const tick = dv.getUint32(o); o += 4;
+  const ack = dv.getUint32(o); o += 4;
+  const phase = dv.getInt8(o); o += 1;
+  const flags = dv.getUint8(o); o += 1;
+  const keyframe = !!(flags & 1);
   const count = dv.getUint16(o); o += 2;
-  const players = [];
+  const ents = [];
   for (let i = 0; i < count; i++) {
-    const id = dv.getUint32(o); o += 4;
-    let x, y;
-    if (v3) { x = dv.getInt32(o) / 4; o += 4; y = dv.getInt32(o) / 4; o += 4; } // 1/4px 정밀도
-    else { x = dv.getInt16(o); o += 2; y = dv.getInt16(o); o += 2; }
-    const angle = dv.getInt16(o) / A2I; o += 2;
-    const vx = dv.getInt16(o); o += 2;
-    const vy = dv.getInt16(o); o += 2;
-    const f = dv.getUint8(o); o += 1;
-    const r = dv.getUint8(o), g = dv.getUint8(o + 1), b = dv.getUint8(o + 2); o += 3;
-    let age = 0;
-    if (v3) { age = dv.getUint8(o); o += 1; } // 255 = 스톨 센티널
-    const nl = dv.getUint8(o); o += 1;
-    let name = ""; if (nl > 0) { name = _td.decode(u8.subarray(o, o + nl)); o += nl; }
-    players.push({ id, x, y, angle, vx, vy, age, drifting: !!(f & 1), teleport: !!(f & 2), invuln: !!(f & 4), admin: !!(f & 8), color: rgbToHex(r, g, b), name });
+    const e = { id: dv.getUint32(o) };
+    o += 4;
+    const mask = dv.getUint16(o); o += 2;
+    if (mask & 1) { e.x = dv.getInt32(o) / 4; o += 4; e.y = dv.getInt32(o) / 4; o += 4; }
+    if (mask & 2) { e.vx = dv.getInt16(o) / 8; o += 2; e.vy = dv.getInt16(o) / 8; o += 2; }
+    if (mask & 4) { e.evx = dv.getInt16(o) / 8; o += 2; e.evy = dv.getInt16(o) / 8; o += 2; }
+    if (mask & 8) { e.angle = dv.getInt16(o) / A2I; o += 2; }
+    if (mask & 16) { e.steer = dv.getInt8(o) / 127; o += 1; }
+    if (mask & 32) { e.buttons = dv.getUint8(o); o += 1; }
+    if (mask & 64) { e.state = dv.getUint8(o); o += 1; }
+    if (mask & 128) {
+      e.invulnTicks = dv.getUint8(o); o += 1;
+      e.lockTicks = dv.getUint8(o); o += 1;
+      e.stunTicks = dv.getUint8(o); o += 1;
+    }
+    if (mask & 256) { e.spinV = dv.getInt16(o) / 8; o += 2; }
+    if (keyframe) {
+      e.color = rgbToHex(u8[o], u8[o + 1], u8[o + 2]); o += 3;
+      const nl = u8[o]; o += 1;
+      e.name = nl > 0 ? _td.decode(u8.subarray(o, o + nl)) : ""; o += nl;
+    }
+    ents.push(e);
   }
-  return { st, players };
+  return { tick, ack, phase, keyframe, ents };
 }
 
-// 스냅샷 적용 — 적응형 지연(지터·age 추적) + 원격 버퍼(진짜 샘플 시각 기준) 갱신.
-//  · 샘플 시각 t = st - age : 서버 재브로드캐스트 중복은 t 가 같아 자동 드롭(정지+2배점프 진동 제거)
-//  · age 255 = 스톨 센티널 : push 하지 않고 속도 0으로 그 자리에 동결(유령 외삽 방지)
-//  · 지터 = (도착 간격 - 서버 st 간격) : 송신 리듬과 분리된 순수 네트워크 지터만 측정.
-//    단발 스파이크는 외삽이 흡수하게 무시하고, 4초 내 재발할 때만 버퍼를 키운다(스파이크 재발 규칙).
-//    로컬 프레임 스톨(GC/탭 전환) 중 도착 간격은 표본에서 제외.
-function applySnapshot(st, players) {
-  if (typeof st !== "number") return;
-  net.hasServerTime = true;
-  if (st > net.serverNewest) net.serverNewest = st;
-  const nowA = performance.now();
-  if (lastSnapAt && lastSnapSt && !document.hidden && lastFrameDtMs < 100) {
-    const j = Math.max(0, (nowA - lastSnapAt) - (st - lastSnapSt)); // 순수 지터(ms)
-    // 슬라이딩 윈도우(1초 슬롯 x6)에 슬롯별 최대치 기록
-    if (nowA - jitSlotT >= 1000) {
-      const n = Math.min(6, Math.floor((nowA - jitSlotT) / 1000));
-      for (let i = 0; i < n; i++) { jitWin.shift(); jitWin.push(0); }
-      jitSlotT = nowA;
-    }
-    if (j > jitWin[5]) jitWin[5] = j;
+/* ---- 상대 차 : 기준 주입 + 전방 시뮬 ---- */
+const REMOTE_BACKOFF = 1;       // 상대는 내 예측 틱 - 1 까지 (미예측 오차 절감 튜너블)
+const REMOTE_STALE_MS = 250;    // 스냅샷 공백 시 전방 시뮬 유지 상한
+function buildRemoteEnv(tick) {
+  const env = buildEnv(tick);
+  // 상대 개인 사정(내 사망/관전)은 빼고, 전원 공통 게이트(레이스 시작 전 정지)만 남긴다
+  env.freeze = gameMode === "pro" && raceFrozen();
+  return env;
+}
+function advanceRemote(r) {
+  if (r.extrap !== 0 || r.dead) return;                        // ballistic/static 은 표시 단계 외삽
+  if (performance.now() - r.snapAt > REMOTE_STALE_MS) return;  // 스냅샷 두절 → 동결(가짜 주행 방지)
+  const target = simTick - REMOTE_BACKOFF;
+  if (r.simTick >= target) return;
+  const env = buildRemoteEnv(r.simTick);
+  let guard = 0;
+  while (r.simTick < target && guard++ < 20) {
+    r.simTick++;
+    env.tick = r.simTick;
+    SIM.stepCar(r.sim, r.buttons, env, 1, null);
   }
-  lastSnapAt = nowA; lastSnapSt = st;
+}
+function applyRemoteEnt(e, snap) {
+  let r = remotePlayers.get(e.id);
+  if (!r) {
+    r = { x: e.x, y: e.y, angle: e.angle, sim: SIM.makeCarState(e.x, e.y, e.angle), simTick: snap.tick, snapAt: 0, firstSeen: true, driftUntil: 0 };
+    remotePlayers.set(e.id, r);
+  }
+  if (e.name !== undefined) r.name = e.name;
+  if (e.color !== undefined) r.color = e.color;
+  const st = e.state || 0;
+  r.admin = !!(st & 4); r.invuln = !!(st & 2); r.dead = !!(st & 8);
+  r.extrap = (st >> 5) & 3;
+  r.buttons = e.buttons || 0;
+  SIM.applyServerState(r.sim, {
+    x: e.x, y: e.y, angle: e.angle, vx: e.vx || 0, vy: e.vy || 0,
+    evx: e.evx || 0, evy: e.evy || 0, spinV: e.spinV || 0, steer: e.steer || 0,
+    drifting: !!(st & 1), tick: snap.tick,
+    invulnTicks: e.invulnTicks, lockTicks: e.lockTicks, stunTicks: e.stunTicks,
+  });
+  r.simTick = snap.tick;
+  r.snapAt = performance.now();
+  advanceRemote(r);
+  // 첫 등장 / 스폰급 거리 → 표시 즉시 스냅
+  if (r.firstSeen || Math.hypot(r.sim.x - r.x, r.sim.y - r.y) > 400) {
+    r.x = r.sim.x; r.y = r.sim.y; r.angle = r.sim.angle; r.firstSeen = false;
+  }
+}
+
+/* ---- 내 차 : 조정(reconciliation) ---- */
+function reconcile(me, T) {
+  const h = predHist[T % HIST_N];
+  if (!h || h.tick !== T) {
+    // 히스토리 밖 (리싱크 직후/장기 스톨) : 크게 어긋났으면 서버 상태로 리싱크
+    if (Math.abs(simTick - T) > 30) hardResync(me, T);
+    return;
+  }
+  const dx = me.x - h.x, dy = me.y - h.y;
+  let da = me.angle - h.angle; while (da > Math.PI) da -= Math.PI * 2; while (da < -Math.PI) da += Math.PI * 2;
+  const discreteOk = !!(me.state & 1) === !!h.drifting;
+  if (dx * dx + dy * dy < 0.25 && Math.abs(da) < 0.0088 && discreteOk) return; // 0.5px / 0.5도 이내 = 일치
+
+  // 서버 상태 채택 → 이후 입력 재생
+  const oldX = CAR.x, oldY = CAR.y, oldA = CAR.angle;
+  SIM.applyServerState(CAR, {
+    x: me.x, y: me.y, angle: me.angle, vx: me.vx || 0, vy: me.vy || 0,
+    evx: me.evx || 0, evy: me.evy || 0, spinV: me.spinV || 0, steer: me.steer || 0,
+    drifting: !!(me.state & 1), tick: T,
+    invulnTicks: me.invulnTicks, lockTicks: me.lockTicks, stunTicks: me.stunTicks,
+  });
+  let lastButtons = h.buttons;
+  for (let tk = T + 1; tk <= simTick; tk++) {
+    const hh = predHist[tk % HIST_N];
+    const b = hh && hh.tick === tk ? hh.buttons : lastButtons;
+    lastButtons = b;
+    const env = buildEnv(tk);
+    SIM.stepCar(CAR, b, env, 1, null); // 리플레이 : 이벤트 무음
+    SIM.quantize(CAR);
+    if (hh && hh.tick === tk) copySimState(hh, CAR);
+  }
+  // 보정 전후 렌더 차이 → 오프셋 (컷 없는 수렴)
+  errOff.x += oldX - CAR.x; errOff.y += oldY - CAR.y;
+  let dA = oldA - CAR.angle; while (dA > Math.PI) dA -= Math.PI * 2; while (dA < -Math.PI) dA += Math.PI * 2;
+  errOff.a += dA;
+  if (Math.hypot(errOff.x, errOff.y) > ERR_SNAP_POS || Math.abs(errOff.a) > ERR_SNAP_ANG) {
+    errOff.x = 0; errOff.y = 0; errOff.a = 0; // 대형 보정 : 슬라이드 대신 깔끔한 스냅
+    addShake(6);
+  }
+}
+function hardResync(me, T) {
+  SIM.applyServerState(CAR, {
+    x: me.x, y: me.y, angle: me.angle, vx: me.vx || 0, vy: me.vy || 0,
+    evx: me.evx || 0, evy: me.evy || 0, spinV: me.spinV || 0, steer: me.steer || 0,
+    drifting: !!((me.state || 0) & 1), tick: T,
+    invulnTicks: me.invulnTicks, lockTicks: me.lockTicks, stunTicks: me.stunTicks,
+  });
+  simTick = T + Math.max(1, Math.round(clock.lead));
+  simAcc = 0;
+  clearPrediction();
+}
+
+/* ---- 스냅샷 적용 ---- */
+function applySnap4(snap) {
+  const nowMs = performance.now();
+  noteServerTick(snap.tick, nowMs);
+  net.lastSnapTick = snap.tick;
+  net.lastSnapAt = nowMs;
+  net.lastInputAck = snap.ack;
+  notePhase(snap.phase);
   const seen = new Set();
-  let ageSeen = 0;
-  for (const p of players) {
-    if (p.id === net.id) continue; // 내 차는 로컬 물리로 그린다
-    seen.add(p.id);
-    let r = remotePlayers.get(p.id);
-    if (!r) { r = { x: p.x, y: p.y, angle: p.angle, snap: true, buf: [], evw: 0 }; remotePlayers.set(p.id, r); }
-    r.invuln = p.invuln; r.name = p.name; r.admin = p.admin; r.color = p.color; r.drifting = p.drifting;
-    if (p.age === 255) { // 스톨 : 마지막 실샘플에 자연 동결 (텔레포트 플래그는 놓치지 않고 존중)
-      if (p.teleport) { r.buf = [{ t: st - 254, x: p.x, y: p.y, angle: p.angle, vx: 0, vy: 0 }]; r.snap = true; }
-      r.evx = 0; r.evy = 0; r.evw = 0; continue;
-    }
-    const vx = p.vx || 0, vy = p.vy || 0;
-    r.evx = vx; r.evy = vy;
-    // age < 60ms(정상 위상/지터)만 버퍼 산정에 반영 — 스톨로 커지는 age 램프가
-    // 모든 접속자의 interpDelay 를 끌어올리는 것 방지(그 구간은 외삽이 흡수)
-    if (p.age > ageSeen && p.age < 60) ageSeen = p.age;
-    const t = st - p.age; // 진짜 샘플 시각
-    if (p.teleport) { r.buf = [{ t, x: p.x, y: p.y, angle: p.angle, vx, vy }]; r.snap = true; r.evw = 0; }
-    else {
-      const last = r.buf[r.buf.length - 1];
-      if (!last || t > last.t) {
-        // 각속도 추정 (외삽·피드포워드용) : 마지막 두 실샘플의 최단호/시간차
-        if (last) {
-          let da = p.angle - last.angle; while (da > Math.PI) da -= Math.PI * 2; while (da < -Math.PI) da += Math.PI * 2;
-          r.evw = clamp(da / ((t - last.t) / 1000), -8, 8);
-        }
-        r.buf.push({ t, x: p.x, y: p.y, angle: p.angle, vx, vy });
-        while (r.buf.length > 30) r.buf.shift();
-      }
-    }
+  let me = null;
+  for (const e of snap.ents) {
+    if (e.id === net.id) { me = e; continue; }
+    seen.add(e.id);
+    applyRemoteEnt(e, snap);
   }
-  // 상대 업링크 위상/지연(age)도 버퍼 깊이에 가산해야 그 플레이어가 만성 외삽에 빠지지 않는다
-  ageMax = Math.max(ageSeen, ageMax * 0.995);
-  // 윈도우 "2번째 최대" 슬롯 = 단발 스파이크는 무시(외삽이 흡수), 재발 버스트만 버퍼에 반영
-  let m1 = 0, m2 = 0;
-  for (const v of jitWin) { if (v > m1) { m2 = m1; m1 = v; } else if (v > m2) m2 = v; }
-  const target = clamp(m2 * 1.3 + ageMax + 14, INTERP_BASE, INTERP_MAX);
-  interpDelay += (target - interpDelay) * (target > interpDelay ? 0.3 : 0.02); // 상승 빠르게, 하강 천천히
-  for (const id of remotePlayers.keys()) { if (!seen.has(id)) remotePlayers.delete(id); }
+  for (const id of remotePlayers.keys()) if (!seen.has(id)) remotePlayers.delete(id);
+  if (me) reconcile(me, snap.tick);
 }
 
-// 내 차 상태를 서버에 전송 — 모니터 주사율대로(매 프레임). 안전 상한 ~165Hz(6ms)만 둔다.
-//  → 서버가 항상 최신 위치를 갖고, 남들 화면에선 수신측 보간이 각자 모니터 Hz로 렌더한다.
-function netSend(car, now) {
-  if (gameMode === "lobby" || gameMode === "soccer") return; // 로비/축구는 로컬 전용(서버 미입장)
-  if (gameMode === "boss" && (bossCli.dead || bossCli.spec)) return; // 사망/관전 중엔 위치 안 보냄
-  if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
-  if (now - net.lastSend < 6) return; // 매 프레임 전송(60·120·144Hz 그대로), 6ms 미만만 차단
-  net.lastSend = now;
-
-  const extra = {
-    drifting: car.drifting,                         // 드리프트 중일 때만 → 남들 화면에도 그때만 자국
-    color: myColor(),                               // 커스텀 차 색 → 서버가 스냅샷으로 릴레이
-    collide: COLLISION_ENABLED && othersVisible(),  // 충돌 대상 여부(다른 차 보일 때만 밀치기)
-    teleport: false, pro: null,
-  };
-  // 막 텔레포트(벽/플레이어 리스폰)했으면 서버·남들에게 스냅하라고 알린다
-  if (net.pendingTeleport) { extra.teleport = true; net.pendingTeleport = false; }
-  // 프로 레이싱 중이면 바퀴수/진행도/현재랩시간 보고 (서버가 순위·완주 판정)
-  if (gameMode === "pro" && race.state === "racing") {
-    extra.pro = { lap: race.lap, prog: race.prog, lapMs: Math.round(race.lapMark) };
-  }
-  net.ws.send(encodeState(car, extra));
-}
-
-// 렌더를 서버 시각보다 이만큼 과거로 늦춰(재생 시계), 그 사이 도착한 스냅샷을
-// 확보해두고 "진짜 샘플 시각(st-age)" 기준으로 두 스냅샷을 보간한다.
-// 적응형 보간 지연 : 순수 네트워크 지터(도착간격-송신간격) + 상대 업링크 age 를 재서 자동 조절.
-const INTERP_BASE = 45;   // 최소 지연(ms) — 매끈한 망
-const INTERP_MAX = 250;   // 최대 지연(ms) — 지터/랙 심할 때 상한
-let interpDelay = 60;     // 현재 적용 중인 지연(ms), 매 스냅샷마다 동적 조절
-let lastSnapAt = 0;       // 직전 스냅샷 도착 시각(클라 시계)
-let lastSnapSt = 0;       // 직전 스냅샷 서버 시각(st) — 지터 = 도착간격-st간격
-const jitWin = [0, 0, 0, 0, 0, 0]; // 1초 슬롯 6개 : 슬롯별 순수 지터 최대치 (슬라이딩 윈도우)
-let jitSlotT = 0;         // 현재(마지막) 슬롯 시작 시각
-let ageMax = 0;           // 관측된 플레이어 state age 상한(감쇠) — 버퍼 깊이에 가산
-let lastFrameDtMs = 16;   // 직전 프레임 dt(ms) — 로컬 스톨 중 지터 표본 제외용
-const MAX_EXTRAP = 250;   // ms : 패킷이 늦으면 감쇠 속도로 이 시간까지 외삽(지터 흡수 → 안 끊김)
-const EXTRAP_DECAY = 4;   // 외삽 속도 감쇠율(1/s) — v = v0·e^(-λ·ahead), 위치는 폐형식 적분
-
-/* 원격 차량 렌더 파이프라인 (v3) — "내 차만큼 자연스러운" 3단 구성.
- *  1) rate 제어 재생 시계 : playT 는 매 프레임 dt×rate 로만 "연속" 전진. rate 는 버퍼 여유 오차에
- *     비례(가속 +3% / 감속 -10% 비대칭)해 시계가 절대 점프하지 않는다 → 고속에서의 미세 흔들림 원천 제거.
- *     하드 리싱크는 "신선한 데이터가 있는데 크게 뒤처진" 한 방향만(스냅샷 두절 중에는 발동 금지).
- *  2) 속도인지 에르밋 보간(+해석적 도함수) / 폐형식 감쇠 외삽(각속도 포함).
- *  3) 속도 피드포워드 스무딩 : r += (목표-r)·e + v·dt·(1-e), e=1-e^(-K·dt).
- *     정상상태 지연이 정확히 0(오차가 (1-e)배씩만 감쇠)이라 경로를 그대로 따라가면서,
- *     외삽→보간 복귀 등의 목표 불연속만 τ≈55ms 로 걸러낸다. 각도에도 각속도로 동일 적용. */
-const SMOOTH_K = 18;
-function updateRemotes(dt) {
-  if (net.serverNewest === 0 && !net.hasServerTime) { return; }
-  const nowA = performance.now();
-  const target = net.serverNewest - interpDelay;
-  if (net.playT === null) net.playT = target;
-  else {
-    const err = target - net.playT; // +: 뒤처짐(따라잡기), -: 여유 부족(늦추기)
-    const rate = 1 + clamp(err, -100, 30) * 0.001; // 가속 최대 +3%, 감속 최대 -10%
-    net.playT += dt * 1000 * rate;
-    if (net.playT > net.serverNewest + MAX_EXTRAP) net.playT = net.serverNewest + MAX_EXTRAP;
-    // 단방향 하드 리싱크 : 스냅샷이 실제로 오고 있는데(200ms 내 도착) 300ms+ 뒤처진 경우만
-    if (err > 300 && nowA - lastSnapAt < 200) net.playT = target;
-  }
-  const renderT = net.playT;
-  const ease = 1 - Math.exp(-SMOOTH_K * dt); // 프레임독립·무조건 안정 (e=1-e^(-K·dt))
-
+/* ---- 상대 표시 스무딩 (렌더 목표 = 전방 시뮬 상태) ---- */
+const REMOTE_POS_TAU = 0.08;   // 위치 수렴 시정수(s)
+const REMOTE_ANG_CAP = 4.0;    // 각도 보정 상한(rad/s) — 실측 최대 선회보다 약간 위
+function updateRemoteDisplay(dt) {
+  const nowMs = performance.now();
+  const ease = 1 - Math.exp(-dt / REMOTE_POS_TAU);
   for (const [id, r] of remotePlayers) {
-    const buf = r.buf;
-    if (!buf || buf.length === 0) continue;
-    // renderT 를 감싸는 두 스냅샷만 남기고 소비된 옛 샘플 정리(1개는 유지)
-    while (buf.length >= 2 && buf[1].t <= renderT) buf.shift();
-
-    let tx, ty, ta, tvx, tvy, tw; // 목표 위치/각 + 목표 속도/각속도(피드포워드)
-    if (buf.length >= 2 && renderT >= buf[0].t) {
-      // 속도인지 3차 에르밋 스플라인 + 해석적 도함수
-      const A = buf[0], B = buf[1], span = B.t - A.t;
-      const u = span > 0 ? clamp((renderT - A.t) / span, 0, 1) : 1;
-      const sps = span / 1000, u2 = u * u, u3 = u2 * u;
-      const h00 = 2 * u3 - 3 * u2 + 1, h10 = u3 - 2 * u2 + u, h01 = -2 * u3 + 3 * u2, h11 = u3 - u2;
-      tx = h00 * A.x + h10 * A.vx * sps + h01 * B.x + h11 * B.vx * sps;
-      ty = h00 * A.y + h10 * A.vy * sps + h01 * B.y + h11 * B.vy * sps;
-      const g00 = 6 * u2 - 6 * u, g10 = 3 * u2 - 4 * u + 1, g01 = -g00, g11 = 3 * u2 - 2 * u; // dh/du
-      const inv = sps > 0 ? 1 / sps : 0;
-      tvx = (g00 * A.x + g01 * B.x) * inv + g10 * A.vx + g11 * B.vx;
-      tvy = (g00 * A.y + g01 * B.y) * inv + g10 * A.vy + g11 * B.vy;
-      let d = B.angle - A.angle; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
-      ta = A.angle + d * u;
-      tw = sps > 0 ? clamp(d / sps, -8, 8) : 0;
+    let tx, ty, ta, tvx, tvy;
+    if (r.extrap === 1) {
+      // ballistic (보스/사망차) : 서버 상태 + 감쇠 속도 폐형식 외삽 (최대 250ms)
+      const ahead = clamp((nowMs - r.snapAt) / 1000, 0, 0.25);
+      const k = Math.exp(-4 * ahead), gain = (1 - k) / 4;
+      tx = r.sim.x + r.sim.vx * gain; ty = r.sim.y + r.sim.vy * gain;
+      ta = r.sim.angle; tvx = r.sim.vx * k; tvy = r.sim.vy * k;
+    } else if (r.extrap === 2 || r.dead) {
+      tx = r.sim.x; ty = r.sim.y; ta = r.sim.angle; tvx = 0; tvy = 0;
     } else {
-      // 버퍼 고갈(renderT 가 최신보다 앞섬) → 감쇠 속도 폐형식 외삽 (위치=∫v0·e^(-λτ), 각도 동일)
-      const s = buf[buf.length - 1];
-      const ahead = clamp(renderT - s.t, 0, MAX_EXTRAP) / 1000;
-      const k = Math.exp(-EXTRAP_DECAY * ahead), gain = (1 - k) / EXTRAP_DECAY;
-      tx = s.x + (r.evx || 0) * gain;
-      ty = s.y + (r.evy || 0) * gain;
-      ta = s.angle + (r.evw || 0) * gain;
-      tvx = (r.evx || 0) * k; tvy = (r.evy || 0) * k; tw = (r.evw || 0) * k;
+      tx = r.sim.x; ty = r.sim.y; ta = r.sim.angle;
+      tvx = r.sim.vx + r.sim.evx; tvy = r.sim.vy + r.sim.evy;
     }
-
-    if (r.snap) { r.x = tx; r.y = ty; r.angle = ta; r.snap = false; } // 첫 등장/텔레포트 → 즉시 스냅
-    else {
-      // 속도 피드포워드 스무딩 : 정상상태 지연 0 + 불연속만 필터
-      r.x += (tx - r.x) * ease + tvx * dt * (1 - ease);
-      r.y += (ty - r.y) * ease + tvy * dt * (1 - ease);
-      let d = ta - r.angle; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
-      r.angle += d * ease + tw * dt * (1 - ease);
-    }
-    // 드리프트 중인 원격 차량의 타이어 자국
-    if (r.drifting) pushSkid(r, r.x, r.y, r.angle, SKID_COLOR);
-    else r._skid = null;
-  }
-}
-
-// 구버전 서버(st 미제공) 폴백 : 버퍼 최신값으로 지수 수렴 (현 서버는 st 를 보내므로 거의 안 쓰임)
-function updateRemotesFallback() {
-  for (const [id, r] of remotePlayers) {
-    const s = r.buf && r.buf[r.buf.length - 1];
-    if (!s) continue;
-    r.x = lerp(r.x, s.x, 0.25);
-    r.y = lerp(r.y, s.y, 0.25);
-    let d = s.angle - r.angle;
-    while (d > Math.PI) d -= Math.PI * 2;
-    while (d < -Math.PI) d += Math.PI * 2;
-    r.angle += d * 0.25;
+    // 속도 피드포워드 스무딩 (v3 검증식 계승 : 정상상태 지연 0)
+    r.x += (tx - r.x) * ease + tvx * dt * (1 - ease);
+    r.y += (ty - r.y) * ease + tvy * dt * (1 - ease);
+    let d = ta - r.angle; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
+    let step = d * ease;
+    const cap = REMOTE_ANG_CAP * dt;
+    if (step > cap) step = cap; else if (step < -cap) step = -cap; // 15도 스냅은 위치 20px 보다 잘 보인다
+    r.angle += step;
+    // 드리프트 표시 히스테리시스(~100ms) — 스키드 깜빡임 방지
+    if (r.sim.drifting) r.driftUntil = nowMs + 100;
+    r.drifting = nowMs < r.driftUntil;
     if (r.drifting) pushSkid(r, r.x, r.y, r.angle, SKID_COLOR);
     else r._skid = null;
   }
 }
 
 connect();
+
+// 시계 동기 : 2초마다 ping — pong 왕복의 중간 시각으로 서버 틱 오프셋 표본 추가
+setInterval(() => {
+  if (net.connected && net.ws && net.ws.readyState === WebSocket.OPEN) {
+    try { net.ws.send(JSON.stringify({ type: "ping", c: performance.now() })); } catch {}
+  }
+}, 2000);
 
 // 탭을 닫거나 떠날 때 연결을 즉시 끊어 서버 인원수에 유령으로 남지 않게 한다.
 window.addEventListener("pagehide", () => {
@@ -5094,13 +5168,8 @@ window.addEventListener("pagehide", () => {
 //  (잔존 속도가 에르밋 탄젠트/외삽에 들어가 생기는 리플 방지)
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) return;
-  if (gameMode === "lobby" || gameMode === "soccer") return;
-  if (!net.connected || !net.ws || net.ws.readyState !== WebSocket.OPEN) return;
-  try {
-    net.ws.send(encodeState({ x: CAR.x, y: CAR.y, angle: CAR.angle, vx: 0, vy: 0 }, {
-      drifting: false, teleport: false, collide: COLLISION_ENABLED && othersVisible(), color: myColor(), pro: null,
-    }));
-  } catch {}
+  if (!netInputActive()) return;
+  try { pushInputRecord(simTick + 1, 0); sendInputFrame(); } catch {} // 전 키 해제 → 서버에서 자연 감속
 });
 
 
@@ -5122,7 +5191,6 @@ const MAX_CATCHUP_TICKS = 6;
 function frame(now) {
   let dt = (now - lastTime) / 1000;
   lastTime = now;
-  lastFrameDtMs = dt * 1000; // 원본 dt(ms) — 로컬 스톨 중 지터 표본 제외용
 
   // 메뉴 화면(미입장)에선 물리/네트워크를 멈춘다 (메뉴 오버레이가 화면을 덮음)
   if (gameState !== "playing") {
@@ -5134,29 +5202,51 @@ function frame(now) {
     return;
   }
 
-  // ----- 고정틱 시뮬 -----
+  // ----- 고정틱 시뮬 : 서버 틱 정렬(주기 슬루 ±4%, 시계 점프 금지) -----
+  let period = SIM.DT;
+  if (clock.off !== null && netInputActive()) {
+    const targetTick = Math.floor(estServerTick(now)) + clock.lead; // 내 예측 틱 P 목표
+    const diff = targetTick - simTick;
+    if (diff > 60 || diff < -60) {
+      // 대형 어긋남(절전 복귀/서버 재시작) → 즉시 재정렬, 상태는 다음 스냅샷 reconcile 이 수복
+      simTick = targetTick; simAcc = 0; clearPrediction();
+    } else {
+      period = SIM.DT * (1 - clamp(diff, -2, 2) * 0.02);
+    }
+  }
   simAcc += dt;
   let ticked = 0;
-  while (simAcc >= SIM.DT && ticked < MAX_CATCHUP_TICKS) {
-    simAcc -= SIM.DT;
+  while (simAcc >= period && ticked < MAX_CATCHUP_TICKS) {
+    simAcc -= period;
     simTick++;
     ticked++;
-    // 보스 스턴(레거시 wall-clock) → 틱 소프트락으로 반영 (v4 3단계에서 이벤트 틱화)
+    // 보스 스턴(레거시 wall-clock) → 틱 소프트락으로 반영 (3단계에서 이벤트 틱화)
     if (gameMode === "boss" && performance.now() < bossCli.stunUntil && CAR.stunUntilTick <= simTick) {
       CAR.stunUntilTick = simTick + 1;
     }
-    SIM.stepGroup([{ s: CAR, buttons: sampleButtons(), id: net.id || 0 }], buildEnv(simTick), { events: simEvents });
+    const btns = sampleButtons(true);
+    pushInputRecord(simTick, btns);          // 서버로 보낼 입력 (직전 2틱 중복 동봉)
+    SIM.stepGroup([{ s: CAR, buttons: btns, id: net.id || 0 }], buildEnv(simTick), { events: simEvents });
+    recordHist(simTick, btns);               // 조정(reconciliation)용 사후 상태 기록
+    for (const [, r] of remotePlayers) advanceRemote(r); // 상대 전방 시뮬도 같은 틱으로
     updateLap(CAR);           // 프로 레이싱 바퀴 추적 (틱 상태 기준)
     updateAttack(CAR);        // 타임어택 계측
   }
-  if (simAcc >= SIM.DT) simAcc = 0; // 스톨 — 캐치업 상한 초과분은 버림
+  if (simAcc >= period) simAcc = 0; // 스톨 — 캐치업 상한 초과분은 버림
+  if (ticked) sendInputFrame();     // 프레임당 1 WS 전송
   consumeSimEvents(simEvents);      // 벽/장애물 충돌음
+
+  // ----- 렌더 오차 오프셋 감쇠 (보정을 미끄러짐으로) -----
+  errOff.x *= Math.exp(-dt / 0.12);
+  errOff.y *= Math.exp(-dt / 0.12);
+  errOff.a *= Math.exp(-dt / 0.08);
 
   // ----- 렌더 부분 스텝 : 사본 상태로 잔여 시간만 적분 (이벤트 무음, 시뮬 비오염) -----
   Object.assign(RENDER_CAR, CAR);
   if (simAcc > 0.0005) {
-    SIM.stepCar(RENDER_CAR, sampleButtons(), buildEnv(simTick + 1), simAcc / SIM.DT, null);
+    SIM.stepCar(RENDER_CAR, sampleButtons(false), buildEnv(simTick + 1), simAcc / SIM.DT, null);
   }
+  RENDER_CAR.x += errOff.x; RENDER_CAR.y += errOff.y; RENDER_CAR.angle += errOff.a;
 
   // ----- 프레임 로직 (임의 dt 허용 — 시뮬 밖) -----
   updateSkid(CAR);            // 스키드 마크 (틱 상태 기준)
@@ -5170,8 +5260,7 @@ function frame(now) {
   updateCamera(RENDER_CAR, dt); // 카메라는 렌더 상태(부분 스텝)를 따라간다 — 144Hz 매끈함
 
   // ----- 네트워크 -----
-  netSend(CAR, now);          // 내 상태 송신 (시뮬 상태 기준)
-  updateRemotes(dt);          // 원격 차량 보간 (서버 타임스탬프 기반)
+  updateRemoteDisplay(dt);    // 상대 표시 스무딩 (목표 = 전방 시뮬 상태)
   updatePlayerCollision(CAR); // 원격 위치 갱신 후, 내 차를 상대 밖으로 밀어냄(겹침 방지)
   updateExplosions(dt);       // 폭발 이펙트 갱신 (킬 판정은 서버가 통지)
   updateBossFx(dt);           // 보스전 연출(폭발/타이어) 갱신

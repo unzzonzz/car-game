@@ -25,6 +25,8 @@ const path = require("path");
 const crypto = require("crypto");
 const { WebSocketServer } = require("ws");
 const { Redis } = require("@upstash/redis");
+const SIM = require("./shared.js");   // v4 : 클라와 동일한 결정론 시뮬 코어
+const TRACKS = SIM.buildTracks();     // 서버도 전 코스 지오메트리를 안다 (노면/랩 게이트/스폰)
 
 const PORT = process.env.PORT || 3000;
 const TICK_RATE = 60;       // 초당 스냅샷 브로드캐스트 횟수 (60 → 더 매끈/낮은 지연, 대역폭 2배)
@@ -606,6 +608,349 @@ function applyState(p, m) {
   }
 }
 
+/* =============================================================================
+ *  넷코드 v4 — 서버 권위 시뮬레이션 (NETCODE.md)
+ * -----------------------------------------------------------------------------
+ *  클라는 "입력"만 보낸다(MSG_INPUT=4). 서버가 60Hz 고정틱으로 전 차량을
+ *  shared.js 시뮬로 적분하고, 그룹 정본 스냅샷(MSG_SNAP4=5)을 내려보낸다.
+ *  구(v2/v3) 클라이언트의 바이너리 state 는 kicked{update} 로 새로고침 유도.
+ * ========================================================================== */
+const MSG_INPUT = 4, MSG_SNAP4 = 5;
+const MAX_LEAD_TICKS = 10;        // 수용 입력 틱 상한 (serverTick + 이 값까지)
+const INPUT_RING_MAX = 32;        // 인당 입력 버퍼 상한
+const STARVE_COAST_TICKS = 5;     // 이 이상 결손 → 중립 입력(코스트)
+const STARVE_FREEZE_TICKS = 45;   // 이 이상 결손 → 하드 프리즈 + 판정 제외
+const KEYFRAME_TICKS = 120;       // 2초마다 그룹 키프레임(이름/색 포함)
+const BACKPRESSURE_SKIP = 64 * 1024, BACKPRESSURE_KILL = 1024 * 1024;
+const RESTART_CD_TICKS = 60;      // R(출발선 복귀) 쿨다운
+
+let serverTick = 0;
+
+// 모드별 시뮬 환경 (트랙/장애물/경계) — 순수 데이터, 1회 구성
+const MODE_ENV = {};
+for (const m of ["a1", "a2", "a3", "racing", "hard", "serp", "c1", "c2", "c3", "d1", "retro1", "retro2", "test"]) {
+  MODE_ENV[m] = { world: SIM.WORLD_DIMS[m], track: TRACKS[m], obstacles: null, speedScale: 1, noBounds: false };
+}
+MODE_ENV.survival = { world: { w: MAP_SIZE, h: MAP_SIZE }, track: null, obstacles: null, speedScale: 1, noBounds: false };
+MODE_ENV.plaza = { world: SIM.WORLD_DIMS.plaza, track: null, obstacles: SIM.PLAZA_OBSTACLES, speedScale: 1, noBounds: false };
+MODE_ENV.boss = { world: SIM.WORLD_DIMS.boss, track: null, obstacles: SIM.BOSS_PILLARS, speedScale: 1, noBounds: false };
+MODE_ENV.sumo = { world: SIM.WORLD_DIMS.sumo, track: null, obstacles: null, speedScale: SIM.SUMO.speedScale, noBounds: true };
+function envForPlayer(p) {
+  if (p.mode === "pro") {
+    const room = p.roomId != null ? rooms.get(p.roomId) : null;
+    const track = room ? TRACKS.pro[room.trackIndex % TRACKS.pro.length] : TRACKS.pro[0];
+    return { world: SIM.WORLD_DIMS.pro, track, obstacles: null, speedScale: 1, noBounds: false };
+  }
+  return MODE_ENV[p.mode] || MODE_ENV.survival;
+}
+
+// v4 플레이어 초기화 (join 시). p.state 는 p.sim 을 가리켜 기존 판정 코드가 그대로 동작한다.
+function simInit(p) {
+  if (!p.sim) p.sim = SIM.makeCarState(0, 0, 0);
+  p.state = p.sim;
+  p.inputBuf = new Map();
+  p.lastConsumedTick = serverTick;
+  p.curButtons = 0; p.prevButtons = 0;
+  p.starve = 0; p.starved = false;
+  p.needKeyframe = true;
+  p.phase = 0;
+  p.hist = [];
+  p.sumoOutTicks = 0;
+  p.restartReadyTick = 0;
+  p.lapGate = { checkpoint: false, lastPhase: 0 };
+}
+
+// 스폰/배치 : 시뮬 순간이동 + 판정 상태 리셋 + 클라 통지(클라도 같은 좌표로 예측 리셋)
+function spawnSim(p, x, y, angle, invulnMs) {
+  if (!p.sim) simInit(p);
+  SIM.teleport(p.sim, x, y, angle);
+  p.state = p.sim;
+  p.prevHead = headOf(p.sim);
+  if (invulnMs) p.invulnUntil = Date.now() + invulnMs;
+  p.needKeyframe = true;
+  send(p, { type: "spawn", x, y, angle, tick: serverTick });
+}
+
+// --- MSG_INPUT 수신 ---------------------------------------------------------
+function handleInputFrame(p, buf) {
+  if (!p.inputBuf) return; // 미입장(시뮬 미생성) — 입장 후 입력만 유효
+  if (buf.length < 11 || buf.length > 128) return bumpViolation(p);
+  p.ackSnapTick = buf.readUInt32BE(1);
+  const count = buf.readUInt8(5);
+  if (count < 1 || count > 16 || buf.length < 6 + count * 5) return bumpViolation(p);
+  let o = 6;
+  for (let i = 0; i < count; i++) {
+    const tick = buf.readUInt32BE(o); o += 4;
+    const buttons = buf.readUInt8(o); o += 1;
+    // 수용 창 : (마지막 소화 틱, serverTick + MAX_LEAD]. 중복은 최초값 유지(사후 수정 불가).
+    if (tick <= (p.lastConsumedTick || 0) || tick > serverTick + MAX_LEAD_TICKS) continue;
+    if (!p.inputBuf.has(tick)) {
+      if (p.inputBuf.size >= INPUT_RING_MAX) return bumpViolation(p);
+      p.inputBuf.set(tick, buttons);
+      // 도착 위상 : 이 입력이 시뮬보다 몇 틱 여유/지각인지 → 클라 lead 적응 신호
+      p.phase = (serverTick + 1) - tick; // 음수 = 여유(정상), 양수 = 지각
+    }
+  }
+  // 입력 레이트리밋(지속) : 90개/초
+  const now = Date.now();
+  if (!p.inRate || now - p.inRate.t > 1000) p.inRate = { t: now, n: 0 };
+  p.inRate.n += count;
+  if (p.inRate.n > 90 * 2) bumpViolation(p);
+}
+function bumpViolation(p) {
+  p.violations = (p.violations || 0) + 1;
+  if (p.violations > 300) kickPlayer(p, "비정상 입력");
+}
+
+// 틱마다 이 플레이어의 입력을 하나 소화 (없으면 기아 상태머신)
+function consumeInput(p) {
+  const want = serverTick;
+  const b = p.inputBuf.get(want);
+  if (b !== undefined) {
+    p.inputBuf.delete(want);
+    p.lastConsumedTick = want;
+    p.prevButtons = p.curButtons;
+    p.curButtons = b;
+    p.starve = 0; p.starved = false;
+  } else {
+    p.starve++;
+    p.prevButtons = p.curButtons;
+    if (p.starve > STARVE_COAST_TICKS) p.curButtons = 0;      // 코스트(폭주 방지)
+    if (p.starve > STARVE_FREEZE_TICKS) p.starved = true;     // 프리즈 + 판정 제외
+  }
+  // 과거 틱 입력 청소 (지각 도착분)
+  if (p.inputBuf.size) for (const t of p.inputBuf.keys()) if (t < want) p.inputBuf.delete(t);
+  return p.curButtons;
+}
+
+// --- MSG_SNAP4 인코딩 -------------------------------------------------------
+//  그룹 본문 1회 인코딩 + 클라별 11B 헤더. 키프레임(2s/입장)엔 이름/색 포함.
+const FULL_MASK = 0x1ff;
+function entityBytes(e, keyframe) {
+  let n = 4 + 2 + 8 + 8 + 2 + 1 + 1 + 1 + 3 + 2; // id+mask+pos+vel/ev+angle+steer+buttons+state+timers+spin
+  if (keyframe) n += 3 + 1 + e.nameBuf.length;
+  return n;
+}
+function encodeGroupBody(entries, keyframe) {
+  let size = 2;
+  for (const e of entries) size += entityBytes(e, keyframe);
+  const buf = Buffer.allocUnsafe(size);
+  let o = 0;
+  buf.writeUInt16BE(entries.length, o); o += 2;
+  for (const e of entries) {
+    const s = e.s;
+    buf.writeUInt32BE(e.id >>> 0, o); o += 4;
+    buf.writeUInt16BE(FULL_MASK, o); o += 2;
+    buf.writeInt32BE(Math.round(s.x * 4), o); o += 4;
+    buf.writeInt32BE(Math.round(s.y * 4), o); o += 4;
+    buf.writeInt16BE(clampI16(Math.round(s.vx * 8)), o); o += 2;
+    buf.writeInt16BE(clampI16(Math.round(s.vy * 8)), o); o += 2;
+    buf.writeInt16BE(clampI16(Math.round(s.evx * 8)), o); o += 2;
+    buf.writeInt16BE(clampI16(Math.round(s.evy * 8)), o); o += 2;
+    buf.writeInt16BE(Math.round(normAngle(s.angle) * A2I), o); o += 2;
+    buf.writeInt8(Math.round(SIM.clamp(s.steerInput, -1, 1) * 127), o); o += 1;
+    buf.writeUInt8(e.buttons & 255, o); o += 1;
+    buf.writeUInt8(e.stateByte & 255, o); o += 1;
+    buf.writeUInt8(Math.min(255, e.invulnTicks | 0), o); o += 1;
+    buf.writeUInt8(Math.min(255, Math.max(0, (s.lockUntilTick - serverTick) | 0)), o); o += 1;
+    buf.writeUInt8(Math.min(255, Math.max(0, (s.stunUntilTick - serverTick) | 0)), o); o += 1;
+    buf.writeInt16BE(clampI16(Math.round(s.spinV * 8)), o); o += 2;
+    if (keyframe) {
+      const [r, g, b] = hexToRgb(e.color);
+      buf.writeUInt8(r, o); buf.writeUInt8(g, o + 1); buf.writeUInt8(b, o + 2); o += 3;
+      buf.writeUInt8(e.nameBuf.length, o); o += 1;
+      e.nameBuf.copy(buf, o); o += e.nameBuf.length;
+    }
+  }
+  return buf;
+}
+function sendSnap(p, body, keyframe) {
+  const ws = p.ws;
+  if (ws.readyState !== ws.OPEN) return;
+  if (ws.bufferedAmount > BACKPRESSURE_KILL) { kickPlayer(p, "네트워크 정체"); return; }
+  if (ws.bufferedAmount > BACKPRESSURE_SKIP) { p.needKeyframe = true; return; } // 정체 중 스킵 → 해소 후 키프레임
+  const head = Buffer.allocUnsafe(11);
+  head.writeUInt8(MSG_SNAP4, 0);
+  head.writeUInt32BE(serverTick >>> 0, 1);
+  head.writeUInt32BE((p.lastConsumedTick || 0) >>> 0, 5);
+  head.writeInt8(Math.max(-128, Math.min(127, p.phase | 0)), 9);
+  head.writeUInt8(keyframe ? 1 : 0, 10);
+  ws.send(Buffer.concat([head, body]));
+}
+
+/* --- 통합 60Hz 틱 루프 ------------------------------------------------------
+ *  입력 소화 → 그룹 시뮬 → 규칙 판정(킬/펀치/링아웃/랩) → 스냅샷.
+ *  hrtime 기반 드리프트 보정, 캐치업 상한 6틱(스톨 → 히치 선언 + 키프레임). */
+const TICK_NS = BigInt(Math.round(1e9 / SIM.TICK_RATE));
+let tickBase = process.hrtime.bigint();
+let tickCount = 0n;
+
+function doTick() {
+  serverTick++;
+  const now = Date.now();
+
+  // 1) 그룹 구성 (기존 브로드캐스트와 동일한 가시성 규칙)
+  const groups = new Map(); // key -> { list: [{id,p}], env }
+  for (const [id, p] of players) {
+    if (!p.active || !p.sim || !p.state) continue;
+    if (p.mode === "boss" && p.bossSpec) continue;
+    const key = p.mode === "pro" ? (p.roomId != null ? "room:" + p.roomId : "pro:none") : "mode:" + p.mode;
+    let g = groups.get(key);
+    if (!g) { g = { list: [], env: null }; groups.set(key, g); }
+    g.list.push({ id, p });
+  }
+
+  // 2) 입력 소화 + 시뮬
+  for (const [key, g] of groups) {
+    const entries = [];
+    for (const { id, p } of g.list) {
+      const buttons = consumeInput(p);
+      // R : 타임어택/테스트 출발선 복귀 (엣지 + 쿨다운) — 클라도 같은 예측을 한다
+      if ((buttons & SIM.BTN.RESTART) && !(p.prevButtons & SIM.BTN.RESTART)
+          && serverTick >= (p.restartReadyTick || 0) && MODE_ENV[p.mode] && MODE_ENV[p.mode].track) {
+        const st = SIM.placeBehindStart(MODE_ENV[p.mode].track);
+        SIM.teleport(p.sim, st.x, st.y, st.angle);
+        p.restartReadyTick = serverTick + RESTART_CD_TICKS;
+        p.needKeyframe = true;
+      }
+      const env = envForPlayer(p);
+      const freeze =
+        p.starved
+        || (p.mode === "pro" && (() => {
+              const r = p.roomId != null ? rooms.get(p.roomId) : null;
+              if (!r) return true;
+              if (r.state === "racing") return false;
+              // 카운트다운 : 계획된 시작 틱부터 해제 — 클라 raceFrozen() 과 같은 시계
+              return !(r.state === "countdown" && r.startTick && serverTick >= r.startTick);
+            })())
+        || (p.mode === "boss" && (p.bossDeadUntil > now || p.bossSpec));
+      entries.push({
+        id, s: p.sim, buttons: freeze ? 0 : buttons,
+        env: { tick: serverTick, world: env.world, track: env.track, obstacles: env.obstacles, speedScale: env.speedScale, noBounds: env.noBounds, freeze },
+      });
+    }
+    if (!entries.length) continue;
+    const groupEnv = entries[0].env;
+    SIM.stepGroup(entries, groupEnv, { collide: false }); // 차대차 충돌은 3단계에서 활성화
+    g.entries = entries;
+  }
+
+  // 3) 규칙 판정
+  for (const [, g] of groups) {
+    for (const { id, p } of g.list) {
+      // 위치 히스토리 (랙 보상 되감기)
+      if (!p.hist) p.hist = [];
+      p.hist.push({ t: now, x: p.sim.x, y: p.sim.y, angle: p.sim.angle });
+      while (p.hist.length > 2 && p.hist[0].t < now - 400) p.hist.shift();
+
+      // 스모 링아웃 : 서버 판정 (클라 자가신고 sumoDead 폐지)
+      if (p.mode === "sumo" && !p.starved) {
+        const d = Math.hypot(p.sim.x - SUMO_CX, p.sim.y - SUMO_CY);
+        if (d > SUMO_RING_R && now >= (p.invulnUntil || 0)) {
+          p.sumoOutTicks = (p.sumoOutTicks || 0) + 1;
+          if (p.sumoOutTicks >= SIM.SUMO.outTicks) {
+            p.sumoOutTicks = 0;
+            broadcastMode("sumo", { type: "killed", victimId: id, killerId: 0, x: p.sim.x, y: p.sim.y });
+            const spawn = pickSumoSpawn(id);
+            spawnSim(p, spawn.x, spawn.y, spawn.angle, INVULN_MS);
+            p.graceUntil = now + GRACE_MS;
+            p.punchStart = 0; p.punchHit = false;
+          }
+        } else p.sumoOutTicks = 0;
+      }
+
+      // 프로 레이싱 랩 게이트 (서버 시뮬 진행도 기반)
+      if (p.mode === "pro" && p.roomId != null) {
+        const room = rooms.get(p.roomId);
+        if (room && room.state === "racing" && !p.finished) {
+          const ph = p.sim.lastPhase01 || 0;
+          if (SIM.lapGate(p.lapGate, ph) && (now - (p.lastLapT || 0)) >= MIN_LAP_MS) {
+            p.lap += 1; p.lastLapT = now;
+            if (p.lap >= room.laps) {
+              p.finished = true; p.finishTime = now;
+              const cand = now + END_TIMER_MS;
+              room.raceEndAt = room.raceEndAt > 0 ? Math.min(room.raceEndAt, cand) : cand;
+              broadcastRoom(p.roomId);
+            }
+          }
+          p.prog = Math.max(p.lap, Math.min(p.lap + 1, p.lap + ph));
+          p.lapMs = now - room.raceStartAt;
+        }
+      }
+    }
+  }
+  runCollisions();  // 서바이벌 헤드킬 (시뮬 상태 기반)
+  sumoTick();       // 스모 펀치 히트 (시뮬 상태 기반)
+
+  // 4) 스냅샷 전송 — 그룹 본문 1회 인코딩 + 클라별 헤더
+  const keyAll = serverTick % KEYFRAME_TICKS === 0;
+  for (const [key, g] of groups) {
+    const list = g.list;
+    // 엔트리 메타 (state byte / 이름 / 색)
+    const encEntries = [];
+    // 보스 엔티티 (id 0, ballistic 외삽)
+    if (key === "mode:boss" && bossWorld.boss && bossWorld.state !== "idle") {
+      const b = bossWorld.boss;
+      encEntries.push({
+        id: BOSS_ID, s: {
+          x: b.x, y: b.y, vx: b.vx || 0, vy: b.vy || 0, evx: 0, evy: 0,
+          angle: b.angle, steerInput: 0, spinV: 0, lockUntilTick: 0, stunUntilTick: 0,
+        },
+        buttons: 0, stateByte: 1 << 5, invulnTicks: 0,
+        color: "#101010", nameBuf: Buffer.alloc(0),
+      });
+    }
+    let needKey = keyAll;
+    for (const { id, p } of g.list) if (p.needKeyframe) needKey = true;
+    for (const { id, p } of g.list) {
+      const room = p.mode === "pro" && p.roomId != null ? rooms.get(p.roomId) : null;
+      const anon = room && rankAnon(room);
+      const invulnMs = Math.max(0, (p.invulnUntil || 0) - now);
+      const extrap = p.starved ? 2 : 0; // 기아 프리즈 = static
+      encEntries.push({
+        id, s: p.sim, buttons: p.curButtons || 0,
+        stateByte: (p.sim.drifting ? 1 : 0)
+          | (invulnMs > 0 ? 2 : 0)
+          | (!anon && p.isAdmin ? 4 : 0)
+          | (p.starved ? 8 : 0)
+          | ((p.sim.contactTick === serverTick ? 1 : 0) << 4)
+          | (extrap << 5)
+          | (serverTick < p.sim.lockUntilTick ? 128 : 0),
+        invulnTicks: Math.ceil(invulnMs / SIM.TICK_MS),
+        color: anon ? RANK_ANON_COLOR : p.color,
+        nameBuf: Buffer.from(anon ? "???" : (p.name || ""), "utf8").subarray(0, 60),
+      });
+    }
+    const body = encodeGroupBody(encEntries, needKey);
+    for (const { p } of g.list) {
+      sendSnap(p, body, needKey);
+      if (needKey) p.needKeyframe = false;
+    }
+    g.body = body; g.bodyKey = needKey;
+  }
+  // 보스 관전자 : 그룹 명단엔 없지만 보스 모드 스냅샷은 받아야 화면이 산다
+  const bossG = groups.get("mode:boss");
+  if (bossG && bossG.body) {
+    for (const [, p] of players) {
+      if (p.active && p.mode === "boss" && p.bossSpec) sendSnap(p, bossG.body, bossG.bodyKey);
+    }
+  }
+}
+
+function simLoop() {
+  const nowNs = process.hrtime.bigint();
+  let due = Number((nowNs - tickBase) / TICK_NS - tickCount);
+  if (due > 6) { // 이벤트루프 스톨 → 히치 : 밀린 틱을 버리고 시간 재정렬 + 전원 키프레임
+    tickBase = nowNs - (tickCount + 1n) * TICK_NS;
+    due = 1;
+    for (const [, p] of players) if (p.active) p.needKeyframe = true;
+  }
+  for (let i = 0; i < due; i++) { tickCount++; doTick(); }
+  const nextNs = tickBase + (tickCount + 1n) * TICK_NS;
+  const delayMs = Number(nextNs - process.hrtime.bigint()) / 1e6;
+  setTimeout(simLoop, Math.max(0, delayMs));
+}
+
 // --- WebSocket 서버 ---------------------------------------------------------
 const wss = new WebSocketServer({ server });
 
@@ -635,7 +980,7 @@ wss.on("connection", (ws) => {
   ws.on("pong", () => { ws.isAlive = true; });
 
   // 접속한 클라이언트에게 자신의 id + 최근 채팅을 알려준다
-  ws.send(JSON.stringify({ type: "welcome", id }));
+  ws.send(JSON.stringify({ type: "welcome", id, v: 4, tick: serverTick }));
   if (chatHistory.length) ws.send(JSON.stringify({ type: "chatHistory", messages: chatHistory }));
   console.log(`[+] player ${id} connected (total ${players.size})`);
 
@@ -645,7 +990,12 @@ wss.on("connection", (ws) => {
     if (isBinary) {
       try {
         const pb = players.get(id);
-        if (pb && raw.length >= 15 && raw[0] === MSG_STATE) applyState(pb, decodeState(raw));
+        if (!pb) return;
+        if (raw.length >= 6 && raw[0] === MSG_INPUT) handleInputFrame(pb, raw);
+        else if (raw.length >= 15 && raw[0] === MSG_STATE) {
+          // 구(v2/v3) 클라이언트 : 위치 스트리밍은 폐지됐다 → 새 클라로 새로고침 유도
+          if (!pb.updateKicked) { pb.updateKicked = true; kickPlayer(pb, "update"); }
+        }
       } catch (e) { /* 손상/버전 불일치 패킷 폐기 */ }
       return;
     }
@@ -655,7 +1005,23 @@ wss.on("connection", (ws) => {
     const p = players.get(id);
     if (!p) return;
 
-    if (msg.type === "signup") {
+    if (msg.type === "hello") {
+      // v4 핸드셰이크. 구버전은 kicked{update} 로 처리되므로 여기선 버전만 기록.
+      p.protoV = Number(msg.v) || 4;
+      return;
+
+    } else if (msg.type === "ping") {
+      // 시계 동기 : 즉시 에코 (c = 클라 송신 시각)
+      send(p, { type: "pong", c: msg.c, tick: serverTick });
+      return;
+
+    } else if (msg.type === "setColor") {
+      // v4 : 차 색은 입력 패킷에 실리지 않는다 → 명시 메시지로 변경(검증 포함)
+      const ok = sanitizeColor(p, msg.color);
+      if (ok) { p.color = ok; p.needKeyframe = true; }
+      return;
+
+    } else if (msg.type === "signup") {
       const idv = (msg.id || "").trim();
       if (!/^[A-Za-z0-9_]{3,20}$/.test(idv)) { send(p, { type: "authError", reason: "아이디는 영문/숫자 3~20자여야 합니다." }); return; }
       if (users[idv]) { send(p, { type: "authError", reason: "이미 존재하는 아이디입니다." }); return; }
@@ -761,6 +1127,7 @@ wss.on("connection", (ws) => {
       if (mode === "pro") {
         // 프로 진입 = 방 목록 화면(브라우저). 방은 따로 만들거나 골라 들어간다.
         p.mode = "pro"; p.active = true; p.roomId = null;
+        simInit(p);
         resetMotion(p);
         send(p, { type: "roomList", rooms: roomSummaries() });
         console.log(`[>] player ${id} entered pro lobby browser`);
@@ -772,6 +1139,7 @@ wss.on("connection", (ws) => {
       p.taModeSince = Date.now(); // 타임어택 기록 하한 검증 기준(모드 입장 시각)
       if (mode === "boss") {
         // 보스전 : 라운드 진행 중이면 관전 대기(다음 라운드 자동 합류), 아니면 즉시 참가
+        simInit(p);
         p.bossSpec = bossWorld.state === "running";
         p.bossLives = BOSS_LIVES; p.bossDeadUntil = 0; p.bossSurviveMs = 0;
         if (p.bossSpec) { p.state = null; }
@@ -780,30 +1148,29 @@ wss.on("connection", (ws) => {
         console.log(`[>] player ${id} joined boss as "${p.name}"${p.bossSpec ? " (spectate)" : ""}`);
         return;
       }
+      simInit(p); // v4 : 서버 권위 시뮬 상태 생성 (p.state 는 p.sim 별칭)
       if (mode === "survival") {
         const spawn = pickSpawn(id);
-        p.state = { x: spawn.x, y: spawn.y, angle: spawn.angle, drifting: false, teleport: true }; p.sg = null;
-        p.prevHead = headOf(p.state);
-        p.invulnUntil = Date.now() + INVULN_MS;
+        spawnSim(p, spawn.x, spawn.y, spawn.angle, INVULN_MS);
         p.graceUntil = Date.now() + GRACE_MS;
-        send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
       } else if (mode === "plaza") {
-        // 광장 : 자유 주행(승패·기록·판정 없음). 스폰만 배치하고 나머지는 서바이벌과 동일한 자유 월드.
+        // 광장 : 자유 주행(승패·기록·판정 없음). 스폰만 배치.
         const spawn = pickPlazaSpawn(id);
-        p.state = { x: spawn.x, y: spawn.y, angle: spawn.angle, drifting: false, teleport: true }; p.sg = null;
-        p.prevHead = headOf(p.state);
+        spawnSim(p, spawn.x, spawn.y, spawn.angle, 0);
         p.invulnUntil = 0; p.graceUntil = Date.now() + GRACE_MS;
-        send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
       } else if (mode === "sumo") {
-        // 스모 : 원형 링 위 스폰. 넉백은 서버 권위, 링 밖 죽음/부활은 클라 판정 후 sumoDead 로 요청.
+        // 스모 : 원형 링 위 스폰. 넉백/링아웃 전부 서버 권위.
         const spawn = pickSumoSpawn(id);
-        p.state = { x: spawn.x, y: spawn.y, angle: spawn.angle, drifting: false, teleport: true }; p.sg = null;
-        p.prevHead = headOf(p.state);
-        p.invulnUntil = Date.now() + INVULN_MS; p.graceUntil = Date.now() + GRACE_MS;
+        spawnSim(p, spawn.x, spawn.y, spawn.angle, INVULN_MS);
+        p.graceUntil = Date.now() + GRACE_MS;
         p.punchCd = 0; p.punchStart = 0; p.punchHit = false;
-        send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
-      } else { // racing/hard : 고정 맵. 타임어택 모드는 각자 TOP10 기록도 전송
-        p.state = null; p.invulnUntil = 0; p.graceUntil = 0;
+      } else { // 타임어택/테스트 : 서버도 출발선 뒤 배치를 안다 (클라는 같은 좌표를 예측)
+        const env = MODE_ENV[mode];
+        if (env && env.track) {
+          const st = SIM.placeBehindStart(env.track);
+          spawnSim(p, st.x, st.y, st.angle, 0);
+        }
+        p.invulnUntil = 0; p.graceUntil = 0;
         const field = RECORD_FIELD[mode];
         if (field) send(p, { type: "topRecords", records: topRecordsList(field) });
       }
@@ -950,17 +1317,7 @@ wss.on("connection", (ws) => {
       broadcastMode("sumo", { type: "sumoPunch", id, at: now });
 
     } else if (msg.type === "sumoDead") {
-      // 스모 : 클라가 링 밖 1초 카운트다운 후 자멸 요청 → 폭발 통지 + 링 위 부활
-      if (p.mode !== "sumo" || !p.active) return;
-      const dx = p.state ? p.state.x : SUMO_CX, dy = p.state ? p.state.y : SUMO_CY;
-      broadcastMode("sumo", { type: "killed", victimId: id, killerId: 0, x: dx, y: dy });
-      const spawn = pickSumoSpawn(id);
-      p.state = { x: spawn.x, y: spawn.y, angle: spawn.angle, drifting: false, teleport: true }; p.sg = null;
-      p.prevHead = headOf(p.state);
-      const rt = Date.now();
-      p.invulnUntil = rt + INVULN_MS; p.graceUntil = rt + GRACE_MS;
-      p.punchStart = 0; p.punchHit = false;
-      send(p, { type: "spawn", x: spawn.x, y: spawn.y, angle: spawn.angle });
+      // v4 : 링아웃은 서버가 판정한다(doTick) — 구클라 자가신고는 무시.
 
     } else if (msg.type === "friendsInfo") {
       // 친구 패널 데이터 요청
@@ -1344,6 +1701,9 @@ function broadcastRoom(roomId) {
     canReady: roomMembers(roomId).length >= 2, // 최소 2명부터 준비/시작 가능
     countdownMs: room.state === "countdown" ? Math.max(0, room.countdownAt - now) : 0,
     endMs: (room.state === "racing" && room.raceEndAt > 0) ? Math.max(0, room.raceEndAt - now) : 0,
+    // v4 : 틱 기준 시각 — 클라 카운트다운 신호등/입력 해제가 서버 시뮬과 같은 시계를 공유
+    tick: serverTick,
+    startTick: room.startTick || 0,
     players: rankAnon(room) // 랭크전 시작 전 : 이름/색/관리자 가림 (닷지 방지)
       ? rankedRoom(roomId).map((e) => ({ ...e, name: "???", color: RANK_ANON_COLOR, admin: false }))
       : rankedRoom(roomId),
@@ -1411,6 +1771,14 @@ function maybeStartCountdown(roomId) {
     if (m.length < RANK_MIN) return;           // 3명 모이면 자동 시작 (준비 없음)
     room.state = "countdown";
     room.countdownAt = Date.now() + RANK_COUNTDOWN_MS;
+    room.startTick = serverTick + Math.round(RANK_COUNTDOWN_MS / SIM.TICK_MS); // v4 : 입력 해제 계획 틱
+  { // v4 : 랭크전도 카운트다운 진입 시 그리드 배치
+    const track = TRACKS.pro[room.trackIndex % TRACKS.pro.length];
+    for (const { p } of roomMembers(room.id)) {
+      const g = SIM.proGridPosition(track, p.slot || 0);
+      spawnSim(p, g.x, g.y, g.angle, 0);
+    }
+  }
     room.raceEndAt = 0;
     for (const e of m) e.p.sg = null; // 카운트다운 → 클라 그리드 배치(순간이동) 허용
     broadcastRoom(roomId);
@@ -1419,6 +1787,14 @@ function maybeStartCountdown(roomId) {
   if (m.length < 2 || !m.every((e) => e.p.ready)) return; // 최소 2명 + 전원 준비
   room.state = "countdown";
   room.countdownAt = Date.now() + COUNTDOWN_MS;
+  room.startTick = serverTick + Math.round(COUNTDOWN_MS / SIM.TICK_MS); // v4 : 입력 해제 계획 틱
+  { // v4 : 카운트다운 동안 그리드 정지 대기 — 서버가 즉시 배치
+    const track = TRACKS.pro[room.trackIndex % TRACKS.pro.length];
+    for (const { p } of roomMembers(room.id)) {
+      const g = SIM.proGridPosition(track, p.slot || 0);
+      spawnSim(p, g.x, g.y, g.angle, 0);
+    }
+  }
   room.raceEndAt = 0;
   for (const e of m) e.p.sg = null; // 카운트다운 → 클라 그리드 배치(순간이동) 허용
   broadcastRoom(roomId);
@@ -1448,7 +1824,7 @@ function endRoomRace(roomId) {
   }
   // 방을 처음 대기실 상태로 되돌린다 → 같은 설정으로 다시 준비하거나 나갈 수 있다
   room.state = "lobby";
-  room.countdownAt = 0; room.raceEndAt = 0; room.raceStartAt = 0;
+  room.countdownAt = 0; room.raceEndAt = 0; room.raceStartAt = 0; room.startTick = 0;
   broadcastRoom(roomId);
   broadcastRoomList();
 }
@@ -2097,14 +2473,20 @@ function proTick() {
     if (room.state === "countdown") {
       if (now >= room.countdownAt) {
         room.state = "racing"; room.raceStartAt = now;
+        if (!room.startTick) room.startTick = serverTick; // 계획 틱 유지 (카운트다운서 설정)
         room.raceEndAt = room.timeLimitMs > 0 ? now + room.timeLimitMs : 0;
-        for (const e of roomMembers(rid)) e.p.sg = null; // 시작 순간 그리드 재배치(로비 대기자 합류 포함) 허용
         if (room.type === "rank") { // 시작 멤버/인원 확정 → 점수 배분 기준 (중도 탈주해도 패배 반영)
           const m = roomMembers(rid);
           room.startN = m.length;
           room.starters = m.filter((e) => e.p.account).map((e) => ({ uid: e.p.account.userId, id: e.id }));
         }
-        for (const { p } of roomMembers(rid)) { p.lap = 0; p.lapMs = 0; p.prog = 0; p.finished = false; p.finishTime = 0; resetMotion(p); }
+        const track = TRACKS.pro[room.trackIndex % TRACKS.pro.length];
+        for (const { p } of roomMembers(rid)) {
+          p.lap = 0; p.lapMs = 0; p.prog = 0; p.finished = false; p.finishTime = 0; resetMotion(p);
+          p.lapGate = { checkpoint: false, lastPhase: 0 };
+          const g = SIM.proGridPosition(track, p.slot || 0); // v4 : 서버가 그리드 배치
+          spawnSim(p, g.x, g.y, g.angle, 0);
+        }
         broadcastRoomList();
       }
       broadcastRoom(rid);
@@ -2151,7 +2533,9 @@ function histAt(p, t) {
   }
   return p.state;
 }
-const rewindOf = (p) => Math.min(p.viewDelay || 70, REWIND_CAP_MS);
+// v4 : 상대는 공격자 화면에서 "현재 틱 근처"로 전방시뮬돼 보인다 → 되감기는
+//  잔여 표시 지연(REMOTE_BACKOFF 1틱 + 스무딩)만 보상하면 된다. 자가신고 폐지.
+const rewindOf = () => Math.min(35, REWIND_CAP_MS);
 
 // 충돌 판정 1틱 (서바이벌 모드만)
 function runCollisions() {
@@ -2194,23 +2578,9 @@ function runCollisions() {
   }
 }
 
-setInterval(runCollisions, 1000 / COLLISION_HZ);
+// (v4) runCollisions 는 통합 틱(doTick)에서 호출된다.
 
-// 서버 권위 차량 충돌(밀치기) 틱 : 같은 방(프로)/같은 모드에서 충돌 대상 차들을 모아 판정.
-setInterval(() => {
-  if (!COLLISION_ENABLED) return; // 물리 충돌 임시 OFF
-  const now = Date.now();
-  const groups = new Map(); // 그룹키 -> [{id,p}]
-  for (const [id, p] of players) {
-    if (!p.active || !p.state || !p.collide) continue;
-    const key = p.mode === "pro" ? (p.roomId != null ? "room:" + p.roomId : null) : "mode:" + p.mode;
-    if (!key) continue;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push({ id, p });
-  }
-  for (const [, list] of groups) if (list.length >= 2) resolveCarCollisions(list, now);
-  for (const [k, t] of bumpCooldowns) if (now > t) bumpCooldowns.delete(k); // 만료 쿨다운 정리
-}, 1000 / COLLISION_HZ);
+// (v4) 차대차 충돌은 shared.js 시뮬(3단계 활성화)이 담당 — 구 bump 인터벌 삭제.
 
 /* =============================================================================
  *  보스전 — 서버 권위 AI 몬스터 트럭
@@ -2313,11 +2683,8 @@ function bossSpawnPos() {
 
 function bossRespawnPlayer(id, p, invulnMs) {
   const s = bossSpawnPos();
-  p.state = { x: s.x, y: s.y, angle: s.angle, drifting: false, teleport: true, vx: 0, vy: 0 };
-  p.sg = null; // 서버 주도 스폰 → 이동 예산 기준점 재설정
-  p.invulnUntil = Date.now() + invulnMs;
+  spawnSim(p, s.x, s.y, s.angle, invulnMs);
   p.graceUntil = Date.now() + GRACE_MS;
-  send(p, { type: "spawn", x: s.x, y: s.y, angle: s.angle });
 }
 
 function startBossCountdown(now) {
@@ -2539,6 +2906,10 @@ function bossDoSlam(b, now) {
     const d = Math.hypot(dx, dy);
     if (d <= SLAM_RADIUS) {
       const ux = d > 0.001 ? dx / d : 1, uy = d > 0.001 ? dy / d : 0;
+      if (p.sim) { // v4 : 서버 권위 시뮬에 동일 적용 (클라는 수신 즉시 예측 적용 → 수렴)
+        p.sim.evx += ux * SLAM_KNOCK; p.sim.evy += uy * SLAM_KNOCK;
+        p.sim.stunUntilTick = serverTick + Math.round(SLAM_STUN / SIM.TICK_MS);
+      }
       send(p, { type: "bossStun", kx: ux * SLAM_KNOCK, ky: uy * SLAM_KNOCK, ms: SLAM_STUN });
     }
   }
@@ -2701,76 +3072,7 @@ function bossTick() {
 setInterval(bossTick, 1000 / 60); // 60Hz — 플레이어 송신율과 동일한 샘플 밀도 (부드러운 보간)
 setInterval(syncAllBoss, 200); // 5Hz 상태 동기 (타이머/인원 갱신)
 
-// --- 브로드캐스트 루프 ------------------------------------------------------
-//  모드별로 활성 플레이어들의 최신 상태를 모아 30Hz 로 전송한다.
-//  (서바이벌/레이싱 플레이어는 서로 보이지 않도록 분리)
-setInterval(() => {
-  const now = Date.now();
-  const byMode = { survival: [], a1: [], a2: [], a3: [], racing: [], hard: [], serp: [], c1: [], c2: [], c3: [], d1: [], retro1: [], retro2: [], test: [], boss: [], plaza: [], sumo: [] };
-  const byRoom = new Map(); // roomId -> entries (프로는 같은 방끼리만 본다)
-
-  // 보스 엔티티 : 특수 id 0 엔트리 — 클라 보간 파이프라인을 그대로 탄다
-  if (bossWorld.boss && bossWorld.state !== "idle") {
-    const b = bossWorld.boss;
-    byMode.boss.push({
-      id: BOSS_ID, name: "", x: b.x, y: b.y, angle: b.angle,
-      vx: Math.round(b.vx || 0), vy: Math.round(b.vy || 0),
-      drifting: false, teleport: !!b.teleport, invuln: false, admin: false,
-      color: "#101010", stateAt: b.stateAt || now, // 틱 샘플 시각 → v3 age 로 전달 (중복 샘플 dedup)
-    });
-    b.teleport = false;
-  }
-
-  for (const [id, p] of players) {
-    if (!p.active || !p.state) continue;
-    if (p.mode === "boss" && p.bossSpec) continue; // 관전자는 중계 제외
-    const entry = {
-      id, name: p.name,
-      x: p.state.x, y: p.state.y, angle: p.state.angle,
-      vx: Math.round(p.state.vx || 0), vy: Math.round(p.state.vy || 0), // 데드레커닝용 속도
-      drifting: p.state.drifting,
-      teleport: !!p.state.teleport,
-      invuln: now < (p.invulnUntil || 0),
-      admin: !!p.isAdmin, // 관리자 금색 차 표시용
-      color: p.color,     // 커스텀 차 색 (미설정 시 undefined → 클라가 id 색 폴백)
-      stateAt: p.stateAt || now, // 이 state 의 진짜 샘플 시각 → v3 age
-    };
-    if (p.mode === "pro") {
-      if (p.roomId != null) {
-        const room = rooms.get(p.roomId);
-        if (room && rankAnon(room)) { // 랭크전 시작 전 : 이름표/차 색/금색 관리자 가림
-          entry.name = "???"; entry.color = RANK_ANON_COLOR; entry.admin = false;
-        }
-        if (!byRoom.has(p.roomId)) byRoom.set(p.roomId, []);
-        byRoom.get(p.roomId).push(entry);
-      }
-    } else {
-      byMode[p.mode].push(entry);
-    }
-  }
-
-  // 그룹당 버전별 1회만 인코딩해 재사용 (수신자마다 재인코딩하던 O(수신자×그룹) 제거)
-  const encCache = new Map(); // arr -> {v3?:Buffer, v2?:Buffer}
-  const encFor = (arr, v3) => {
-    let c = encCache.get(arr);
-    if (!c) { c = {}; encCache.set(arr, c); }
-    const k = v3 ? "v3" : "v2";
-    if (!c[k]) c[k] = encodeSnapshot(now, arr, v3);
-    return c[k];
-  };
-  const EMPTY = [];
-  for (const [, p] of players) {
-    if (!p.active) continue;
-    let arr;
-    if (p.mode === "pro") arr = (p.roomId != null) ? (byRoom.get(p.roomId) || EMPTY) : EMPTY;
-    else arr = byMode[p.mode];
-    sendBin(p, encFor(arr, (p.protoV || 2) === 3)); // 구클라(v2)에도 기존 포맷 병행 → 전환기 혼재 안전
-  }
-
-  for (const [, p] of players) {
-    if (p.state) p.state.teleport = false;
-  }
-}, 1000 / TICK_RATE);
+// (v4) 구 브로드캐스트 루프 삭제 — 통합 60Hz 틱(doTick)의 MSG_SNAP4 가 대체한다.
 
 // 스모 주먹 히트 판정 (서버 권위 넉백) : 활성 주먹의 글러브 위치를 매 틱 계산해
 //  다른 스모 차와 겹치면 상대에게 sumoKnock(임펄스)을 보낸다. 주먹당 1회만 명중.
@@ -2790,14 +3092,24 @@ function sumoTick() {
       if (d < PUNCH_HIT_R + CAR_LEN / 2) {
         let ux = o.p.state.x - p.state.x, uy = o.p.state.y - p.state.y;
         const n = Math.hypot(ux, uy) || 1; ux /= n; uy /= n; // 주먹 주인 → 상대 방향으로 날림
-        send(o.p, { type: "sumoKnock", vx: Math.round(ux * PUNCH_KNOCK), vy: Math.round(uy * PUNCH_KNOCK) });
+        const kvx = Math.round(ux * PUNCH_KNOCK), kvy = Math.round(uy * PUNCH_KNOCK);
+        const spinV = (Math.random() < 0.5 ? -1 : 1) * (5 + Math.random() * 4); // 서버가 난수 결정(결정론)
+        // 서버 시뮬 권위 적용 : ev 채널 + 주행속도 제거 + 입력락
+        const vs = o.p.sim;
+        if (vs) {
+          vs.evx += kvx; vs.evy += kvy;
+          vs.vx = 0; vs.vy = 0; vs.lf = 0; vs.ll = 0;
+          vs.spinV = spinV;
+          vs.lockUntilTick = serverTick + SIM.SUMO.lockTicks;
+        }
+        send(o.p, { type: "sumoKnock", vx: kvx, vy: kvy, spinV, tick: serverTick });
         p.punchHit = true;
         break;
       }
     }
   }
 }
-setInterval(sumoTick, 1000 / 60);
+// (v4) sumoTick 은 통합 틱(doTick)에서 호출된다.
 
 // 접속 중인 로그인 유저의 평생 접속 시간을 주기적으로 누적 저장(1분마다).
 //  (연결이 오래 유지돼도 중간중간 반영되도록 — 크래시/강제종료 대비)
@@ -2817,4 +3129,6 @@ hydrateUsers().then(() => {
   server.listen(PORT, () => {
     console.log(`Car game server running at http://localhost:${PORT} (storage: ${useRedis ? "Upstash Redis" : "files"})`);
   });
+  tickBase = process.hrtime.bigint(); // v4 통합 60Hz 시뮬 루프 시작
+  simLoop();
 });

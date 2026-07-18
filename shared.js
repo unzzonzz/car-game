@@ -741,7 +741,7 @@ function stepGroup(entries, env, opts) {
   const dtScale = 1 / substeps;
 
   for (let step = 0; step < substeps; step++) {
-    for (const e of entries) stepCar(e.s, e.buttons, env, dtScale, events);
+    for (const e of entries) stepCar(e.s, e.buttons, e.env || env, dtScale, events);
     if (collide) {
       for (let i = 0; i < entries.length; i++) {
         for (let j = i + 1; j < entries.length; j++) {
