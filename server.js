@@ -409,22 +409,33 @@ const MIME = {
   ".json": "application/json",
 };
 
-// game.js 는 IIFE 로 감싸 서빙 : 게임 변수(CAR/net 등)가 콘솔 전역에서 아예 안 보이게 한다.
-//  → "콘솔에 한 줄 쳐서" 하는 핵을 차단. (억지책 — 본 방어는 서버 권위 검증/제재)
-//  `node server.js --dev-raw` 로 켜면 원본 그대로 서빙 (로컬 콘솔 디버깅용).
-//  캐시는 mtime 기준 무효화 — 재시작 없이 game.js 만 교체하는 배포에도 안전.
+// game.js 는 shared.js(시뮬 코어)와 "한 번들"로 서빙한다 (v4 넷코드 — NETCODE.md §5).
+//  - 프로덕션 : 한 IIFE 로 감싸 게임 변수(SIM/CAR/net 등)가 콘솔 전역에 안 보이게 한다.
+//  - `node server.js --dev-raw` : 래핑 없이 두 파일을 그대로 이어붙임 (콘솔 디버깅용).
+//  캐시는 두 파일 mtime 기준 무효화 — 재시작 없이 js 만 교체하는 배포에도 안전.
 const DEV_RAW_JS = process.argv.includes("--dev-raw");
 const GAME_JS_PATH = path.join(__dirname, "game.js");
-let gameJsCache = null; // { mtimeMs, buf }
+const SHARED_JS_PATH = path.join(__dirname, "shared.js");
+let gameJsCache = null; // { key, buf }
 function wrappedGameJs(cb) {
   fs.stat(GAME_JS_PATH, (err, st) => {
     if (err) return cb(err);
-    if (gameJsCache && gameJsCache.mtimeMs === st.mtimeMs) return cb(null, gameJsCache.buf);
-    fs.readFile(GAME_JS_PATH, (err2, src) => {
-      if (err2) return cb(err2);
-      const buf = Buffer.concat([Buffer.from("(() => {\n"), src, Buffer.from("\n})();\n")]);
-      gameJsCache = { mtimeMs: st.mtimeMs, buf };
-      cb(null, buf);
+    fs.stat(SHARED_JS_PATH, (errS, stS) => {
+      if (errS) return cb(errS);
+      const key = st.mtimeMs + ":" + stS.mtimeMs + ":" + (DEV_RAW_JS ? "raw" : "iife");
+      if (gameJsCache && gameJsCache.key === key) return cb(null, gameJsCache.buf);
+      fs.readFile(SHARED_JS_PATH, (err3, shared) => {
+        if (err3) return cb(err3);
+        fs.readFile(GAME_JS_PATH, (err2, src) => {
+          if (err2) return cb(err2);
+          const parts = DEV_RAW_JS
+            ? [shared, Buffer.from("\n"), src]
+            : [Buffer.from("(() => {\n"), shared, Buffer.from("\n"), src, Buffer.from("\n})();\n")];
+          const buf = Buffer.concat(parts);
+          gameJsCache = { key, buf };
+          cb(null, buf);
+        });
+      });
     });
   });
 }
@@ -439,7 +450,7 @@ const server = http.createServer((req, res) => {
     return res.end("Forbidden");
   }
 
-  if (!DEV_RAW_JS && urlPath === "/game.js") {
+  if (urlPath === "/game.js") { // dev-raw 포함 항상 번들 경유 (shared.js 가 앞에 붙는다)
     return wrappedGameJs((err, buf) => {
       if (err) { res.writeHead(404); return res.end("Not found"); }
       res.writeHead(200, { "Content-Type": MIME[".js"] });

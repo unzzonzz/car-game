@@ -708,218 +708,31 @@ function buildSmoothClosedPath(pts) {
   return path;
 }
 
-function makeTrack(opts) {
-  const N = 260, raw = [];
-  for (let i = 0; i < N; i++) {
-    const a = (i / N) * Math.PI * 2;
-    const R = opts.R(a);
-    raw.push({ x: Math.cos(a) * R * opts.stretch, y: Math.sin(a) * R });
-  }
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const p of raw) {
-    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
-    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
-  }
-  const inset = opts.halfWidth + opts.kerb + 120;
-  const scale = Math.min((opts.w - 2 * inset) / (maxX - minX), (opts.h - 2 * inset) / (maxY - minY));
-  const offX = (opts.w - (maxX - minX) * scale) / 2 - minX * scale;
-  const offY = (opts.h - (maxY - minY) * scale) / 2 - minY * scale;
-  const centerline = raw.map(p => ({ x: p.x * scale + offX, y: p.y * scale + offY }));
-
-  const path = buildSmoothClosedPath(centerline); // 부드러운 곡선 렌더 경로
-
-  const a0 = centerline[0], a1 = centerline[1];
-  const start = { x: a0.x, y: a0.y, angle: Math.atan2(a1.y - a0.y, a1.x - a0.x) };
-  return { halfWidth: opts.halfWidth, kerb: opts.kerb, centerline, path, start };
+/* v4 : 트랙 지오메트리(센터라인/폭/시작점)는 shared.js(SIM) 가 단일 소스다.
+ *  클라는 SIM 트랙에 렌더 전용 Path2D 만 입힌다. */
+function withPath(t) {
+  return { ...t, path: buildSmoothClosedPath(t.centerline) };
 }
 
-function catmullRom(p0, p1, p2, p3, t, tension = 0.38) {
-  const t2 = t * t;
-  const t3 = t2 * t;
-  const m1x = (p2.x - p0.x) * tension;
-  const m1y = (p2.y - p0.y) * tension;
-  const m2x = (p3.x - p1.x) * tension;
-  const m2y = (p3.y - p1.y) * tension;
-  return {
-    x: (2 * t3 - 3 * t2 + 1) * p1.x + (t3 - 2 * t2 + t) * m1x + (-2 * t3 + 3 * t2) * p2.x + (t3 - t2) * m2x,
-    y: (2 * t3 - 3 * t2 + 1) * p1.y + (t3 - 2 * t2 + t) * m1y + (-2 * t3 + 3 * t2) * p2.y + (t3 - t2) * m2y,
-  };
-}
 
-function makeHardTrack(points, opts) {
-  let centerline = [];
-  const n = points.length;
-  const samplesPerSegment = opts.samplesPerSegment || 24;
-
-  for (let i = 0; i < n; i++) {
-    const p0 = points[(i - 1 + n) % n];
-    const p1 = points[i];
-    const p2 = points[(i + 1) % n];
-    const p3 = points[(i + 2) % n];
-    for (let s = 0; s < samplesPerSegment; s++) {
-      centerline.push(catmullRom(p0, p1, p2, p3, s / samplesPerSegment, opts.tension));
-    }
-  }
-
-  const startOffset = ((opts.startPointIndex || 0) * samplesPerSegment) % centerline.length;
-  if (startOffset) centerline = centerline.slice(startOffset).concat(centerline.slice(0, startOffset));
-
-  const path = buildSmoothClosedPath(centerline); // 부드러운 곡선 렌더 경로
-
-  const a0 = centerline[0], a1 = centerline[1];
-  const start = { x: a0.x, y: a0.y, angle: Math.atan2(a1.y - a0.y, a1.x - a0.x) };
-  return { halfWidth: opts.halfWidth, kerb: opts.kerb, centerline, path, start };
-}
-
-/* 연습 코스 — 모두 10000×6000, 잔디는 전부 동일(일반). makeTrack 방사형 R(a): 진폭 합 < 1 → 자기교차 없음.
- *  A조 = 넓은 폭 230, 완만한 큰 코너   : A-1 입문 / A-2 순한S / A-3 라운드
- *  B조 = 좁은 폭 112, 급코너            : B-1 밸런스 / B-2 테크니컬 / B-3 고속
- *  C조 = 폭 75(B의 2/3), 최고 난이도 급코너 : C-1 하드코어 / C-2 헤어핀 / C-3 테크니컬 */
-const A_BASE = { w: 10000, h: 6000, halfWidth: 230, kerb: 26, stretch: 1.7 }; // 넓음
-const B_BASE = { w: 10000, h: 6000, halfWidth: 112, kerb: 16, stretch: 1.6 }; // 좁음
-const C_BASE = { w: 10000, h: 6000, halfWidth: 75, kerb: 12, stretch: 1.6 };  // 가장 좁음(B의 2/3)
-const PRACTICE_A1 = { ...A_BASE,
-  R: a => 1 + 0.16 * Math.sin(2 * a + 0.5) + 0.11 * Math.sin(3 * a + 1.8) };
-const PRACTICE_A2 = { ...A_BASE,
-  R: a => 1 + 0.19 * Math.sin(2 * a + 2.2) + 0.10 * Math.sin(3 * a + 0.4) + 0.08 * Math.sin(4 * a + 1.5) };
-const PRACTICE_A3 = { ...A_BASE,
-  R: a => 1 + 0.13 * Math.sin(2 * a + 1.0) + 0.14 * Math.sin(3 * a + 2.5) + 0.07 * Math.sin(5 * a + 0.8) };
-const PRACTICE_B1 = { ...B_BASE,
-  R: a => 1 + 0.20 * Math.sin(2 * a + 0.4) + 0.16 * Math.sin(3 * a + 1.7) + 0.10 * Math.sin(4 * a + 0.9) };
-const PRACTICE_B2 = { ...B_BASE,
-  R: a => 1 + 0.13 * Math.sin(2 * a + 1.1) + 0.14 * Math.sin(4 * a + 0.3)
-        + 0.10 * Math.sin(5 * a + 2.1) + 0.06 * Math.sin(7 * a + 1.4) };
-const PRACTICE_B3 = { ...B_BASE,
-  R: a => 1 + 0.27 * Math.sin(2 * a + 2.4) + 0.14 * Math.sin(3 * a + 0.6) + 0.10 * Math.sin(5 * a + 1.9) };
-const PRACTICE_C1 = { ...C_BASE,
-  R: a => 1 + 0.15 * Math.sin(2 * a + 0.7) + 0.17 * Math.sin(4 * a + 1.9)
-        + 0.12 * Math.sin(5 * a + 0.5) + 0.07 * Math.sin(8 * a + 2.3) };
-const PRACTICE_C2 = { ...C_BASE,
-  R: a => 1 + 0.14 * Math.sin(2 * a + 1.4) + 0.22 * Math.sin(3 * a + 0.2)
-        + 0.16 * Math.sin(6 * a + 1.7) + 0.10 * Math.sin(9 * a + 0.6) };
-const PRACTICE_C3 = { ...C_BASE,
-  R: a => 1 + 0.17 * Math.sin(3 * a + 2.6) + 0.15 * Math.sin(4 * a + 0.9)
-        + 0.13 * Math.sin(6 * a + 1.3) + 0.08 * Math.sin(7 * a + 2.1) };
-
-/* 레트로(옛) 코스 — 기록은 옛 컬럼 그대로 재활용(초보자=bestTime, 어려움=bestTimeHard).
- *  초보자 : 옛 "자유" 레시피(넓은 폭 230, 10000×6000). 어려움 : 옛 하드 컨트롤포인트(18000×11500, 폭 112). */
-const FREE_RECIPE = {
-  w: 10000, h: 6000, halfWidth: 230, kerb: 26, stretch: 1.7,
-  R: a => 1 + 0.16 * Math.sin(2 * a + 0.6) + 0.30 * Math.sin(3 * a + 0.4)
-        + 0.18 * Math.sin(5 * a + 1.3) + 0.10 * Math.sin(7 * a + 0.2),
-};
-const HARD_POINTS = [
-  { x: 1300, y: 1400 }, { x: 3300, y: 1400 }, { x: 5700, y: 1400 }, { x: 7200, y: 1500 },
-  { x: 8350, y: 2050 }, { x: 8900, y: 3150 }, { x: 8200, y: 4300 }, { x: 6450, y: 4450 },
-  { x: 5400, y: 4950 }, { x: 6600, y: 5650 }, { x: 8300, y: 5350 }, { x: 9500, y: 5000 },
-  { x: 10800, y: 3700 }, { x: 10300, y: 5400 }, { x: 11100, y: 5150 }, { x: 12400, y: 6350 },
-  { x: 13800, y: 6200 }, { x: 15050, y: 7400 }, { x: 16200, y: 9000 }, { x: 14500, y: 10350 },
-  { x: 12000, y: 10650 }, { x: 9200, y: 10150 }, { x: 6900, y: 9250 }, { x: 5000, y: 9850 },
-  { x: 3550, y: 10600 }, { x: 2250, y: 9700 }, { x: 3850, y: 8750 }, { x: 2250, y: 7800 },
-  { x: 1150, y: 6650 }, { x: 2400, y: 5350 }, { x: 1400, y: 4050 }, { x: 2450, y: 2750 },
-];
-
-/* Chaikin 코너-커팅(폐곡선) : 각 변을 1/4·3/4 지점으로 잘라 꼭짓점을 둥글린다.
- *  각진 폴리라인을 반복 적용으로 완전히 매끈하게 — D-1 에서 2회 사용. */
-function chaikinClosed(pts, iterations = 1) {
-  let cur = pts;
-  for (let k = 0; k < iterations; k++) {
-    const out = [];
-    const n = cur.length;
-    for (let i = 0; i < n; i++) {
-      const a = cur[i], b = cur[(i + 1) % n];
-      out.push({ x: a.x * 0.75 + b.x * 0.25, y: a.y * 0.75 + b.y * 0.25 });
-      out.push({ x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 });
-    }
-    cur = out;
-  }
-  return cur;
-}
-
-/* 연습 D-1 — 최고 난도 초장거리 서킷 (d-1.svg 1398×910 → 10000×6000 피팅, inset 207).
- *  C조와 같은 폭(75/12). 67개 컨트롤포인트를 Chaikin 2회로 둥글린 뒤(268점) Catmull-Rom —
- *  각진 느낌이 완전히 사라진다 (최소 곡률 반경 89→159px).
- *  검증됨 : 자기교차 0건, 비인접 통로 최소 중심거리 409px(전폭 174 대비 여유 235), 총 길이 ~37.6k px.
- *  시작선 = 우측 하단 직선의 오른쪽 끝(스무딩 점 234, {7921,5774}) — 하단 직선 전체가 정면에. */
-const D1_POINTS = [
-  { x: 3890, y: 5577 }, { x: 3338, y: 5250 }, { x: 2704, y: 5147 }, { x: 2130, y: 5423 }, { x: 1406, y: 5216 }, { x: 1070, y: 4745 },
-  { x: 1434, y: 4231 }, { x: 1961, y: 4347 }, { x: 2397, y: 4181 }, { x: 2513, y: 3751 }, { x: 2130, y: 3403 }, { x: 1559, y: 3146 },
-  { x: 1283, y: 2418 }, { x: 1669, y: 1863 }, { x: 1472, y: 1330 }, { x: 941, y: 1151 }, { x: 678, y: 731 }, { x: 797, y: 395 },
-  { x: 1158, y: 480 }, { x: 1359, y: 207 }, { x: 2074, y: 207 }, { x: 2444, y: 505 }, { x: 2513, y: 988 }, { x: 2983, y: 1255 },
-  { x: 3469, y: 1038 }, { x: 3840, y: 1361 }, { x: 3890, y: 1822 }, { x: 4558, y: 2164 }, { x: 5216, y: 2070 }, { x: 5405, y: 1609 },
-  { x: 5216, y: 1022 }, { x: 5539, y: 580 }, { x: 6032, y: 317 }, { x: 6593, y: 242 }, { x: 7214, y: 213 }, { x: 7675, y: 242 },
-  { x: 8183, y: 358 }, { x: 8475, y: 756 }, { x: 8359, y: 1367 }, { x: 7829, y: 1684 }, { x: 7117, y: 1863 }, { x: 6763, y: 2079 },
-  { x: 6593, y: 2418 }, { x: 6763, y: 2697 }, { x: 7214, y: 2857 }, { x: 7675, y: 2697 }, { x: 7741, y: 2261 }, { x: 8071, y: 1957 },
-  { x: 8544, y: 1957 }, { x: 8986, y: 2164 }, { x: 9140, y: 2697 }, { x: 9030, y: 3136 }, { x: 8698, y: 3403 }, { x: 8601, y: 3751 },
-  { x: 8735, y: 4102 }, { x: 9062, y: 4303 }, { x: 9322, y: 4673 }, { x: 9322, y: 5301 }, { x: 8855, y: 5705 }, { x: 7804, y: 5793 },
-  { x: 6518, y: 5746 }, { x: 5963, y: 5423 }, { x: 5963, y: 4736 }, { x: 5583, y: 4347 }, { x: 5085, y: 4485 }, { x: 4774, y: 5034 },
-  { x: 4432, y: 5423 },
-];
-
-/* 커스텀(프로) 방 코스 = 연습 코스 6종(A-1~B-3)을 그대로 사용. 서버가 인덱스(0~5)를 정해
- *  같은 방의 모든 플레이어가 같은 맵을 보게 한다. server.js 의 NAMED_COURSES 와 개수를 맞춰야 한다. */
-const PRO_COURSES = [PRACTICE_A1, PRACTICE_A2, PRACTICE_A3, PRACTICE_B1, PRACTICE_B2, PRACTICE_B3, PRACTICE_C1, PRACTICE_C2, PRACTICE_C3];
+/* 커스텀(프로) 방 코스 이름 (서버 코스 인덱스와 짝) — 지오메트리는 SIM.buildTracks().pro */
 const PRO_COURSE_NAMES = ["A-1", "A-2", "A-3", "B-1", "B-2", "B-3", "C-1", "C-2", "C-3"];
 
 // 프로 트랙을 인덱스로 만들고 캐시한다 (한 번 만든 맵은 재사용)
 const proTrackCache = new Map();
 function buildProTrack(index) {
-  const i = ((index % PRO_COURSES.length) + PRO_COURSES.length) % PRO_COURSES.length;
-  if (!proTrackCache.has(i)) proTrackCache.set(i, makeTrack(PRO_COURSES[i]));
+  const list = SIM.buildTracks().pro;
+  const i = ((index % list.length) + list.length) % list.length;
+  if (!proTrackCache.has(i)) proTrackCache.set(i, withPath(list[i]));
   return proTrackCache.get(i);
 }
 
-function generateTrack() {
-  WORLD.a1.track     = makeTrack(PRACTICE_A1); // 연습 A-1 (입문)
-  WORLD.a2.track     = makeTrack(PRACTICE_A2); // 연습 A-2 (순한 S)
-  WORLD.a3.track     = makeTrack(PRACTICE_A3); // 연습 A-3 (라운드)
-  WORLD.racing.track = makeTrack(PRACTICE_B1); // 연습 B-1 (밸런스)
-  WORLD.hard.track   = makeTrack(PRACTICE_B2); // 연습 B-2 (테크니컬)
-  WORLD.serp.track   = makeTrack(PRACTICE_B3); // 연습 B-3 (고속)
-  WORLD.c1.track     = makeTrack(PRACTICE_C1); // 연습 C-1 (하드코어)
-  WORLD.c2.track     = makeTrack(PRACTICE_C2); // 연습 C-2 (헤어핀)
-  WORLD.c3.track     = makeTrack(PRACTICE_C3); // 연습 C-3 (테크니컬)
-  WORLD.d1.track     = makeHardTrack(chaikinClosed(D1_POINTS, 2), { // 연습 D-1 (고난도 초장거리, C 폭)
-    halfWidth: 75, kerb: 12, samplesPerSegment: 4, startPointIndex: 236, tension: 0.38, // 시작=우측 하단 직선 한가운데(앞뒤 완전 직선)
-  });
-  WORLD.retro1.track = makeTrack(FREE_RECIPE); // 레트로 초보자 (옛 자유 코스)
-  WORLD.retro2.track = makeHardTrack(HARD_POINTS, { // 레트로 어려움 (옛 하드 코스)
-    halfWidth: 112, kerb: 16, samplesPerSegment: 28, startPointIndex: 1, tension: 0.34,
-  });
-  WORLD.pro.track = buildProTrack(0);          // 프로 기본값 (서버 인덱스로 교체됨)
-}
-
-/* 테스트 맵 : 가로로 긴 운동장(스타디움) 트랙 — 직선 2 + 반원 2 의 단순한 링.
- *  새 플랫 디자인 검증용. 기존 트랙 시스템(센터라인/폭/위상)을 그대로 쓴다. */
-function makeStadiumTrack() {
-  const cx = 3000, cy = 1700;   // 월드 중앙
-  const A = 1500, R = 800;      // 직선 절반 길이 / 반원 반지름
-  const hw = 220;               // 트랙 절반 폭 (넉넉하게)
-  const pts = [];
-  const SEG = 44;
-  // 아래 직선 (왼→오)
-  for (let i = 0; i < SEG; i++) pts.push({ x: cx - A + (2 * A) * (i / SEG), y: cy + R });
-  // 오른쪽 반원 (아래→위)
-  for (let i = 0; i < SEG; i++) {
-    const th = (Math.PI / 2) - Math.PI * (i / SEG);
-    pts.push({ x: cx + A + R * Math.cos(th), y: cy + R * Math.sin(th) });
-  }
-  // 위 직선 (오→왼)
-  for (let i = 0; i < SEG; i++) pts.push({ x: cx + A - (2 * A) * (i / SEG), y: cy - R });
-  // 왼쪽 반원 (위→아래)
-  for (let i = 0; i < SEG; i++) {
-    const th = (3 * Math.PI / 2) - Math.PI * (i / SEG);
-    pts.push({ x: cx - A + R * Math.cos(th), y: cy + R * Math.sin(th) });
-  }
-  const path = buildSmoothClosedPath(pts); // 부드러운 곡선 렌더 경로
-  const a0 = pts[0], a1 = pts[1];
-  const start = { x: a0.x, y: a0.y, angle: Math.atan2(a1.y - a0.y, a1.x - a0.x) };
-  return { halfWidth: hw, kerb: 0, centerline: pts, path, start };
-}
-
 function generateTracks() {
-  generateTrack();
-  WORLD.test.track = makeStadiumTrack();
+  const t = SIM.buildTracks();
+  for (const k of ["a1", "a2", "a3", "racing", "hard", "serp", "c1", "c2", "c3", "d1", "retro1", "retro2", "test"]) {
+    WORLD[k].track = withPath(t[k]);
+  }
+  WORLD.pro.track = buildProTrack(0); // 프로 기본값 (서버 인덱스로 교체됨)
 }
 
 // km/h -> px/s 변환 계수.  (km/h ÷ 3.6 = m/s) × (m -> px)
@@ -957,7 +770,7 @@ const CAR = {
   airResistance: 7.0e-5,  // 공기저항 계수 — 감속 ∝ 속도² (고속에서 커짐). 낮출수록 관성↑
   rollingResistance: 0.012, // 구름저항 계수 — 감속 ∝ 속도 (저속 코스팅). 낮출수록 더 오래 굴러감
 
-  enginePower: 0,         // 엔진 출력 — init()에서 maxSpeed 기준으로 자동 산출
+  enginePower: 0,         // (v4) 미사용 — 엔진 출력은 shared.js SIM.CAR_SPEC 이 역산
 
   // 차체 크기 (px) — 렌더 및 충돌용
   length: 38,
@@ -980,6 +793,18 @@ const CAR = {
 
   drifting: false,         // 현재 브레이크 드리프트 중인지 (자국/조향/네트워크 공통 기준)
   invulnUntil: 0,          // 이 시각(performance.now ms)까지 무적 — 부활 직후 보호
+
+  // ---- v4 시뮬 상태 (shared.js stepCar 가 사용) --------------------------
+  driftBoostT: 0,          // 드리프트 조향 부스트 램프(0~1, 3틱)
+  evx: 0, evy: 0,          // 외부 속도 채널 (충돌/넉백 — 주행 캡 면제, 지수 감쇠)
+  spinV: 0,                // 임팩트 스핀(rad/s, 감쇠)
+  lockUntilTick: 0,        // 하드 입력락 만료 틱 (넉백 비행)
+  stunUntilTick: 0,        // 소프트 스턴 만료 틱 (보스 충격파)
+  invulnUntilTick: 0, punchReadyTick: 0, respawnReadyTick: 0,
+  impactSlideUntilTick: 0, // 피격 후 저그립 창 만료 틱
+  contactTick: -1,         // 최근 차대차 충돌 해석 틱
+  trackHint: -1,           // 트랙 세그먼트 힌트 (시뮬 상태의 일부)
+  lastPhase01: 0,          // 최근 틱의 트랙 진행도(0~1) — 랩/타임어택 게이트 재사용
 };
 
 
@@ -1125,373 +950,91 @@ function isFlatTrackMode() {
  *      power        = air·vmax³ + roll·vmax²
  * ========================================================================== */
 function init() {
-  const vmax = CAR.maxSpeed * KMH_TO_PXS;
-  CAR.enginePower =
-    CAR.airResistance * vmax * vmax * vmax +
-    CAR.rollingResistance * vmax * vmax;
-
+  // v4 : 엔진 출력 역산은 shared.js(SIM.CAR_SPEC.enginePower)가 담당한다.
   generateTracks(); // 자유/프로 레이싱 트랙 생성
 }
 
 
 /* =============================================================================
- *  물리 파이프라인
- *  입력 → 조향 → (속도 분해) → 엔진 → 브레이크 → 공기/구름저항
- *       → 그립(측면마찰) → 속도/위치 → 충돌 → 카메라 → 렌더
+ *  물리 파이프라인 (v4) — 적분은 shared.js(SIM.stepCar/stepGroup)가 단일 소스.
+ *  여기엔 클라 전용 얇은 어댑터만 남는다 : 키 -> 버튼 비트 / env 조립 /
+ *  시뮬 이벤트(벽·장애물) -> SFX 소비 / 서버 임펄스 -> ev 채널 주입.
  * ========================================================================== */
+const decompose = SIM.decompose; // 외부에서 vx/vy/angle 변경 후 lf/ll 재동기용
 
-/* 1) 입력 처리 ---------------------------------------------------------------
- *  키 상태를 차량의 연속 입력값으로 변환한다.
- *  특히 조향은 즉시 -1/+1 로 튀지 않고 목표값으로 "램프(ramp)" 시켜
- *  무거운 차의 핸들 반응 지연을 표현한다 (무게가 클수록 느리게 반응). */
-function updateInput(car, dt) {
-  // 프로 레이싱 로비/카운트다운 동안엔 움직일 수 없다 (그리드에서 정지)
-  if (gameMode === "pro" && race.state !== "racing") {
-    car.throttle = 0; car.braking = 0; car.reversing = 0; car.steerInput = 0;
-    car.vx = 0; car.vy = 0; car.lf = 0; car.ll = 0;
-    return;
-  }
-  if (gameMode === "sumo" && performance.now() < (car.launchUntil || 0)) {
-    // 넉백 비행 중 : 조작 잠금 — 발사 속도(kvx/kvy)로만 미끄러진다
-    car.throttle = 0; car.braking = 0; car.reversing = 0; car.steerInput = 0;
-    car.vx = 0; car.vy = 0; car.lf = 0; car.ll = 0;
-    return;
-  }
-  if (gameMode === "boss") {
-    // 사망/관전/결과 화면 : 완전 정지
-    if (bossCli.dead || bossCli.spec || bossCli.state === "result") {
-      car.throttle = 0; car.braking = 0; car.reversing = 0; car.steerInput = 0;
-      car.vx = 0; car.vy = 0; car.lf = 0; car.ll = 0;
-      return;
-    }
-    // 스턴 : 입력만 잠금 — 넉백 관성으로 미끄러진다
-    if (performance.now() < bossCli.stunUntil) {
-      car.throttle = 0; car.braking = 0; car.reversing = 0; car.steerInput = 0;
-      return;
-    }
-  }
-
-  car.throttle = keys.w ? 1 : 0;
-  car.braking = keys.space ? 1 : 0;
-  car.reversing = keys.s ? 1 : 0;
-
-  // 목표 조향 : A=좌(-1), D=우(+1)
-  const target = (keys.d ? 1 : 0) - (keys.a ? 1 : 0);
-
-  // 무게 기반 조향 반응 속도. 무거울수록 핸들 입력이 천천히 찬다.
-  const responsiveness = 9000 / car.weight; // 1500kg -> 6.0 /s
-  const t = clamp(responsiveness * dt, 0, 1);
-  car.steerInput = lerp(car.steerInput, target, t);
+// 키 상태 -> 입력 버튼 비트 (시뮬의 유일한 입력 형식)
+function sampleButtons() {
+  let b = 0;
+  if (keys.w) b |= SIM.BTN.W;
+  if (keys.space) b |= SIM.BTN.SPACE;
+  if (keys.a) b |= SIM.BTN.A;
+  if (keys.d) b |= SIM.BTN.D;
+  if (keys.s) b |= SIM.BTN.S;
+  return b;
 }
 
-/* 2) 조향 -------------------------------------------------------------------
- *  heading(바라보는 방향)만 회전시킨다. 속도 벡터는 건드리지 않으므로
- *  이 순간부터 heading 과 진행방향이 어긋나기 시작한다(=슬립 앵글의 씨앗).
- *  - 정지 상태에선 회전하지 않는다(제자리 회전 방지) → 탱크 조향 배제.
- *  - 고속일수록 조향 권한이 줄어 급격한 방향전환을 막는다(고속 안정성). */
-function updateSteering(car, dt) {
-  const speed = speedOf(car);
-  const speedRatio = clamp(speed / (car.maxSpeed * KMH_TO_PXS), 0, 1);
-
-  // 저속 게이트 : 속도가 거의 0이면 조향 거의 없음, 일정 속도부터 완전 적용
-  const lowSpeedGate = clamp(speed / (25 * KMH_TO_PXS), 0, 1);
-
-  // 고속 권한 감소 : 1(저속) → highSpeedSteer(고속) 로 보간
-  let authority = lerp(1, car.highSpeedSteer, speedRatio);
-
-  const trail =
-      car.braking > 0 &&
-      car.braking < 0.8 &&
-      speed > 90 * KMH_TO_PXS &&
-      Math.abs(car.steerInput) > 0.15;
-
-  if (trail) {
-      authority *= 1.18;
-  }
-
-  // 드리프트 중엔 뒤가 풀려 차가 더 잘 돈다 → 조향 권한을 키워 슬립각을 크게 만든다
-  //  (car.drifting 은 직전 프레임 updateGrip 에서 갱신된 값 — 한 프레임 지연은 무시 가능)
-  if (car.drifting) authority *= car.driftSteerBoost;
-
-  const turnRate = car.steering * car.steerInput * authority * lowSpeedGate;
-  car.angle += turnRate * dt;
+/* 이번 틱의 시뮬 환경 — 모드 전역(게임 규칙)을 순수 env 로 변환한다.
+ *  시뮬 코어는 이 env 와 차 상태만 본다(전역 접근 금지). */
+function buildEnv(tick) {
+  return {
+    tick,
+    world: { w: world.w, h: world.h },
+    track: (world.track && isTrackWorld()) ? world.track : null,
+    obstacles: gameMode === "boss" ? SIM.BOSS_PILLARS
+             : gameMode === "plaza" ? SIM.PLAZA_OBSTACLES : null,
+    speedScale: gameMode === "sumo" ? SIM.SUMO.speedScale : 1,
+    noBounds: gameMode === "sumo",
+    freeze: (gameMode === "pro" && race.state !== "racing")
+         || (gameMode === "boss" && (bossCli.dead || bossCli.spec || bossCli.state === "result"))
+         || (gameMode === "sumo" && sumo.dead),
+  };
 }
 
-/* (속도 분해) ----------------------------------------------------------------
- *  월드 속도 벡터 v 를 "현재 heading 기준" 전진/측면 성분으로 분해한다.
- *  heading 벡터  f = (cos a, sin a)
- *  우측  벡터    r = (-sin a, cos a)
- *  lf = v·f (전진),  ll = v·r (측면). */
-function decompose(car) {
-  const cos = Math.cos(car.angle);
-  const sin = Math.sin(car.angle);
-  car.lf = car.vx * cos + car.vy * sin;
-  car.ll = -car.vx * sin + car.vy * cos;
-}
-
-/* 3) 엔진 가속 ---------------------------------------------------------------
- *  구동 가속도 = enginePower / 속도, 단 트랙션 한계(acceleration)로 상한.
- *  → 출발 직후엔 일정한 강한 가속(접지 한계), 속도가 붙을수록 1/v 로 점점
- *    힘이 줄어 최고속도에 가까워질수록 가속이 둔해진다(현실적인 RPM 체감). */
-function updateEngine(car, dt) {
-  if (car.throttle <= 0) return;
-
-  const v = Math.max(car.lf, 1); // 0 나눗셈 방지
-  let driveAccel = car.enginePower / v;
-  driveAccel = Math.min(driveAccel, car.acceleration); // 트랙션 한계
-
-  car.lf += driveAccel * car.throttle * dt * modeSpeedScale(); // 스모는 가속도 톤도 함께 낮춤
-}
-
-/* 4) 브레이크 ----------------------------------------------------------------
- *  강력하지만 즉시 0 으로 만들지 않는다. 일정한 감속도를 매 프레임 빼되,
- *  음수(후진)로 내려가지 않도록 0 에서 멈춘다 (ABS가 잡아주는 느낌). */
-function updateBrake(car, dt) {
-  if (car.braking <= 0 || car.lf === 0) return;
-
-  const decel = car.brakePower * car.braking * dt;
-  // 전진/후진 모두 0 방향으로 감속 (후진 중 브레이크 밟으면 멈춤)
-  if (car.lf > 0) car.lf = Math.max(0, car.lf - decel);
-  else car.lf = Math.min(0, car.lf + decel);
-}
-
-/* 4-b) 후진 (S) --------------------------------------------------------------
- *  - 전진 중이면 먼저 브레이크처럼 감속시킨다(바로 후진 X).
- *  - 정지/후진 중이면 뒤로 가속한다. 전진보다 약하고 최고속도도 낮다.
- *  - W(전진)가 눌려 있으면 전진이 우선이라 후진은 무시한다. */
-function updateReverse(car, dt) {
-  if (car.reversing <= 0 || car.throttle > 0) return;
-
-  if (car.lf > 0) {
-    // 전진 중 → 감속
-    car.lf = Math.max(0, car.lf - car.brakePower * dt);
-  } else {
-    // 정지/후진 중 → 뒤로 가속 (음수 방향), 후진 최고속도로 제한
-    const reverseMax = car.reverseSpeed * KMH_TO_PXS;
-    car.lf = Math.max(-reverseMax, car.lf - car.reverseAccel * dt);
-  }
-}
-
-/* 5) 저항 (공기 + 구름) ------------------------------------------------------
- *  - 공기저항 : 속도² 에 비례 → 고속에서 급격히 커져 코스팅 감속이 빨라진다.
- *  - 구름저항 : 속도 에 비례 → 저속에서도 서서히 차를 멈추게 한다.
- *  엑셀을 떼도 즉시 멈추지 않고 관성으로 굴러가다 천천히 감속하는 핵심.
- *  전진/후진(부호) 양쪽 모두 0 방향으로 감속시킨다. */
-function updateResistance(car, dt) {
-  if (car.lf === 0) return;
-
-  const v = Math.abs(car.lf);
-  const dec = (car.airResistance * v * v + car.rollingResistance * v) * dt;
-  if (car.lf > 0) car.lf = Math.max(0, car.lf - dec);
-  else car.lf = Math.min(0, car.lf + dec);
-}
-
-/* 6) 그립 (측면 마찰) — 브레이크 드리프트 -----------------------------------
- *  측면 속도 성분 ll 을 매 프레임 지수적으로 감쇠시킨다.  ll *= e^(-grip · dt)
- *  - 평상시엔 grip(높음)을 유지 → 측면속도가 즉시 사라져 v 가 heading 에 빠르게
- *    정렬된다. 따라서 고속에서도 드리프트 없이 깔끔하게 회전한다.
- *  - "고속 + 브레이크(SPACE)" 일 때만 그립을 driftGrip(낮음)으로 떨어뜨려 뒤가
- *    미끄러지게 한다. 이때 조향을 같이 넣으면 슬립 앵글이 생겨 드리프트가 된다.
- *    (브레이크만 밟고 직진하면 미끄러지지 않고 그냥 감속) */
-function updateGrip(car, dt) {
-  const speed = speedOf(car);
-
-  // 기본은 항상 높은 그립 → 드리프트 없음
-  let lateralFriction = car.grip;
-  car.drifting = false;
-
-  // 고속에서 브레이크를 밟는 동안에만 그립을 낮춰 브레이크 드리프트 유발
-  const driftSpeed = car.brakeDriftSpeed * KMH_TO_PXS;
-  if (car.braking > 0 && speed > driftSpeed) {
-    // 빠를수록 더 잘 미끄러지게 (driftGrip 쪽으로 강하게)
-    const over = clamp((speed - driftSpeed) / (car.maxSpeed * KMH_TO_PXS - driftSpeed), 0, 1);
-    if (car.braking > 0 && Math.abs(car.steerInput) > 0.1) {
-
-    // 트레일 브레이킹
-    if (car.braking < 0.6) {
-
-        lateralFriction = lerp(
-            car.grip,
-            car.grip * 0.72,
-            over
-        );
-
-    } else {
-
-        // 기존 드리프트
-        lateralFriction =
-            lerp(car.grip * 0.35, car.driftGrip, over);
-
-    }
-
-  }
-
-    // 실제로 옆으로 미끄러지고 있을 때(측면 속도 충분)만 "드리프트 중"으로 본다.
-    //  → 브레이크만 밟고 직진하면 자국/부스트 없음. 조향을 같이 넣어야 드리프트.
-    if (Math.abs(car.ll) > 30) car.drifting = true;
-  }
-
-  // 지수 감쇠 (프레임레이트 독립적)
-  car.ll *= Math.exp(-lateralFriction * dt);
-}
-
-/* 7) 속도/위치 계산 ----------------------------------------------------------
- *  분해·가공된 전진/측면 성분(lf, ll)을 다시 월드 속도 벡터로 합성하고,
- *  최고속도를 넘지 않도록 전진성분을 제한한 뒤 위치를 적분한다. */
-// 모드별 속도 배율 (스모는 1/6 로 느리게). 최고속도 캡·엔진 가속에 함께 적용.
-function modeSpeedScale() { return gameMode === "sumo" ? SUMO.speedScale : 1; }
-
-function updatePhysics(car, dt) {
-  // 전진 성분 캡 : 전진은 최고속도, 후진은 후진 최고속도까지 (측면 드리프트 속도는 별도)
-  const s = modeSpeedScale();
-  const vmax = car.maxSpeed * KMH_TO_PXS * s;
-  const reverseMax = car.reverseSpeed * KMH_TO_PXS * s;
-  car.lf = clamp(car.lf, -reverseMax, vmax);
-
-  // local(lf, ll) → world(vx, vy) 합성
-  const cos = Math.cos(car.angle);
-  const sin = Math.sin(car.angle);
-  car.vx = car.lf * cos - car.ll * sin;
-  car.vy = car.lf * sin + car.ll * cos;
-
-  // 위치 적분
-  car.x += car.vx * dt;
-  car.y += car.vy * dt;
-}
-
-/* 8) 충돌 처리 — 맵 경계 ------------------------------------------------------
- *  두 모드 모두 맵 밖으로 못 나가게 차체를 벽 안쪽에 가둔다(죽음 없음). */
-let lastWallSfx = 0; // 벽 충돌음 쿨다운(연속 마찰 시 스팸 방지)
-function updateCollision(car) {
-  if (gameMode === "sumo") return; // 스모는 경계 없음(링 밖으로 자유 이동 → 카운트다운 후 자멸)
-  // 시각 차체(OBB)와 일치하는 회전 반영 반경 — 예전 car.length/2 원형 근사는
-  //  머리부터 박을 때 차 앞코가 벽/요소에 파고들어 보였다.
-  const { hl, hw } = carHalfExtents(car);
-  const acos = Math.abs(Math.cos(car.angle)), asin = Math.abs(Math.sin(car.angle));
-  const halfX = hl * acos + hw * asin; // 차 OBB 의 X축 투영 반경
-  const halfY = hl * asin + hw * acos;
-  const preSpeed = Math.hypot(car.vx, car.vy); // 충돌 전 속도(효과음 판단용)
-  let hit = false;
-  if (car.x < halfX) { car.x = halfX; car.vx = 0; hit = true; }
-  if (car.x > world.w - halfX) { car.x = world.w - halfX; car.vx = 0; hit = true; }
-  if (car.y < halfY) { car.y = halfY; car.vy = 0; hit = true; }
-  if (car.y > world.h - halfY) { car.y = world.h - halfY; car.vy = 0; hit = true; }
-  if (hit) {
-    decompose(car); // 벽에 흡수된 속도를 차체 성분에 반영
-    const now = performance.now();
-    if (preSpeed > 60 && now - lastWallSfx > 250) { lastWallSfx = now; SFX.collision(clamp(preSpeed / 700, 0.3, 1)); }
-  }
-  if (gameMode === "boss") bossPillarCollision(car); // 아레나 기둥
-  else if (gameMode === "plaza") plazaObstacleCollision(car); // 광장 장애물
-}
-
-/* 두 방향성 사각형(OBB)의 최소 분리 벡터(MTV) — 분리축 정리(SAT).
- *  겹치면 {nx,ny,depth} (A 를 B 에서 밀어내는 단위방향 + 겹침 깊이), 안 겹치면 null.
- *  a,b = {x,y,ang,hl,hw} : 중심, 방향각, 반길이(전후), 반폭(좌우). 차는 회전 사각형이라
- *  각 박스의 forward/lateral 축 4개만 검사하면 충분하다. */
-function obbMTV(a, b) {
-  const aC = Math.cos(a.ang), aS = Math.sin(a.ang);
-  const bC = Math.cos(b.ang), bS = Math.sin(b.ang);
-  const axes = [ { x: aC, y: aS }, { x: -aS, y: aC }, { x: bC, y: bS }, { x: -bS, y: bC } ];
-  const dx = b.x - a.x, dy = b.y - a.y; // A→B 중심 벡터
-  let minOv = Infinity, nx = 0, ny = 0;
-  for (const ax of axes) {
-    // 각 박스의 반경을 이 축에 투영 : hl·|축·forward| + hw·|축·lateral|
-    const aR = a.hl * Math.abs(ax.x * aC + ax.y * aS) + a.hw * Math.abs(-ax.x * aS + ax.y * aC);
-    const bR = b.hl * Math.abs(ax.x * bC + ax.y * bS) + b.hw * Math.abs(-ax.x * bS + ax.y * bC);
-    const proj = dx * ax.x + dy * ax.y;   // 중심거리를 이 축에 투영
-    const ov = aR + bR - Math.abs(proj);  // 반경합 - 중심거리 = 겹침량
-    if (ov <= 0) return null;             // 분리축 발견 → 충돌 아님(빠른 탈출)
-    if (ov < minOv) {                     // 가장 얕게 겹친 축이 밀어낼 방향
-      minOv = ov;
-      const s = proj >= 0 ? -1 : 1;       // A 를 B 반대쪽으로 밀어낸다
-      nx = ax.x * s; ny = ax.y * s;
+// 시뮬 이벤트 소비 : 벽/장애물 충돌음 (연속 마찰 스팸 방지 쿨다운은 기존 그대로)
+let lastWallSfx = 0;
+function consumeSimEvents(events) {
+  for (const e of events) {
+    if (e.k === "wall" || e.k === "obstacle") {
+      const now = performance.now();
+      if (now - lastWallSfx > 250) { lastWallSfx = now; SFX.collision(clamp(e.speed / 700, 0.3, 1)); }
     }
   }
-  return { nx, ny, depth: minOv };
+  events.length = 0;
 }
 
-/* 8-b) 다른 플레이어와 충돌 — 위치 겹침 방지(즉시)만 클라가 처리한다.
- *  자동차 실제 사각형(OBB)으로 겹치면 상대 밖으로 밀어내 시각적 파고듦을 없앤다.
- *  ※ 속도/운동량 변화(밀치기)는 "서버 권위" 로 처리한다 → 서버가 두 차의 실제 속도로
- *    2체 충돌 임펄스를 계산해 양쪽에 "bump" 로 통지(handleNet 의 bump 처리). */
-// 히트박스 = "시각 차체" 크기와 정확히 일치시킨다.
-//  drawCar 는 s=((L+10)/232)*1.15 로 그려 실제 화면상 차체는 반길이 116·s, 반폭 55.5·s(px).
-//  → 반길이=(L+10)*0.575, 반폭=(L+10)*0.2751 (L=38 이면 27.6 × 13.2 = 55×26px)
-//  예전엔 히트박스가 38×18 로 시각(55×26)보다 작아 눈에 띄게 겹쳐 보였다 → 이제 일치.
-function carHalfExtents(car) {
-  const k = (car.length || CAR.length) + 10;
-  return { hl: k * 0.575, hw: k * 0.2751 };
-}
-const COLLISION_ENABLED = false; // ★ 물리 충돌/밀치기 임시 OFF — true 로 바꾸면 다시 켜짐(서버 플래그도 같이)
+/* 다른 플레이어와 겹침 방지(위치만) — 속도/운동량은 서버 권위(bump).
+ *  v4 3단계에서 예측 충돌(SIM.stepGroup collide)로 대체 예정. */
+const COLLISION_ENABLED = false; // ★ 물리 충돌/밀치기 임시 OFF — 서버 플래그와 함께 전환
 function updatePlayerCollision(car) {
-  if (!COLLISION_ENABLED) return;                        // 물리 충돌 임시 OFF
-  if (gameMode === "lobby" || !othersVisible()) return; // 로비/고스트 숨김 시 충돌 없음
-  const { hl, hw } = carHalfExtents(car);
-  const me = { x: car.x, y: car.y, ang: car.angle, hl, hw };
+  if (!COLLISION_ENABLED) return;
+  if (gameMode === "lobby" || !othersVisible()) return;
   for (const [, r] of remotePlayers) {
-    const mtv = obbMTV(me, { x: r.x, y: r.y, ang: r.angle, hl, hw }); // 같은 차종 → 같은 치수
+    const mtv = SIM.obbMTV(car, r);
     if (!mtv) continue;
-    car.x += mtv.nx * mtv.depth;   // 겹침 밖으로(위치만) — 속도는 서버 임펄스가 담당
+    car.x += mtv.nx * mtv.depth;
     car.y += mtv.ny * mtv.depth;
-    me.x = car.x; me.y = car.y;    // 여러 대와 연쇄 충돌 시 갱신 위치로 계속 판정
   }
 }
-// 서버 권위 충돌 임펄스 수신 → 내 차 속도에 반영(진짜 밀려남/밀치기) + 효과음·흔들림
+
+// 히트박스 = 시각 차체 크기 (렌더/이펙트용 — 시뮬은 SIM.CAR_HL/HW 직접 사용)
+function carHalfExtents() { return { hl: SIM.CAR_HL, hw: SIM.CAR_HW }; }
+
+// 서버 권위 충돌 임펄스 -> 외부 속도 채널(ev. 주행 캡 면제) + 효과음/흔들림
 let lastBumpSfx = 0;
 function applyBump(vx, vy) {
-  CAR.vx += vx; CAR.vy += vy;
-  decompose(CAR); // 바뀐 vx/vy 를 lf/ll(주 적분변수)에 반영
+  CAR.evx += vx; CAR.evy += vy;
   const sp = Math.hypot(vx, vy);
   const now = performance.now();
   if (sp > 40 && now - lastBumpSfx > 120) {
     lastBumpSfx = now;
     SFX.collision(clamp(sp / 700, 0.25, 0.9));
-    camera.shake = Math.min((camera.shake || 0) + sp * 0.012, 10); // 충격 흔들림
+    camera.shake = Math.min((camera.shake || 0) + sp * 0.012, 10);
   }
 }
 
-/* 9) 노면 — 레이싱 트랙 이탈 시 감속 ------------------------------------------
- *  트랙(캡슐 링) 밖(풀밭/안쪽 구멍)에서는 전진 속도를 추가로 깎아 느려지게 한다. */
-function updateSurface(car, dt) {
-  if (!isTrackWorld()) return;                 // 자유/프로/하드 레이싱 모두 적용
-  if (isOnTrack(car.x, car.y)) return;
-  // 풀밭 저항 : 전진/측면 속도를 지수적으로 감쇠. 모든 코스(A~C) 동일한 일반 잔디(가혹한 잔디 없음)
-  const drag = OFFTRACK_DRAG;
-  const f = Math.exp(-drag * dt);
-  car.lf *= f;
-  car.ll *= f;
-}
-
-/* 점이 트랙 위에 있는지 : 중심선(폐곡선)까지의 최단 거리가 트랙 절반 폭 이내면
- *  아스팔트, 아니면 이탈(잔디). 중심선의 모든 세그먼트를 훑어 최소 거리를 구한다. */
-function isOnTrack(x, y) {
-  const track = world.track;
-  if (!track) return true;
-  const pts = track.centerline;
-  const n = pts.length;
-  let minD2 = Infinity;
-  for (let i = 0; i < n; i++) {
-    const a = pts[i], b = pts[(i + 1) % n];
-    const d2 = distToSegmentSq(x, y, a.x, a.y, b.x, b.y);
-    if (d2 < minD2) minD2 = d2;
-  }
-  return minD2 <= track.halfWidth * track.halfWidth;
-}
-
-// 트랙 중심선상 위치(0~1 진행도) : 가장 가까운 세그먼트 인덱스+비율을 정규화
+// 트랙 진행도(0~1) — 시뮬 밖(레이스 UI 등)에서 한 번씩 쓰는 조회용
 function trackPhase(x, y, track) {
-  const pts = track.centerline, n = pts.length;
-  let best = 0, bestD2 = Infinity, bestFrac = 0;
-  for (let i = 0; i < n; i++) {
-    const a = pts[i], b = pts[(i + 1) % n];
-    const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
-    const t = len2 ? clamp(((x - a.x) * dx + (y - a.y) * dy) / len2, 0, 1) : 0;
-    const cx = a.x + t * dx, cy = a.y + t * dy;
-    const d2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
-    if (d2 < bestD2) { bestD2 = d2; best = i; bestFrac = t; }
-  }
-  return (best + bestFrac) / n;
+  return SIM.trackQuery(track, x, y, -1).phase;
 }
 
 // 프로 레이싱 : 바퀴수 추적 (중간 체크포인트를 지나야 시작선 통과를 1바퀴로 인정 → 역주행 악용 방지)
@@ -1499,7 +1042,7 @@ function updateLap(car) {
   if (gameMode !== "pro" || race.state !== "racing") return;
   if (race.done) { race.lapMs = race.finalMs; return; } // 완주 후 시간 고정
   const now = performance.now();
-  const ph = trackPhase(car.x, car.y, world.track);
+  const ph = car.lastPhase01; // 시뮬(stepCar)이 노면 처리 중 틱마다 계산한 진행도 재사용
   if (ph > 0.4 && ph < 0.6) race.checkpoint = true;           // 중간 통과
   if (race.checkpoint && race.lastPhase > 0.75 && ph < 0.25) { // 시작선 정방향 통과 → 랩 완료
     race.lap++;
@@ -1542,12 +1085,9 @@ function resetAttack() {
 /* 차를 출발선 바로 뒤에 세운다 (모든 트랙 공용) : 차 머리(비주얼 1.15배)가 출발선(6px)을
  *  넘지 않도록 라인 절반 3px + 여유 4px + 비주얼 반길이만큼 진행 반대로 물린다. */
 function placeBehindStart() {
-  const s = world.track.start;
-  const back = 3 + 4 + (CAR.length * 1.15) / 2;
-  CAR.x = s.x - Math.cos(s.angle) * back;
-  CAR.y = s.y - Math.sin(s.angle) * back;
-  CAR.angle = s.angle;
-  CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
+  const p = SIM.placeBehindStart(world.track);
+  SIM.teleport(CAR, p.x, p.y, p.angle); // 운동/외부속도/트랙힌트까지 완전 리셋
+  CAR.lastPhase01 = trackPhase(p.x, p.y, world.track);
 }
 
 // 자유 모드 타임어택 : "기록 시작" → 출발선 뒤로 이동 → 움직이면 계측 → 한 바퀴 후 종료
@@ -1572,7 +1112,7 @@ function cancelAttack() {
 function updateAttack(car) {
   if (!isTimeAttackMode() || attack.state === "idle") return;
   const now = performance.now();
-  const ph = trackPhase(car.x, car.y, world.track);
+  const ph = car.lastPhase01; // 시뮬이 틱마다 계산한 진행도 재사용
   if (attack.state === "armed") {
     if (Math.abs(car.lf) > 0.5 * KMH_TO_PXS) { // 속도가 조금이라도 생기면 즉시 계측 시작 (R+W 동시에도 안 굴러감)
       attack.state = "running";
@@ -1617,16 +1157,6 @@ function proGridPosition(slot) {
     y: s.y - fwd.y * back + right.y * lateral,
     angle: s.angle,
   };
-}
-
-// 점(px,py)에서 선분까지의 거리 제곱 (sqrt 생략으로 빠르게)
-function distToSegmentSq(px, py, x1, y1, x2, y2) {
-  const dx = x2 - x1, dy = y2 - y1;
-  const len2 = dx * dx + dy * dy;
-  const t = len2 ? clamp(((px - x1) * dx + (py - y1) * dy) / len2, 0, 1) : 0;
-  const cx = x1 + t * dx, cy = y1 + t * dy;
-  const ex = px - cx, ey = py - cy;
-  return ex * ex + ey * ey;
 }
 
 /* 플레이어 간 킬 판정은 서버 권위(server.js runCollisions)로 처리한다.
@@ -2010,12 +1540,7 @@ function drawGround() {
  * ========================================================================== */
 const BOSS_EID = 0;                 // 스냅샷 상의 보스 엔티티 id
 const BOSS_DRAW_SCALE = 0.68;       // 스프라이트(±160) → 월드 크기 (길이 약 218px)
-const BOSS_CLI_PILLARS = [          // 서버 BOSS_PILLARS 와 동일해야 함 (콜로세움 : 타원 링 8개)
-  { x: 2633, y: 1591, r: 84 }, { x: 2087, y: 2002, r: 84 },
-  { x: 1314, y: 2002, r: 84 }, { x: 767, y: 1591, r: 84 },
-  { x: 767, y: 1009, r: 84 }, { x: 1314, y: 598, r: 84 },
-  { x: 2087, y: 598, r: 84 }, { x: 2633, y: 1009, r: 84 },
-];
+const BOSS_CLI_PILLARS = SIM.BOSS_PILLARS; // 지오메트리 단일 소스(shared.js) — 렌더 전용 별칭
 
 const bossCli = {
   state: "idle", bossState: null,
@@ -2225,14 +1750,7 @@ const PLAZA_TREES = [[320, 700], [320, 1000], [320, 1300], [2480, 700], [2480, 1
 const PLAZA_BENCHES = [[480, 820, Math.PI / 2], [480, 1180, Math.PI / 2], [2320, 820, Math.PI / 2], [2320, 1180, Math.PI / 2]];
 const PLAZA_LAMPS = [[230, 460], [230, 1000], [230, 1540], [2570, 460], [2570, 1000], [2570, 1540]];
 // 원형 충돌 장애물 (x,y,r) — 시계 섬(중앙 로터리) + 분수/노점/나무/벤치/가로등. 클라 권위(각자 자기 차만 밀어냄).
-const PLAZA_OBSTACLES = [
-  { x: 1400, y: 1000, r: 486 }, // 중앙 시계 섬 (로터리) — 도로가 이 둘레를 돈다
-  ...PLAZA_FOUNTAINS.map(([x, y]) => ({ x, y, r: 82 })),
-  ...PLAZA_STALLS.map(([x, y]) => ({ x, y, r: 56 })),
-  ...PLAZA_TREES.map(([x, y]) => ({ x, y, r: 46 })),
-  ...PLAZA_BENCHES.map(([x, y]) => ({ x, y, r: 30 })),
-  ...PLAZA_LAMPS.map(([x, y]) => ({ x, y, r: 16 })),
-];
+const PLAZA_OBSTACLES = SIM.PLAZA_OBSTACLES; // 충돌 지오메트리 단일 소스(shared.js) — 장식 좌표는 위 배열(렌더)
 
 /* =============================================================================
  *  스모(프로토타입) — 원형 링 위에서 늘어나는 주먹으로 상대를 링 밖으로 밀어낸다.
@@ -2249,7 +1767,7 @@ const SUMO = {
 };
 // 스모 로컬 상태 : 주먹 애니(내 차) + 링밖 카운트다운 + 사망
 const sumo = { punchAt: 0, cdUntil: 0, outAt: 0, dead: false };
-function resetSumo() { sumo.punchAt = 0; sumo.cdUntil = 0; sumo.outAt = 0; sumo.dead = false; CAR.kvx = 0; CAR.kvy = 0; CAR.launchUntil = 0; CAR.spinV = 0; }
+function resetSumo() { sumo.punchAt = 0; sumo.cdUntil = 0; sumo.outAt = 0; sumo.dead = false; CAR.evx = 0; CAR.evy = 0; CAR.lockUntilTick = 0; CAR.spinV = 0; }
 // 주먹 뻗음 비율(0=접힘,1=최대) — 시작 시각으로부터 경과(ms)
 function punchPhase(elapsed) {
   if (elapsed < 0) return 0;
@@ -2543,15 +2061,8 @@ function drawCarPunch(x, y, angle, color, punchAt) {
 // 스모 갱신 : 링 밖 카운트다운(1초, 2자리) → 자멸 요청, 주먹 쿨다운/애니는 상태값만.
 function updateSumo(dt) {
   if (gameMode !== "sumo") return;
-  if (sumo.dead) { CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0; return; } // 부활 대기(서버 spawn)
-  // 넉백 비행 : 별도 발사 속도로 밀려남(주행 캡 무관) + 지수 감쇠 + 회전 플레어
-  if (CAR.kvx || CAR.kvy) {
-    CAR.x += CAR.kvx * dt; CAR.y += CAR.kvy * dt;
-    const decay = Math.exp(-dt / 0.5);                 // tau 0.5s → 발사속도×0.5 만큼 날아감
-    CAR.kvx *= decay; CAR.kvy *= decay;
-    if (CAR.spinV) { CAR.angle += CAR.spinV * dt; CAR.spinV *= decay; }
-    if (Math.hypot(CAR.kvx, CAR.kvy) < 24) { CAR.kvx = 0; CAR.kvy = 0; CAR.spinV = 0; } // 멈춤
-  }
+  if (sumo.dead) return; // 부활 대기(서버 spawn) — 정지는 env.freeze 가 처리
+  // 넉백 비행(ev 채널)/스핀은 시뮬(stepCar)이 적분한다 — 여기선 링아웃 판정만.
   const now = performance.now();
   if (now < CAR.invulnUntil) { sumo.outAt = 0; return; } // 스폰 무적 동안엔 링밖 카운트다운 안 시작(전환 글리치 방어)
   const d = Math.hypot(CAR.x - SUMO.cx, CAR.y - SUMO.cy);
@@ -2576,46 +2087,8 @@ function throwPunch() {
   if (net.connected && net.ws.readyState === WebSocket.OPEN) net.ws.send(JSON.stringify({ type: "punch" }));
 }
 
-// 원형 장애물(px,py,pr) 밖으로 차(OBB)를 밀어냄 + 파고드는 속도 성분 제거. 밀어낸 깊이(0=충돌 없음) 반환.
-//  시각 차체 최근접점 기준이라 어느 각도로 박아도 가장자리가 딱 맞닿는다. (보스 기둥/광장 장애물 공용)
-function collideCircle(car, hl, hw, cos, sin, px, py, pr) {
-  const dx = px - car.x, dy = py - car.y;
-  const lx = dx * cos + dy * sin, ly = -dx * sin + dy * cos;   // 장애물 중심 → 차 로컬
-  const nx = clamp(lx, -hl, hl), ny = clamp(ly, -hw, hw);      // OBB 내 최근접점
-  const ddx = lx - nx, ddy = ly - ny;
-  const d = Math.hypot(ddx, ddy);
-  if (d >= pr) return 0;
-  let ux, uy;
-  if (d < 0.001) { // 중심이 차체 안 : 차 중심 기준으로 밀어냄 (정확히 겹치면 기본 +x 로 탈출)
-    const dd = Math.hypot(dx, dy);
-    if (dd < 0.001) { ux = 1; uy = 0; } else { ux = -dx / dd; uy = -dy / dd; }
-  } else { const wx = ddx * cos - ddy * sin, wy = ddx * sin + ddy * cos; const n = Math.hypot(wx, wy); ux = -wx / n; uy = -wy / n; }
-  const push = pr - d;
-  car.x += ux * push; car.y += uy * push;
-  const vr = car.vx * ux + car.vy * uy;                        // 장애물 쪽 속도 성분 제거
-  if (vr < 0) { car.vx -= vr * ux; car.vy -= vr * uy; decompose(car); }
-  return push;
-}
-
-// 기둥 충돌 : 아레나 기둥을 원형 장애물로 밀어냄
-function bossPillarCollision(car) {
-  const { hl, hw } = carHalfExtents(car);
-  const cos = Math.cos(car.angle), sin = Math.sin(car.angle);
-  for (const p of BOSS_CLI_PILLARS) collideCircle(car, hl, hw, cos, sin, p.x, p.y, p.r);
-}
-
-// 광장 장애물 충돌 : 시계 섬/분수/노점/나무/벤치/가로등에 부딪힘 (박으면 충돌음)
-function plazaObstacleCollision(car) {
-  const { hl, hw } = carHalfExtents(car);
-  const cos = Math.cos(car.angle), sin = Math.sin(car.angle);
-  const preSpeed = Math.hypot(car.vx, car.vy);
-  let hit = 0;
-  for (const o of PLAZA_OBSTACLES) hit = Math.max(hit, collideCircle(car, hl, hw, cos, sin, o.x, o.y, o.r));
-  if (hit > 0.5 && preSpeed > 60) {
-    const now = performance.now();
-    if (now - lastWallSfx > 250) { lastWallSfx = now; SFX.collision(clamp(preSpeed / 700, 0.3, 1)); }
-  }
-}
+/* 원형 장애물(보스 기둥/광장) 충돌은 시뮬(stepCar env.obstacles)이 담당한다.
+ *  지오메트리 단일 소스 = shared.js (아래 별칭은 렌더 전용). */
 
 /* ---- 스킬 텔레그래프 (바닥 위, 차 아래) ---- */
 function drawBossTelegraphs() {
@@ -4511,12 +3984,11 @@ function connect() {
       //  로비(서버 미입장)·테스트·타임어택 코스(전부 클라이언트가 스타트 라인 뒤에 직접 배치)에선 무시 —
       //  구버전 서버가 새 코스 모드를 서바이벌로 오인해 보내는 랜덤 spawn 에 안 끌려가게(혼재 배포 방어).
       if (gameMode === "lobby" || gameMode === "test" || isTimeAttackMode()) return;
-      CAR.x = msg.x; CAR.y = msg.y; CAR.angle = msg.angle;
-      CAR.vx = 0; CAR.vy = 0; CAR.lf = 0; CAR.ll = 0; CAR.steerInput = 0;
+      SIM.teleport(CAR, msg.x, msg.y, msg.angle); // 운동/외부속도/트랙힌트까지 완전 리셋
       CAR.invulnUntil = performance.now() + 1500;
       net.pendingTeleport = true; // 남들 화면에서 슬라이드 없이 스냅되도록
       if (gameMode === "boss") { bossCli.dead = false; bossCli.respawnAt = 0; updateCamera(CAR, 0); } // 보스전 부활/배치 복귀
-      if (gameMode === "sumo") { sumo.dead = false; sumo.outAt = 0; CAR.kvx = 0; CAR.kvy = 0; CAR.launchUntil = 0; CAR.spinV = 0; updateCamera(CAR, 0); } // 스모 부활 (가운데로)
+      if (gameMode === "sumo") { sumo.dead = false; sumo.outAt = 0; CAR.lockUntilTick = 0; updateCamera(CAR, 0); } // 스모 부활 (가운데로)
     } else if (msg.type === "bump") {
       // 서버 권위 충돌 임펄스 → 내 차 속도에 반영(진짜 밀치기/밀려남)
       if (COLLISION_ENABLED && gameState === "playing" && gameMode !== "lobby") applyBump(Number(msg.vx) || 0, Number(msg.vy) || 0);
@@ -4524,10 +3996,10 @@ function connect() {
       // 스모 : 주먹에 맞아 시원하게 날아감 — 주행 캡과 무관한 별도 발사 속도(감쇠). 나는 동안 입력 잠금.
       if (gameMode === "sumo" && gameState === "playing" && !sumo.dead) {
         const vx = Number(msg.vx) || 0, vy = Number(msg.vy) || 0;
-        CAR.kvx = (CAR.kvx || 0) + vx; CAR.kvy = (CAR.kvy || 0) + vy;
+        CAR.evx += vx; CAR.evy += vy;                          // 외부 속도 채널(주행 캡 면제)
         CAR.vx = CAR.vy = CAR.lf = CAR.ll = 0;                 // 기존 주행 관성 제거 → 넉백만 깔끔하게
-        CAR.launchUntil = performance.now() + 650;             // 나는 동안 조작 잠금
-        CAR.spinV = (Math.random() < 0.5 ? -1 : 1) * (5 + Math.random() * 4); // 빙글 도는 플레어
+        CAR.lockUntilTick = simTick + SIM.SUMO.lockTicks;      // 나는 동안 조작 잠금(틱)
+        CAR.spinV = (Math.random() < 0.5 ? -1 : 1) * (5 + Math.random() * 4); // 빙글 도는 플레어 (v4 3단계에 서버 값으로)
         addShake(26); SFX.collision(0.95);
       }
     } else if (msg.type === "sumoPunch") {
@@ -4651,9 +4123,9 @@ function connect() {
     } else if (msg.type === "bossStun") {
       // 충격파 : 넉백 + 잠시 입력 잠금 (즉사 아님)
       if (gameMode === "boss" && !bossCli.dead && !bossCli.spec) {
-        CAR.vx += Number(msg.kx) || 0; CAR.vy += Number(msg.ky) || 0;
-        decompose(CAR);
+        CAR.evx += Number(msg.kx) || 0; CAR.evy += Number(msg.ky) || 0; // 외부 속도 채널
         bossCli.stunUntil = performance.now() + (msg.ms || 1200);
+        CAR.stunUntilTick = simTick + Math.round((msg.ms || 1200) / SIM.TICK_MS); // 입력만 잠금(관성 유지)
         addShake(26);
         SFX.collision(0.8);
       }
@@ -5633,41 +5105,61 @@ document.addEventListener("visibilitychange", () => {
 
 
 /* =============================================================================
- *  메인 루프
+ *  메인 루프 (v4) — 고정 60Hz 시뮬 틱(accumulator) + 렌더 전용 부분 스텝
+ * -----------------------------------------------------------------------------
+ *  - 물리는 정확히 60Hz 로만 적분한다(결정론 — 주사율 무관 동일 거동).
+ *  - 렌더는 잔여 시간을 "사본 상태 + 라이브 키" 부분 스텝으로 그린다
+ *    → 144Hz 에서도 매끈하고, 새 키 입력이 다음 프레임에 바로 보인다(체감 지연 0).
+ *  - 스톨(탭 복귀 등)은 캐치업 상한 6틱 — 초과분은 버린다(폭주 방지).
  * ========================================================================== */
 let lastTime = performance.now();
+let simTick = 0;        // 로컬 시뮬 틱 (v4 프로토콜에서 서버 틱과 동기화된다)
+let simAcc = 0;         // 고정틱 accumulator (초)
+const simEvents = [];   // 시뮬 이벤트(벽/장애물) — 정식 틱에서만 채워지고 즉시 소비
+const RENDER_CAR = {};  // 렌더 부분 스텝용 사본 (매 프레임 CAR 에서 복사)
+const MAX_CATCHUP_TICKS = 6;
 
 function frame(now) {
-  // 프레임 간 실제 경과시간(dt). 폭발 방지를 위해 상한 클램프.
   let dt = (now - lastTime) / 1000;
   lastTime = now;
   lastFrameDtMs = dt * 1000; // 원본 dt(ms) — 로컬 스톨 중 지터 표본 제외용
-  dt = Math.min(dt, CONFIG.MAX_DT);
 
   // 메뉴 화면(미입장)에선 물리/네트워크를 멈춘다 (메뉴 오버레이가 화면을 덮음)
   if (gameState !== "playing") {
     if (sfxDrifting) { sfxDrifting = false; SFX.driftStop(); } // 재생 중이던 드리프트음 정지
     stopEngineSfx();          // 엔진 드론 정지
     sfxBoostStage = 0;        // 부스트 단계 리셋 → 재진입 시 다시 울림
+    simAcc = 0;               // 재입장 시 밀린 시간 버림
     requestAnimationFrame(frame);
     return;
   }
 
-  // ----- 물리 파이프라인 (역할 분리) -----
-  updateInput(CAR, dt);       // 입력
-  updateSteering(CAR, dt);    // 조향 (heading 회전)
-  decompose(CAR);             // 속도 → 전진/측면 분해 (슬립 앵글 발생)
-  updateEngine(CAR, dt);      // 엔진 가속
-  updateBrake(CAR, dt);       // 브레이크
-  updateReverse(CAR, dt);     // 후진 (S)
-  updateResistance(CAR, dt);  // 공기/구름 저항
-  updateSurface(CAR, dt);     // 노면(레이싱 트랙 이탈 시 감속)
-  updateGrip(CAR, dt);        // 그립 (측면 마찰) → 드리프트
-  updatePhysics(CAR, dt);     // 속도/위치 합성·적분
-  updateCollision(CAR);       // 맵 경계 충돌
-  updateLap(CAR);             // 프로 레이싱 바퀴 추적
-  updateAttack(CAR);          // 자유 모드 타임어택 계측
-  updateSkid(CAR);            // 스키드 마크
+  // ----- 고정틱 시뮬 -----
+  simAcc += dt;
+  let ticked = 0;
+  while (simAcc >= SIM.DT && ticked < MAX_CATCHUP_TICKS) {
+    simAcc -= SIM.DT;
+    simTick++;
+    ticked++;
+    // 보스 스턴(레거시 wall-clock) → 틱 소프트락으로 반영 (v4 3단계에서 이벤트 틱화)
+    if (gameMode === "boss" && performance.now() < bossCli.stunUntil && CAR.stunUntilTick <= simTick) {
+      CAR.stunUntilTick = simTick + 1;
+    }
+    SIM.stepGroup([{ s: CAR, buttons: sampleButtons(), id: net.id || 0 }], buildEnv(simTick), { events: simEvents });
+    updateLap(CAR);           // 프로 레이싱 바퀴 추적 (틱 상태 기준)
+    updateAttack(CAR);        // 타임어택 계측
+  }
+  if (simAcc >= SIM.DT) simAcc = 0; // 스톨 — 캐치업 상한 초과분은 버림
+  consumeSimEvents(simEvents);      // 벽/장애물 충돌음
+
+  // ----- 렌더 부분 스텝 : 사본 상태로 잔여 시간만 적분 (이벤트 무음, 시뮬 비오염) -----
+  Object.assign(RENDER_CAR, CAR);
+  if (simAcc > 0.0005) {
+    SIM.stepCar(RENDER_CAR, sampleButtons(), buildEnv(simTick + 1), simAcc / SIM.DT, null);
+  }
+
+  // ----- 프레임 로직 (임의 dt 허용 — 시뮬 밖) -----
+  updateSkid(CAR);            // 스키드 마크 (틱 상태 기준)
   if (gameMode === "lobby") updateLobby(dt); // 로비: 오버레이 상태 + 게이트 진입 판정
   else if (gameMode === "soccer") { updateSoccerCar(CAR); updateBall(dt); } // 축구: 차 벽가둠 + 공 물리
   else if (gameMode === "sumo") updateSumo(dt); // 스모: 링 밖 카운트다운/자멸
@@ -5675,17 +5167,17 @@ function frame(now) {
   updateDriftSfx();           // 드리프트 스크리치(지속음) 시작/정지
   updateEngineSfx(spdKmh);    // 엔진 드론 (속도 → 피치)
   updateBoostSfx(spdKmh);     // 부스트 단계음 (450/500/525)
-  updateCamera(CAR, dt);      // 카메라 추적 (+ 흔들림 감쇠)
+  updateCamera(RENDER_CAR, dt); // 카메라는 렌더 상태(부분 스텝)를 따라간다 — 144Hz 매끈함
 
   // ----- 네트워크 -----
-  netSend(CAR, now);          // 내 상태 송신
+  netSend(CAR, now);          // 내 상태 송신 (시뮬 상태 기준)
   updateRemotes(dt);          // 원격 차량 보간 (서버 타임스탬프 기반)
   updatePlayerCollision(CAR); // 원격 위치 갱신 후, 내 차를 상대 밖으로 밀어냄(겹침 방지)
   updateExplosions(dt);       // 폭발 이펙트 갱신 (킬 판정은 서버가 통지)
   updateBossFx(dt);           // 보스전 연출(폭발/타이어) 갱신
   bossSpectateCamera(dt);     // 보스전 관전 : 카메라가 보스를 따라감
 
-  render(CAR);                // 렌더
+  render(RENDER_CAR);         // 렌더 (내 차 = 부분 스텝 상태)
 
   requestAnimationFrame(frame);
 }
