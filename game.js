@@ -1002,28 +1002,33 @@ function raceFrozen() {
 
 // 시뮬 이벤트 소비 : 벽/장애물 충돌음 (연속 마찰 스팸 방지 쿨다운은 기존 그대로)
 let lastWallSfx = 0;
+let lastCarHitSfx = 0;
 function consumeSimEvents(events) {
   for (const e of events) {
     if (e.k === "wall" || e.k === "obstacle") {
       const now = performance.now();
       if (now - lastWallSfx > 250) { lastWallSfx = now; SFX.collision(clamp(e.speed / 700, 0.3, 1)); }
+    } else if (e.k === "carHit") {
+      const now = performance.now();
+      if (now - lastCarHitSfx > 120) {
+        lastCarHitSfx = now;
+        SFX.collision(clamp(e.dv / 700, 0.25, 0.9));
+        addShake(Math.min(e.dv * 0.012, 10));
+      }
     }
   }
   events.length = 0;
 }
 
-/* 다른 플레이어와 겹침 방지(위치만) — 속도/운동량은 서버 권위(bump).
- *  v4 3단계에서 예측 충돌(SIM.stepGroup collide)로 대체 예정. */
-const COLLISION_ENABLED = false; // ★ 물리 충돌/밀치기 임시 OFF — 서버 플래그와 함께 전환
-function updatePlayerCollision(car) {
-  if (!COLLISION_ENABLED) return;
-  if (gameMode === "lobby" || !othersVisible()) return;
-  for (const [, r] of remotePlayers) {
-    const mtv = SIM.obbMTV(car, r);
-    if (!mtv) continue;
-    car.x += mtv.nx * mtv.depth;
-    car.y += mtv.ny * mtv.depth;
-  }
+/* 차대차 충돌 예측 (NETCODE.md §6) — 내 차와 전방시뮬된 상대를 "같은 틱"에서
+ *  shared 충돌로 즉시 해석한다(서버 왕복 대기 없는 몸싸움 반응). 예측 임펄스는
+ *  50% 강도(impulseScale 0.5) : 오차가 항상 "실제보다 부드러운 쪽"이라 스무딩이
+ *  잘 먹고, 나머지 절반은 스냅샷의 ev 채널로 도달한다. 서버가 권위. */
+const clientContacts = new Map(); // pairId -> 접촉 법선 (히스테리시스)
+function clientCollideOn() {
+  if (gameMode === "plaza" || gameMode === "survival" || gameMode === "sumo" || gameMode === "boss") return true;
+  if (gameMode === "pro" && race.state === "racing") return true;
+  return false;
 }
 
 // 히트박스 = 시각 차체 크기 (렌더/이펙트용 — 시뮬은 SIM.CAR_HL/HW 직접 사용)
@@ -4004,7 +4009,7 @@ function connect() {
       if (gameMode === "sumo") { sumo.dead = false; sumo.outAt = 0; CAR.lockUntilTick = 0; updateCamera(CAR, 0); } // 스모 부활 (가운데로)
     } else if (msg.type === "bump") {
       // 서버 권위 충돌 임펄스 → 내 차 속도에 반영(진짜 밀치기/밀려남)
-      if (COLLISION_ENABLED && gameState === "playing" && gameMode !== "lobby") applyBump(Number(msg.vx) || 0, Number(msg.vy) || 0);
+      if (gameState === "playing" && gameMode !== "lobby") applyBump(Number(msg.vx) || 0, Number(msg.vy) || 0);
     } else if (msg.type === "sumoKnock") {
       // 스모 : 주먹에 맞아 시원하게 날아감 — 주행 캡과 무관한 별도 발사 속도(감쇠). 나는 동안 입력 잠금.
       if (gameMode === "sumo" && gameState === "playing" && !sumo.dead) {
@@ -4892,6 +4897,7 @@ function noteServerTick(tick, atMs) {
   else clock.off = Math.max(off, clock.off - 0.0008);                  // 완만 하강(드리프트/경로 변화 적응)
 }
 // 서버가 스냅샷 헤더로 알려주는 입력 도착 위상(+지각/-여유) → lead 적응
+const MAX_LEAD = 20; // 편도 ~300ms 까지 수용 (서버 수용 창 24틱과 짝)
 function notePhase(v) {
   const now = performance.now();
   clock.phaseWin.push({ t: now, v });
@@ -4899,8 +4905,8 @@ function notePhase(v) {
   // 2등 최대(단발 스파이크 무시, 재발만 반영 — v3 jitWin 패턴)
   let m1 = -127, m2 = -127;
   for (const s of clock.phaseWin) { if (s.v > m1) { m2 = m1; m1 = s.v; } else if (s.v > m2) m2 = s.v; }
-  if (m2 >= 0) {                       // 지각 재발 → lead 즉시 상향
-    clock.lead = Math.min(8, clock.lead + 1);
+  if (m2 >= 0) {                       // 지각 재발 → 지각량만큼 즉시 상향(고핑 수렴 가속)
+    clock.lead = Math.min(MAX_LEAD, clock.lead + Math.max(1, m2 + 1));
     clock.phaseWin.length = 0;
   } else if (m1 <= -3 && now - clock.leadDownAt > 5000 && clock.lead > 1) {
     clock.lead -= 1; clock.leadDownAt = now; // 여유 과다 → 5초당 1틱 완만 하향
@@ -4995,7 +5001,8 @@ function decodeSnap4(ab) {
 }
 
 /* ---- 상대 차 : 기준 주입 + 전방 시뮬 ---- */
-const REMOTE_BACKOFF = 1;       // 상대는 내 예측 틱 - 1 까지 (미예측 오차 절감 튜너블)
+const REMOTE_BACKOFF = 0;       // 상대를 내 예측 틱까지 전방 시뮬 — 1틱만 늦춰도 vmax 에서
+                                //  양 화면 합산 88px 편차가 생긴다(시점 일치가 최우선)
 const REMOTE_STALE_MS = 250;    // 스냅샷 공백 시 전방 시뮬 유지 상한
 function buildRemoteEnv(tick) {
   const env = buildEnv(tick);
@@ -5054,7 +5061,20 @@ function reconcile(me, T) {
   const dx = me.x - h.x, dy = me.y - h.y;
   let da = me.angle - h.angle; while (da > Math.PI) da -= Math.PI * 2; while (da < -Math.PI) da += Math.PI * 2;
   const discreteOk = !!(me.state & 1) === !!h.drifting;
-  if (dx * dx + dy * dy < 0.25 && Math.abs(da) < 0.0088 && discreteOk) return; // 0.5px / 0.5도 이내 = 일치
+  if (dx * dx + dy * dy < 0.4 && Math.abs(da) < 0.0088 && discreteOk) return; // ~0.6px / 0.5도 = 일치
+
+  // 접촉 인지 : 몸싸움 중엔 되감기+재생 대신 시뮬을 서버 쪽으로 부드럽게 블렌드
+  //  (재생이 캐시된 상대 궤적과 임펄스를 다시 만들어 진동하는 것 방지 — 설계 리뷰 블로커)
+  const inContact = !!(me.state & 16) || (CAR.contactTick >= T - 3);
+  const posErr2 = dx * dx + dy * dy;
+  if (inContact && posErr2 < 3600) { // < 60px
+    CAR.x += dx * 0.2; CAR.y += dy * 0.2;
+    CAR.angle += da * 0.2;
+    CAR.vx += ((me.vx || 0) - CAR.vx) * 0.3; CAR.vy += ((me.vy || 0) - CAR.vy) * 0.3;
+    CAR.evx += ((me.evx || 0) - CAR.evx) * 0.3; CAR.evy += ((me.evy || 0) - CAR.evy) * 0.3;
+    SIM.decompose(CAR);
+    return;
+  }
 
   // 서버 상태 채택 → 이후 입력 재생
   const oldX = CAR.x, oldY = CAR.y, oldA = CAR.angle;
@@ -5226,9 +5246,23 @@ function frame(now) {
     }
     const btns = sampleButtons(true);
     pushInputRecord(simTick, btns);          // 서버로 보낼 입력 (직전 2틱 중복 동봉)
-    SIM.stepGroup([{ s: CAR, buttons: btns, id: net.id || 0 }], buildEnv(simTick), { events: simEvents });
+    const env = buildEnv(simTick);
+    const entries = [{ s: CAR, buttons: btns, id: net.id || 0 }];
+    let collide = false;
+    if (clientCollideOn() && othersVisible()) {
+      const rEnv = buildRemoteEnv(simTick);
+      for (const [id, r] of remotePlayers) {
+        if (r.extrap !== 0 || r.dead) continue;
+        if (r.simTick !== simTick - 1) continue; // 전방시뮬이 정확히 따라온 상대만 페어로
+        if (Math.hypot(r.sim.x - CAR.x, r.sim.y - CAR.y) > 400) continue;
+        entries.push({ s: r.sim, buttons: r.buttons, id, env: rEnv, _r: r });
+        collide = true;
+      }
+    }
+    SIM.stepGroup(entries, env, { events: simEvents, collide, impulseScale: 0.5, contacts: clientContacts });
+    for (const e of entries) if (e._r) e._r.simTick = simTick; // 같이 스텝된 상대 틱 마킹
     recordHist(simTick, btns);               // 조정(reconciliation)용 사후 상태 기록
-    for (const [, r] of remotePlayers) advanceRemote(r); // 상대 전방 시뮬도 같은 틱으로
+    for (const [, r] of remotePlayers) advanceRemote(r); // 나머지 상대 전방 시뮬
     updateLap(CAR);           // 프로 레이싱 바퀴 추적 (틱 상태 기준)
     updateAttack(CAR);        // 타임어택 계측
   }
@@ -5261,7 +5295,6 @@ function frame(now) {
 
   // ----- 네트워크 -----
   updateRemoteDisplay(dt);    // 상대 표시 스무딩 (목표 = 전방 시뮬 상태)
-  updatePlayerCollision(CAR); // 원격 위치 갱신 후, 내 차를 상대 밖으로 밀어냄(겹침 방지)
   updateExplosions(dt);       // 폭발 이펙트 갱신 (킬 판정은 서버가 통지)
   updateBossFx(dt);           // 보스전 연출(폭발/타이어) 갱신
   bossSpectateCamera(dt);     // 보스전 관전 : 카메라가 보스를 따라감

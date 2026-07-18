@@ -616,7 +616,7 @@ function applyState(p, m) {
  *  구(v2/v3) 클라이언트의 바이너리 state 는 kicked{update} 로 새로고침 유도.
  * ========================================================================== */
 const MSG_INPUT = 4, MSG_SNAP4 = 5;
-const MAX_LEAD_TICKS = 10;        // 수용 입력 틱 상한 (serverTick + 이 값까지)
+const MAX_LEAD_TICKS = 24;        // 수용 입력 틱 상한 (클라 lead 최대 20 + 지터 여유)
 const INPUT_RING_MAX = 32;        // 인당 입력 버퍼 상한
 const STARVE_COAST_TICKS = 5;     // 이 이상 결손 → 중립 입력(코스트)
 const STARVE_FREEZE_TICKS = 45;   // 이 이상 결손 → 하드 프리즈 + 판정 제외
@@ -625,6 +625,18 @@ const BACKPRESSURE_SKIP = 64 * 1024, BACKPRESSURE_KILL = 1024 * 1024;
 const RESTART_CD_TICKS = 60;      // R(출발선 복귀) 쿨다운
 
 let serverTick = 0;
+
+// 차대차 충돌 활성 모드 (NETCODE.md §9 매트릭스). 프로는 레이스 중에만.
+const COLLIDE_MODES = new Set(["plaza", "survival", "sumo", "boss"]);
+function groupCollides(key, g) {
+  if (key.startsWith("room:")) { // 프로 방 : 레이스 중에만 몸싸움
+    const rid = Number(key.slice(5));
+    const room = rooms.get(rid);
+    return !!(room && room.state === "racing");
+  }
+  return COLLIDE_MODES.has(key.slice(5)); // "mode:" 접두
+}
+const groupContacts = new Map(); // groupKey -> Map(pairId -> {nx,ny,tick}) : 접촉 법선 히스테리시스
 
 // 모드별 시뮬 환경 (트랙/장애물/경계) — 순수 데이터, 1회 구성
 const MODE_ENV = {};
@@ -778,6 +790,24 @@ function sendSnap(p, body, keyframe) {
   ws.send(Buffer.concat([head, body]));
 }
 
+/* 타임어택 기록 반영 — 서버 시뮬이 산출한 틱 수 기준 (기존 3s~10min·체류 검증 유지) */
+function submitTimeAttack(p, ms) {
+  const field = RECORD_FIELD[p.mode];
+  if (!p.active || !field || !p.account) return;
+  if (!Number.isFinite(ms) || ms < 3000 || ms > 600000) return;
+  const now = Date.now();
+  if (now - (p.taModeSince || now) < ms * 0.7) return; // 벽시계 체류보다 짧은 기록 = 이상
+  const u = users[p.account.userId];
+  if (!u) return;
+  if (!u[field] || Math.floor(ms) < u[field]) {
+    u[field] = Math.floor(ms);
+    persistUser(p.account.userId);
+    sendStats(p);
+    broadcastRecords(p.mode);
+    recomputeAllTitles();
+  }
+}
+
 /* --- 통합 60Hz 틱 루프 ------------------------------------------------------
  *  입력 소화 → 그룹 시뮬 → 규칙 판정(킬/펀치/링아웃/랩) → 스냅샷.
  *  hrtime 기반 드리프트 보정, 캐치업 상한 6틱(스톨 → 히치 선언 + 키프레임). */
@@ -812,6 +842,10 @@ function doTick() {
         SIM.teleport(p.sim, st.x, st.y, st.angle);
         p.restartReadyTick = serverTick + RESTART_CD_TICKS;
         p.needKeyframe = true;
+        // 타임어택 계측 armed — 기록은 서버 시뮬로 산출(클라 제출 신뢰 안 함)
+        if (RECORD_FIELD[p.mode]) {
+          p.att = { state: 1, startTick: 0, checkpoint: false, lastPhase: p.sim.lastPhase01 || 0 };
+        }
       }
       const env = envForPlayer(p);
       const freeze =
@@ -831,7 +865,14 @@ function doTick() {
     }
     if (!entries.length) continue;
     const groupEnv = entries[0].env;
-    SIM.stepGroup(entries, groupEnv, { collide: false }); // 차대차 충돌은 3단계에서 활성화
+    const collide = groupCollides(key, g) && entries.length >= 2;
+    let contacts = null;
+    if (collide) {
+      contacts = groupContacts.get(key);
+      if (!contacts) { contacts = new Map(); groupContacts.set(key, contacts); }
+      for (const e of entries) e.s.noCollide = e.env.freeze || undefined; // 기아 프리즈/대기 차는 유령
+    }
+    SIM.stepGroup(entries, groupEnv, { collide, impulseScale: 1, contacts });
     g.entries = entries;
   }
 
@@ -842,6 +883,12 @@ function doTick() {
       if (!p.hist) p.hist = [];
       p.hist.push({ t: now, x: p.sim.x, y: p.sim.y, angle: p.sim.angle });
       while (p.hist.length > 2 && p.hist[0].t < now - 400) p.hist.shift();
+
+      // 타임어택 : 서버 권위 계측 (클라와 같은 attackStep — 표시만 클라 로컬)
+      if (p.att && p.att.state) {
+        const ev = SIM.attackStep(p.att, p.sim, serverTick);
+        if (ev && ev.k === "finish") submitTimeAttack(p, SIM.ticksToMs(ev.ticks));
+      }
 
       // 스모 링아웃 : 서버 판정 (클라 자가신고 sumoDead 폐지)
       if (p.mode === "sumo" && !p.starved) {
@@ -933,6 +980,13 @@ function doTick() {
   if (bossG && bossG.body) {
     for (const [, p] of players) {
       if (p.active && p.mode === "boss" && p.bossSpec) sendSnap(p, bossG.body, bossG.bodyKey);
+    }
+  }
+  // 접촉 히스테리시스 맵 청소 (오래된 페어/사라진 그룹)
+  if (serverTick % 300 === 0) {
+    for (const [key, m] of groupContacts) {
+      if (!groups.has(key)) { groupContacts.delete(key); continue; }
+      for (const [pid, c] of m) if (serverTick - c.tick > 60) m.delete(pid);
     }
   }
 }
@@ -1273,23 +1327,7 @@ wss.on("connection", (ws) => {
       send(p, { type: "rankings", mode: msg.mode, entries: arr });
 
     } else if (msg.type === "timeAttack") {
-      // 자유/하드 타임어택 기록 제출 → 로그인 유저만, 개인 최고기록 갱신 시 TOP10 반영
-      if (p.mode === "boss") return; // 보스전 기록은 서버가 직접 기록 (클라 제출 없음)
-      const field = RECORD_FIELD[p.mode]; // racing→bestB1, hard→bestB2, serp→bestB3 (새 컬럼)
-      if (!p.active || !field || !p.account) return; // 타임어택 모드 + 로그인 유저만
-      const ms = Number(msg.ms);
-      if (!Number.isFinite(ms) || ms < 3000 || ms > 600000) return; // 3초~10분 범위만 인정
-      const now = Date.now();
-      if (now - (p.taModeSince || now) < ms * 0.7) return; // 모드 체류 벽시계보다 짧은 기록 = 조작
-      const u = users[p.account.userId];
-      if (!u) return;
-      if (!u[field] || Math.floor(ms) < u[field]) {
-        u[field] = Math.floor(ms); // 내림 : 화면 타이머(내림)와 일치 — 반올림 시 경계에서 1단위 크게 기록됨
-        persistUser(p.account.userId);
-        sendStats(p);              // 대시보드 최고기록 갱신
-        broadcastRecords(p.mode);  // 해당 모드 TOP10 갱신
-        recomputeAllTitles();      // 순위가 밀린 다른 유저의 회수까지 — 전원 재판정
-      }
+      // v4 : 타임어택 기록은 서버가 자기 시뮬로 직접 산출한다(doTick attackStep) — 클라 제출 무시.
 
     } else if (msg.type === "titlesInfo") {
       // 칭호 패널 데이터 요청

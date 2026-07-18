@@ -92,8 +92,7 @@ const COL_YAW_V0 = 300;         // 이하 vrel 요 토크 0
 const IMPACT_SLIDE_DV = 120;    // 이 이상 피격 시 임팩트 슬라이드 발동
 const IMPACT_SLIDE_TICKS = 12;  // 저그립 창(틱) — 약 200ms
 const IMPACT_SLIDE_GRIP = 3.0;  // 창 동안 그립 상한(1/s)
-const SUBSTEP_LEN = 13;         // CCD 서브스텝 길이(px) ~= 반폭
-const SUBSTEP_MAX = 6;          // 서브스텝 상한
+const FIXED_SUBSTEPS = 4;       // CCD 서브스텝 (상수 — 클라/서버 무조건 동일 : 결정론)
 
 /* =============================================================================
  *  월드 치수 (렌더 무관 데이터만 — 클라 WORLD 는 여기에 렌더 정보를 더한다)
@@ -721,23 +720,12 @@ function resolveCarCar(a, b, tick, impulseScale, contacts, pairId) {
 function stepGroup(entries, env, opts) {
   const collide = opts && opts.collide;
   const events = opts ? opts.events : null;
-  // 서브스텝 수 : 최대 변위(단독 + 페어 상대) / SUBSTEP_LEN — 상태만으로 결정(결정론)
-  let maxDisp = 0;
-  for (const e of entries) {
-    const s = e.s;
-    const sp = (Math.hypot(s.vx + s.evx, s.vy + s.evy)) * DT;
-    if (sp > maxDisp) maxDisp = sp;
-  }
-  if (collide) {
-    for (let i = 0; i < entries.length; i++) {
-      for (let j = i + 1; j < entries.length; j++) {
-        const a = entries[i].s, b = entries[j].s;
-        const rel = Math.hypot((a.vx + a.evx) - (b.vx + b.evx), (a.vy + a.evy) - (b.vy + b.evy)) * DT;
-        if (rel > maxDisp) maxDisp = rel;
-        }
-    }
-  }
-  const substeps = clamp(Math.ceil(maxDisp / SUBSTEP_LEN), 1, SUBSTEP_MAX);
+  // 서브스텝 수는 "무조건 상수" — 동적 계산은 서버(그룹 전원)와 클라 예측(자신+
+  //  전방시뮬 상대)의 그룹 구성이 달라 적분 횟수가 어긋나고, 그 차이가 매 틱
+  //  재발산(벽 접촉 시 0.75px/틱 상시 보정)을 만든다(netbot 실측). 고정 4 :
+  //  vmax 자차 11.1px/서브스텝, 정면 최악 상대 22.2px < 결합 측면 반폭(26px) —
+  //  터널링 없음. 비용은 전 차량 상시 4배지만 스텝 자체가 싸서 무시 가능.
+  const substeps = FIXED_SUBSTEPS;
   const dtScale = 1 / substeps;
 
   for (let step = 0; step < substeps; step++) {
@@ -823,7 +811,7 @@ return {
   TICK_RATE, TICK_MS, DT, A2I, KMH_TO_PXS, PIXELS_PER_METER,
   BTN, CAR_SPEC, CAR_HL, CAR_HW, VMAX,
   OFFTRACK_DRAG, SUMO, PLAZA_OBSTACLES, PLAZA_SPAWNS, BOSS_PILLARS, WORLD_DIMS,
-  SUBSTEP_LEN, SUBSTEP_MAX, EV_TAU,
+  FIXED_SUBSTEPS, EV_TAU,
   IMPACT_SLIDE_DV, IMPACT_SLIDE_TICKS,
   clamp, normAngle,
   buildTracks, PRO_COURSE_KEYS, trackQuery,
