@@ -392,11 +392,13 @@ function applyServerState(s, snap) {
   if (snap.steer !== undefined) s.steerInput = snap.steer;
   if (snap.drifting !== undefined) {
     s.drifting = !!snap.drifting;
-    s.driftBoostT = s.drifting ? 1 : 0;
+    // 램프 중간값이 오면 그대로(완전 복원), 없으면 이진 근사(구 스냅샷 호환)
+    s.driftBoostT = snap.driftBoostT !== undefined ? snap.driftBoostT : (s.drifting ? 1 : 0);
   }
   if (snap.invulnTicks !== undefined && snap.tick !== undefined) s.invulnUntilTick = snap.tick + snap.invulnTicks;
   if (snap.lockTicks !== undefined && snap.tick !== undefined) s.lockUntilTick = snap.tick + snap.lockTicks;
   if (snap.stunTicks !== undefined && snap.tick !== undefined) s.stunUntilTick = snap.tick + snap.stunTicks;
+  if (snap.slideTicks !== undefined && snap.tick !== undefined) s.impactSlideUntilTick = snap.tick + snap.slideTicks;
   s.trackHint = -1;
   decompose(s);
 }
@@ -444,15 +446,18 @@ function stepCar(s, buttons, env, dtScale, events) {
     s.throttle = 0; s.braking = 0; s.reversing = 0; s.steerInput = 0;
     s.vx = 0; s.vy = 0; s.lf = 0; s.ll = 0;
   } else if (tick < s.stunUntilTick) {
-    // 소프트 스턴(보스) : 입력만 잠금 — 관성 유지
-    s.throttle = 0; s.braking = 0; s.reversing = 0;
+    // 소프트 스턴(보스) : 입력만 잠금 — 관성 유지 (조향값도 잠가 회전 잔류 방지)
+    s.throttle = 0; s.braking = 0; s.reversing = 0; s.steerInput = 0;
   } else {
     s.throttle = (buttons & BTN.W) ? 1 : 0;
     s.braking = (buttons & BTN.SPACE) ? 1 : 0;
     s.reversing = (buttons & BTN.S) ? 1 : 0;
     const target = ((buttons & BTN.D) ? 1 : 0) - ((buttons & BTN.A) ? 1 : 0);
     // 조향 램프 — 지수형(서브스텝 불변). 6.0/s = 9000/weight(1500kg)
-    s.steerInput += (target - s.steerInput) * (1 - Math.exp(-6.0 * dt));
+    // 목표 근접 시 스냅 : i8 양자화(1/127)와 지수 램프가 만나면 풀락이 ~0.96 에서
+    // 영구 정지(증분 < 반쿼텀 반올림 소멸)하는 스톨이 생긴다 — 0.02 이내면 목표로.
+    if (Math.abs(target - s.steerInput) < 0.02) s.steerInput = target;
+    else s.steerInput += (target - s.steerInput) * (1 - Math.exp(-6.0 * dt));
   }
 
   /* 2) 조향 (heading 만 회전) */
@@ -647,7 +652,7 @@ function obbMTV(a, b) {
 /* 한 페어 해석. impulseScale : 클라 예측은 0.5(부드러운 쪽으로 오차), 서버 1.0.
  *  contacts : Map("a:b" -> {nx,ny,tick}) — 접촉 법선 히스테리시스(축 플립 핀볼 방지).
  *  반환 : null | { dvA, dvB } (이벤트/사운드용 크기) */
-function resolveCarCar(a, b, tick, impulseScale, contacts, pairId) {
+function resolveCarCar(a, b, tick, impulseScale, contacts, pairId, posOnly) {
   let mtv = obbMTV(a, b);
   if (!mtv) return null;
 
@@ -665,6 +670,7 @@ function resolveCarCar(a, b, tick, impulseScale, contacts, pairId) {
   const half = mtv.depth / 2;
   a.x += mtv.nx * half; a.y += mtv.ny * half;
   b.x -= mtv.nx * half; b.y -= mtv.ny * half;
+  if (posOnly) { a.contactTick = tick; b.contactTick = tick; return { dvA: 0, dvB: 0 }; } // 원격끼리 : 겹침 방지만
 
   // 상대 속도 (총속도 = 주행 + ev)
   const avx = a.vx + a.evx, avy = a.vy + a.evy;
@@ -683,12 +689,13 @@ function resolveCarCar(a, b, tick, impulseScale, contacts, pairId) {
   else e = COL_E_HIGH;
 
   // 등질량 임펄스 : 각자 delta-v = (1+e)*closing/2, 상한 캡
-  let dv = Math.min((1 + e) * closing / 2, COL_DV_CAP) * (impulseScale || 1);
+  const rawDv = Math.min((1 + e) * closing / 2, COL_DV_CAP); // 미스케일(판정용 — 클라/서버 동일)
+  let dv = rawDv * (impulseScale || 1);
 
-  // 접선 마찰
+  // 접선 마찰 (dv 가 이미 impulseScale 반영 — 원시항에만 한 번 더 곱해 이중 스케일 방지)
   const tx = -mtv.ny, ty = mtv.nx;
   const vt = rvx * tx + rvy * ty;
-  const dvt = clamp(-vt / 2, -COL_MU * dv, COL_MU * dv) * (impulseScale || 1);
+  const dvt = clamp((-vt / 2) * (impulseScale || 1), -COL_MU * dv, COL_MU * dv);
 
   // ev 채널에 적용 (lf 캡이 임펄스를 소멸시키지 않도록 — 리뷰 블로커 해소)
   a.evx += mtv.nx * dv + tx * dvt; a.evy += mtv.ny * dv + ty * dvt;
@@ -702,8 +709,8 @@ function resolveCarCar(a, b, tick, impulseScale, contacts, pairId) {
     b.spinV += sgn * yaw * 0.35 * (impulseScale || 1);
   }
 
-  // 임팩트 슬라이드 + 접촉 마킹
-  if (dv > IMPACT_SLIDE_DV) {
+  // 임팩트 슬라이드 + 접촉 마킹 — 문턱 판정은 미스케일 dv (예측 0.5배와 서버가 같은 결정)
+  if (rawDv > IMPACT_SLIDE_DV) {
     a.impactSlideUntilTick = tick + IMPACT_SLIDE_TICKS;
     b.impactSlideUntilTick = tick + IMPACT_SLIDE_TICKS;
   }
@@ -736,7 +743,8 @@ function stepGroup(entries, env, opts) {
           const A = entries[i], B = entries[j];
           if (A.s.noCollide || B.s.noCollide) continue;
           const pairId = A.id < B.id ? A.id + ":" + B.id : B.id + ":" + A.id;
-          const r = resolveCarCar(A.s, B.s, env.tick, (opts && opts.impulseScale) || 1, opts && opts.contacts, pairId);
+          const posOnly = A.posOnly && B.posOnly; // 전방시뮬 상대끼리 : 위치분리만(임펄스 없음 — §6)
+          const r = resolveCarCar(A.s, B.s, env.tick, (opts && opts.impulseScale) || 1, opts && opts.contacts, pairId, posOnly);
           if (r && events && r.dvA > 40) events.push({ k: "carHit", a: A.id, b: B.id, dv: r.dvA });
         }
       }

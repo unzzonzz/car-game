@@ -159,6 +159,8 @@ class Bot {
       if (mask & 64) { e.state = dv.getUint8(o); o += 1; }
       if (mask & 128) { e.invulnTicks = dv.getUint8(o); o += 1; e.lockTicks = dv.getUint8(o); o += 1; e.stunTicks = dv.getUint8(o); o += 1; }
       if (mask & 256) { e.spinV = dv.getInt16(o) / 8; o += 2; }
+      if (mask & 512) { e.driftBoostT = buf[o] / 255; o += 1; }
+      if (mask & 1024) { e.slideTicks = buf[o]; o += 1; }
       if (keyframe) { o += 3; const nl = buf[o]; o += 1 + nl; } // 색/이름 스킵
       ents.push(e);
     }
@@ -185,8 +187,8 @@ class Bot {
       SIM.applyServerState(r.sim, {
         x: e.x, y: e.y, angle: e.angle, vx: e.vx || 0, vy: e.vy || 0,
         evx: e.evx || 0, evy: e.evy || 0, spinV: e.spinV || 0, steer: e.steer || 0,
-        drifting: !!((e.state || 0) & 1), tick: snap.tick,
-        invulnTicks: e.invulnTicks, lockTicks: e.lockTicks, stunTicks: e.stunTicks,
+        drifting: !!((e.state || 0) & 1), driftBoostT: e.driftBoostT, tick: snap.tick,
+        invulnTicks: e.invulnTicks, lockTicks: e.lockTicks, stunTicks: e.stunTicks, slideTicks: e.slideTicks,
       });
       r.simTick = snap.tick;
       r.snapAt = nowMs;
@@ -222,11 +224,13 @@ class Bot {
     const err = Math.hypot(dx, dy);
     if (err <= 0.6) return; // 양자화 경계(2쿼텀) 잡음 무시
     const inContact = !!((me.state || 0) & 16) || (this.car.contactTick >= T - 3);
-    if (inContact && err < 60) { // 몸싸움 중 : 소프트 블렌드 (클라와 동일)
+    if (inContact && err < 90) { // 몸싸움 중 : 소프트 블렌드 (클라와 동일)
       this.stats.softBlends = (this.stats.softBlends || 0) + 1;
-      this.car.x += dx * 0.2; this.car.y += dy * 0.2;
-      this.car.vx += ((me.vx || 0) - this.car.vx) * 0.3; this.car.vy += ((me.vy || 0) - this.car.vy) * 0.3;
-      this.car.evx += ((me.evx || 0) - this.car.evx) * 0.3; this.car.evy += ((me.evy || 0) - this.car.evy) * 0.3;
+      this.car.x += dx * 0.25; this.car.y += dy * 0.25;
+      this.car.vx += ((me.vx || 0) - this.car.vx) * 0.35; this.car.vy += ((me.vy || 0) - this.car.vy) * 0.35;
+      this.car.evx += ((me.evx || 0) - this.car.evx) * 0.35; this.car.evy += ((me.evy || 0) - this.car.evy) * 0.35;
+      this.car.spinV += ((me.spinV || 0) - this.car.spinV) * 0.5;
+      if (me.slideTicks !== undefined) this.car.impactSlideUntilTick = T + me.slideTicks;
       SIM.decompose(this.car);
       return;
     }
@@ -248,8 +252,7 @@ class Bot {
       const b = hh && hh.tick === tk ? hh.buttons : lastButtons;
       lastButtons = b;
       this.env.tick = tk;
-      SIM.stepCar(this.car, b, this.env, 1, null);
-      SIM.quantize(this.car);
+      SIM.stepGroup([{ s: this.car, buttons: b, id: this.id || 0 }], this.env, {}); // 라이브와 같은 적분기
       if (hh && hh.tick === tk) copySim(hh, this.car);
     }
   }
@@ -281,7 +284,7 @@ class Bot {
           if (r.extrap !== 0) continue;
           if (r.simTick !== this.simTick - 1) continue;
           if (Math.hypot(r.sim.x - this.car.x, r.sim.y - this.car.y) > 400) continue;
-          entries.push({ s: r.sim, buttons: r.buttons, id, _r: r });
+          entries.push({ s: r.sim, buttons: r.buttons, id, _r: r, posOnly: true });
           collide = true;
         }
       }
@@ -365,6 +368,13 @@ async function sumoGrind() {
 
 /* ---- 시나리오 ---- */
 async function main() {
+  if (process.argv[6] === "keep") { // 단일 봇 상주 (브라우저 육안/원격 경로 검증용)
+    const solo = new Bot("netbot", (tick) => SIM.BTN.W | ((tick % 240) < 60 ? SIM.BTN.D : 0));
+    await solo.connect();
+    setInterval(() => solo.tick(performance.now()), 4);
+    console.log("[netbot] solo keep-alive");
+    return;
+  }
   if (MODE === "sumo") return sumoGrind();
   console.log(`[netbot] server=${URL} one-way delay=${DELAY_MS}ms jitter=${JITTER_MS}ms mode=${MODE}`);
 
