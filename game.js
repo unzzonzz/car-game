@@ -893,8 +893,8 @@ window.addEventListener("keydown", (e) => {
     case "KeyD": keys.d = true; break;
     case "Space": keys.space = true; e.preventDefault(); break;
     case "KeyM": if (!e.repeat) toggleMute(); break; // 음소거 토글 (길게 눌러도 1회)
-    case "KeyR": // 타임어택 모드에서 R : 기록 시작/다시 (출발선 뒤로 → 재계측). 버튼과 동일
-      if (!e.repeat && gameState === "playing" && isTimeAttackMode()) { SFX.click(); requestRestart(); }
+    case "KeyR": // 계측 모드(타임어택 + 주행 테스트)에서 R : 기록 시작/다시. 버튼과 동일
+      if (!e.repeat && gameState === "playing" && isTimedMode()) { SFX.click(); requestRestart(); }
       break;
     case "KeyJ": keys.j = true; break; // 축구 : 누르는 동안만 공 그랩(드리블). 떼면 momentum 으로 나감
     case "ShiftLeft": case "ShiftRight":
@@ -1076,6 +1076,12 @@ function isTimeAttackMode() {
       || gameMode === "d1" || gameMode === "retro1" || gameMode === "retro2";
 }
 
+/* 랩타임을 재는 모드 = 타임어택 + 주행 테스트.
+ *  주행 테스트는 "계측만" 한다 — 서버 RECORD_FIELD 에 test 가 없어 att 를 arm 하지 않으므로
+ *  기록 저장/랭킹/TOP10/칭호 어디에도 올라가지 않고, 화면 타이머로만 보인다.
+ *  그래서 TOP10 UI 게이트는 isTimeAttackMode() 를 그대로 두고, 계측 경로만 이 술어를 쓴다. */
+function isTimedMode() { return isTimeAttackMode() || gameMode === "test"; }
+
 // 타임어택 상태 초기화 (모드 진입/이탈 시)
 function resetAttack() {
   attack.state = "idle";
@@ -1096,7 +1102,7 @@ function placeBehindStart() {
  *  복귀·계측 arm 을 해야 하므로 반드시 RESTART 입력 비트가 함께 나가야 한다.
  *  (버튼이 startAttack 만 부르면 서버가 계측을 시작하지 않아 기록이 저장되지 않는다) */
 function requestRestart() {
-  if (gameState !== "playing" || !isTimeAttackMode()) return;
+  if (gameState !== "playing" || !isTimedMode()) return;
   if (simTick < restartReadyAt) return; // 서버 RESTART_CD_TICKS(60) 미러 — 거부될 요청은 안 보냄
   restartReadyAt = simTick + 60;
   startAttack();           // 즉시 로컬 예측 (출발선 복귀 + armed)
@@ -1131,7 +1137,7 @@ function cancelAttack() {
 }
 
 function updateAttack(car) {
-  if (!isTimeAttackMode() || attack.state === "idle") return;
+  if (!isTimedMode() || attack.state === "idle") return;
   const now = performance.now();
   const ph = car.lastPhase01; // 시뮬이 틱마다 계산한 진행도 재사용
   if (attack.state === "armed") {
@@ -1158,6 +1164,7 @@ function updateAttack(car) {
 }
 
 function sendTimeAttack(ms) {
+  if (gameMode === "test") return; // 주행 테스트는 계측 표시만 — 서버로 제출하지 않는다
   if (!net.connected || net.ws.readyState !== WebSocket.OPEN) return;
   // 내림(floor) : 화면 타이머(fmtRaceTime)도 내림이라, 반올림하면 경계에서 TOP10 이 1단위 크게 보인다
   net.ws.send(JSON.stringify({ type: "timeAttack", ms: Math.floor(ms) }));
@@ -1530,13 +1537,13 @@ function updateProTimer() {
 function updateTimeHud() {
   if (gameMode === "pro" && race.state === "racing") {
     setTimeHud(fmtRaceTime(race.lapMs));
-  } else if (isTimeAttackMode() && (attack.state !== "idle" || attack.hasRun)) {
+  } else if (isTimedMode() && (attack.state !== "idle" || attack.hasRun)) {
     setTimeHud(fmtRaceTime(attack.ms));
   } else {
     setTimeHud("");
   }
-  // 타임어택 계측 중(armed/running) : 취소 버튼 표시 + 기록 버튼 아이콘을 "다시"로 전환
-  const recording = isTimeAttackMode() && attack.state !== "idle";
+  // 계측 중(armed/running) : 취소 버튼 표시 + 기록 버튼 아이콘을 "다시"로 전환
+  const recording = isTimedMode() && attack.state !== "idle";
   const cancelBtn = document.getElementById("attackCancel");
   if (cancelBtn) cancelBtn.style.display = recording ? "flex" : "none";
   const attackBtn = document.getElementById("attackBtn");
@@ -5477,7 +5484,7 @@ function startGame(mode) {
     updateCamera(CAR, 0);
   }
 
-  if (isTimeAttackMode()) resetAttack();
+  if (isTimedMode()) resetAttack();
   if (mode !== "pro") SFX.start(); // 게임 시작 사운드(프로는 방/카운트다운에서 GO로 대체)
 
   gameState = "playing";
@@ -6449,12 +6456,16 @@ function updateTouchVisibility() {
 }
 
 // 자유 모드 UI (기록 시작 버튼 + TOP10 + 다른 차 토글) 표시/숨김
+//  timed  : 계측 가능한 모드 — 기록 시작 버튼 (주행 테스트 포함)
+//  ranked : 순위가 있는 모드 — TOP10 + 다른 차 토글 (주행 테스트 제외)
 function updateFreeUI() {
-  const show = isTimeAttackMode() && gameState === "playing"; // 자유/하드 둘 다 기록 UI 표시
-  document.getElementById("attackBtn").style.display = show ? "flex" : "none";
-  document.getElementById("topRecords").style.display = show ? "block" : "none";
-  document.getElementById("othersToggle").style.display = show ? "block" : "none";
-  if (show) { updateTopRecords(); applyOthersToggle(); }
+  const playing = gameState === "playing";
+  const timed = isTimedMode() && playing;
+  const ranked = isTimeAttackMode() && playing;
+  document.getElementById("attackBtn").style.display = timed ? "flex" : "none";
+  document.getElementById("topRecords").style.display = ranked ? "block" : "none";
+  document.getElementById("othersToggle").style.display = ranked ? "block" : "none";
+  if (ranked) { updateTopRecords(); applyOthersToggle(); }
   updateTop10Offset();
 }
 
