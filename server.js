@@ -471,10 +471,18 @@ function spawnSim(p, x, y, angle, invulnMs) {
 // --- MSG_INPUT 수신 ---------------------------------------------------------
 function handleInputFrame(p, buf) {
   if (!p.inputBuf) return; // 미입장(시뮬 미생성) — 입장 후 입력만 유효
-  if (buf.length < 11 || buf.length > 128) return bumpViolation(p);
+  // 아래 검사들은 "이 프레임만 버린다". 예전엔 위반을 누적해 300회에서 추방했으나,
+  // 카운터가 세션 내내 감쇠 없이 쌓여 랙/탭전환뿐인 정상 플레이어도 오래 붙어 있으면
+  // 튕기는 오탐이 있었다(서버 권위 시뮬이라 조작 자체는 이미 불가) → 추방 제거.
+  if (buf.length < 11 || buf.length > 128) return;
   p.ackSnapTick = buf.readUInt32BE(1);
   const count = buf.readUInt8(5);
-  if (count < 1 || count > 16 || buf.length < 6 + count * 5) return bumpViolation(p);
+  if (count < 1 || count > 16 || buf.length < 6 + count * 5) return;
+  // 입력 레이트리밋 : 정상 상한은 60fps x 6레코드(중복 동봉) = 360/s — 600/s 초과분은 조용히 버린다.
+  const now = Date.now();
+  if (!p.inRate || now - p.inRate.t > 1000) p.inRate = { t: now, n: 0 };
+  p.inRate.n += count;
+  if (p.inRate.n > 600) return;
   let o = 6;
   for (let i = 0; i < count; i++) {
     const tick = buf.readUInt32BE(o); o += 4;
@@ -482,21 +490,12 @@ function handleInputFrame(p, buf) {
     // 수용 창 : (마지막 소화 틱, serverTick + MAX_LEAD]. 중복은 최초값 유지(사후 수정 불가).
     if (tick <= (p.lastConsumedTick || 0) || tick > serverTick + MAX_LEAD_TICKS) continue;
     if (!p.inputBuf.has(tick)) {
-      if (p.inputBuf.size >= INPUT_RING_MAX) return bumpViolation(p);
+      if (p.inputBuf.size >= INPUT_RING_MAX) return; // 링 포화 : 남은 기록만 버린다
       p.inputBuf.set(tick, buttons);
       // 도착 위상 : 이 입력이 시뮬보다 몇 틱 여유/지각인지 → 클라 lead 적응 신호
       p.phase = (serverTick + 1) - tick; // 음수 = 여유(정상), 양수 = 지각
     }
   }
-  // 입력 레이트리밋(지속) : 정상 상한은 60fps x 6레코드(중복 동봉) = 360/s — 여유 600/s
-  const now = Date.now();
-  if (!p.inRate || now - p.inRate.t > 1000) p.inRate = { t: now, n: 0 };
-  p.inRate.n += count;
-  if (p.inRate.n > 600) bumpViolation(p);
-}
-function bumpViolation(p) {
-  p.violations = (p.violations || 0) + 1;
-  if (p.violations > 300) kickPlayer(p, "비정상 입력");
 }
 
 // 틱마다 이 플레이어의 입력을 하나 소화 (없으면 기아 상태머신)
@@ -612,7 +611,7 @@ function doTick() {
   for (const [id, p] of players) {
     if (!p.active || !p.sim || !p.state || (p.mode === "boss" && p.bossSpec)) {
       // 그룹 밖(관전/사망 대기)에서도 입력 링은 소화한다 — 클라는 계속 보내므로
-      // 소화가 멈추면 32슬롯 링이 넘쳐 bumpViolation 오탐 킥이 난다(리뷰 critical).
+      // 소화가 멈추면 32슬롯 링이 넘쳐 이후 입력이 통째로 버려진다.
       if (p.inputBuf) consumeInput(p);
       continue;
     }
