@@ -894,10 +894,7 @@ window.addEventListener("keydown", (e) => {
     case "Space": keys.space = true; e.preventDefault(); break;
     case "KeyM": if (!e.repeat) toggleMute(); break; // 음소거 토글 (길게 눌러도 1회)
     case "KeyR": // 타임어택 모드에서 R : 기록 시작/다시 (출발선 뒤로 → 재계측). 버튼과 동일
-      if (!e.repeat && gameState === "playing" && isTimeAttackMode() && simTick >= restartReadyAt) {
-        restartReadyAt = simTick + 60; // 서버 쿨다운(60틱)과 미러 — 스팸 시 서버 거부로 인한 되돌림 방지
-        SFX.click(); startAttack(); pendingRestart = true;
-      }
+      if (!e.repeat && gameState === "playing" && isTimeAttackMode()) { SFX.click(); requestRestart(); }
       break;
     case "KeyJ": keys.j = true; break; // 축구 : 누르는 동안만 공 그랩(드리블). 떼면 momentum 으로 나감
     case "ShiftLeft": case "ShiftRight":
@@ -1094,6 +1091,17 @@ function placeBehindStart() {
   const p = SIM.placeBehindStart(world.track);
   SIM.teleport(CAR, p.x, p.y, p.angle); // 운동/외부속도/트랙힌트까지 완전 리셋
   CAR.lastPhase01 = trackPhase(p.x, p.y, world.track);
+}
+
+/* 기록 시작/다시 요청 (R 키 + 화면 버튼 공용) — v4 에선 서버도 같은 틱에 출발선
+ *  복귀·계측 arm 을 해야 하므로 반드시 RESTART 입력 비트가 함께 나가야 한다.
+ *  (버튼이 startAttack 만 부르면 서버가 계측을 시작하지 않아 기록이 저장되지 않는다) */
+function requestRestart() {
+  if (gameState !== "playing" || !isTimeAttackMode()) return;
+  if (simTick < restartReadyAt) return; // 서버 RESTART_CD_TICKS(60) 미러 — 거부될 요청은 안 보냄
+  restartReadyAt = simTick + 60;
+  startAttack();           // 즉시 로컬 예측 (출발선 복귀 + armed)
+  pendingRestart = true;   // 다음 틱 입력에 RESTART 비트 → 서버도 같은 틱에 복귀+계측 arm
 }
 
 // 자유 모드 타임어택 : "기록 시작" → 출발선 뒤로 이동 → 움직이면 계측 → 한 바퀴 후 종료
@@ -4959,6 +4967,11 @@ function clearPrediction() {
   recentInputs.length = 0;
 }
 
+/* 로컬 예측 순간이동(R 재시작) 배리어 : 이 틱 미만의 스냅샷은 서버가 아직 순간이동을
+ *  처리하기 전의 "옛 위치"라 조정 대상이 아니다 — 이걸 조정하면 출발선으로 간 차가
+ *  이전 위치로 되끌렸다가 다시 스냅되는 셰이크/복귀 버그가 난다. */
+let restartBarrierTick = 0;
+
 /* ---- 렌더 오차 오프셋 : 보정을 "미끄러짐"으로만 보이게 ---- */
 const errOff = { x: 0, y: 0, a: 0 };
 const ERR_SNAP_POS = 150, ERR_SNAP_ANG = 0.44; // 상한 초과 → 깔끔한 스냅(수백 ms 슬라이드 금지)
@@ -5055,6 +5068,7 @@ function applyRemoteEnt(e, snap) {
 
 /* ---- 내 차 : 조정(reconciliation) ---- */
 function reconcile(me, T) {
+  if (T < restartBarrierTick) return; // R 순간이동 예측 이전 스냅샷 — 조정 제외(배리어)
   const h = predHist[T % HIST_N];
   if (!h || h.tick !== T) {
     // 히스토리 밖 (리싱크 직후/장기 스톨) : 크게 어긋났으면 서버 상태로 리싱크
@@ -5249,6 +5263,7 @@ function frame(now) {
     simTick++;
     ticked++;
     const btns = sampleButtons(true);
+    if (btns & SIM.BTN.RESTART) restartBarrierTick = simTick; // 이 틱 미만 스냅샷은 조정 제외
     pushInputRecord(simTick, btns);          // 서버로 보낼 입력 (직전 2틱 중복 동봉)
     const env = buildEnv(simTick);
     const entries = [{ s: CAR, buttons: btns, id: net.id || 0 }];
@@ -5821,7 +5836,7 @@ function setupMenu() {
   document.getElementById("crCancel").addEventListener("click", hideCreateRoom);
 
   // 자유 모드 타임어택 기록 시작
-  document.getElementById("attackBtn").addEventListener("click", startAttack);
+  document.getElementById("attackBtn").addEventListener("click", requestRestart); // 서버 계측 arm 비트 포함
   document.getElementById("attackCancel").addEventListener("click", cancelAttack);
   document.getElementById("othersToggle").addEventListener("click", () => {
     showOthers = !showOthers;
