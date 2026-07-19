@@ -463,6 +463,7 @@ function simInit(p) {
 function flushInputs(p) {
   if (p.inputBuf) p.inputBuf.clear();
   p.curButtons = 0; p.prevButtons = 0;
+  p.lastSeenTick = 0; p.lastSeenButtons = 0; // 이전 타임라인 관측 키도 폐기
 }
 
 // 스폰/배치 : 시뮬 순간이동 + 판정 상태 리셋 + 클라 통지(클라도 같은 좌표로 예측 리셋)
@@ -496,6 +497,9 @@ function handleInputFrame(p, buf) {
   for (let i = 0; i < count; i++) {
     const tick = buf.readUInt32BE(o); o += 4;
     const buttons = buf.readUInt8(o); o += 1;
+    // 최신 "관측" 키 상태 — 지각-폐기되는 레코드라도 키 상태 자체는 진짜다.
+    // 기아 시 코스트(키 놓음) 대신 이걸 유지해 클라 예측(계속 달림)과 맞춘다.
+    if (tick > (p.lastSeenTick || 0)) { p.lastSeenTick = tick; p.lastSeenButtons = buttons; }
     // 수용 창 : (마지막 소화 틱, serverTick + MAX_LEAD]. 중복은 최초값 유지(사후 수정 불가).
     if (tick <= (p.lastConsumedTick || 0) || tick > serverTick + MAX_LEAD_TICKS) continue;
     if (!p.inputBuf.has(tick)) {
@@ -520,7 +524,12 @@ function consumeInput(p) {
   } else {
     p.starve++;
     p.prevButtons = p.curButtons;
-    if (p.starve > STARVE_COAST_TICKS) p.curButtons = 0;      // 코스트(폭주 방지)
+    if (p.starve > STARVE_COAST_TICKS) {
+      // 최근(45틱 내) 관측된 키가 있으면 유지 — 프레임 스톨/업링크 버스트 동안
+      // 서버 차가 멈춰 "복귀" 갭을 만드는 대신 클라 예측처럼 이어 달린다.
+      p.curButtons = (p.lastSeenTick && serverTick - p.lastSeenTick < STARVE_FREEZE_TICKS)
+        ? p.lastSeenButtons : 0;
+    }
     if (p.starve > STARVE_FREEZE_TICKS) p.starved = true;     // 프리즈 + 판정 제외
   }
   // 과거 틱 입력 청소 (지각 도착분)

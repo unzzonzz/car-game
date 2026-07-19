@@ -95,7 +95,9 @@ class Bot {
   }
   sendBin(buf) {
     this.stats.bytesOut += buf.length;
-    delay(() => { if (this.ws.readyState === WebSocket.OPEN) this.ws.send(buf); });
+    const extra = (globalThis.__burstUntil && performance.now() < globalThis.__burstUntil) ? (globalThis.__burstExtra || 500) : 0;
+    const d = DELAY_MS + Math.random() * JITTER_MS + extra;
+    setTimeout(() => { if (this.ws.readyState === WebSocket.OPEN) this.ws.send(buf); }, d);
   }
 
   noteServerTick(tick, atMs) {
@@ -218,7 +220,7 @@ class Bot {
   reconcile(me, T) {
     const h = this.hist[T % HIST_N];
     if (!h || h.tick !== T) {
-      if (Math.abs(this.simTick - T) > 30) {
+      if (T >= this.simTick || Math.abs(this.simTick - T) > 30) {
         this.stats.hardResyncs++;
         SIM.applyServerState(this.car, { x: me.x, y: me.y, angle: me.angle, vx: me.vx || 0, vy: me.vy || 0, evx: me.evx || 0, evy: me.evy || 0, spinV: me.spinV || 0, steer: me.steer || 0, drifting: !!((me.state || 0) & 1), tick: T });
         this.simTick = T + this.lead;
@@ -271,7 +273,7 @@ class Bot {
     if (this.clockOff !== null) {
       const target = Math.floor(this.estServerTick(nowMs)) + this.lead;
       const diff = target - this.simTick;
-      if (diff > 60 || diff < -60) { this.simTick = target; this.acc = 0; this.hist.fill(null); }
+      if (diff > 8 || diff < -60) { this.simTick = target; this.acc = 0; if (diff < -60) this.hist.fill(null); }
       else period = SIM.TICK_MS * (1 - Math.max(-2, Math.min(2, diff)) * 0.02);
     }
     this.acc += nowMs - (this.lastNow || nowMs);
@@ -434,8 +436,61 @@ async function clash() {
   process.exit(0);
 }
 
+/* ---- 업링크 버스트 시나리오 : 주행 중 입력 스트림 0.6s 정체 → "복귀" 크기 측정 ---- */
+async function burst() {
+  console.log(`[netbot] BURST server=${URL} delay=${DELAY_MS} jitter=${JITTER_MS}`);
+  const bot = new Bot("burstbot", () => SIM.BTN.W); // 직선 풀스로틀
+  await bot.connect();
+  const loop = setInterval(() => bot.tick(performance.now()), 4);
+  await new Promise((r) => setTimeout(r, 6000)); // 가속 (최고속 근접)
+
+  const spd = Math.hypot(bot.car.vx, bot.car.vy) | 0;
+  const posAt = { x: bot.car.x, y: bot.car.y };
+  console.log(`[burst] 주입 직전 speed=${spd}px/s`);
+  bot.stats.corrections = 0; bot.stats.corrMax = 0; bot.stats.corrSum = 0; bot.stats.hardResyncs = 0;
+  globalThis.__burstExtra = Number(process.argv[7] || 500);
+  globalThis.__burstUntil = performance.now() + Number(process.argv[8] || 600); // 0.6s 동안 입력만 +500ms 지연
+
+  // 3초간 관찰 : 보정(뒤로 복귀) 크기
+  await new Promise((r) => setTimeout(r, 3000));
+  clearInterval(loop);
+  const s = bot.stats;
+  console.log(`\n==== 업링크 버스트(0.6s, +500ms) 후 3초 ====`);
+  console.log(`corrections=${s.corrections} max=${s.corrMax.toFixed(1)}px avg=${s.corrections ? (s.corrSum / s.corrections).toFixed(1) : 0}px hardResyncs=${s.hardResyncs}`);
+  console.log(`(최고속 ${spd}px/s 기준 : 서버가 버스트 동안 코스트/프리즈했다면 그만큼 뒤로 복귀)`);
+  process.exit(0);
+}
+
+/* ---- 프레임 스톨 시나리오 : rAF 0.5s 정지 모사 → 슬루 회복 동안 복귀 측정 ---- */
+async function stall() {
+  console.log(`[netbot] STALL server=${URL} delay=${DELAY_MS} jitter=${JITTER_MS}`);
+  const bot = new Bot("stallbot", () => SIM.BTN.W);
+  await bot.connect();
+  let paused = false;
+  const loop = setInterval(() => { if (!paused) bot.tick(performance.now()); }, 4);
+  await new Promise((r) => setTimeout(r, 6000)); // 가속
+
+  const spd = Math.hypot(bot.car.vx, bot.car.vy) | 0;
+  console.log(`[stall] 스톨 직전 speed=${spd}px/s simTick=${bot.simTick}`);
+  bot.stats.corrections = 0; bot.stats.corrMax = 0; bot.stats.corrSum = 0; bot.stats.hardResyncs = 0;
+  paused = true;
+  setTimeout(() => { paused = false; bot.lastNow = performance.now(); }, Number(process.argv[7] || 500)); // 스톨
+
+  // 10초 관찰 : 1초마다 틱 적자(deficit)와 보정 누적
+  for (let i = 1; i <= 10; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const target = Math.floor(bot.estServerTick(performance.now())) + bot.lead;
+    const s = bot.stats;
+    console.log(`[stall] +${i}s deficit=${target - bot.simTick} corr=${s.corrections} max=${s.corrMax.toFixed(1)}px sum=${s.corrSum.toFixed(0)}px resync=${s.hardResyncs} speed=${Math.hypot(bot.car.vx, bot.car.vy) | 0}`);
+  }
+  clearInterval(loop);
+  process.exit(0);
+}
+
 /* ---- 시나리오 ---- */
 async function main() {
+  if (process.argv[6] === "stall") return stall();
+  if (process.argv[6] === "burst") return burst();
   if (process.argv[6] === "clash") return clash(); // 모드 무관 (boss 권장 — 킬/링아웃 없음)
   if (process.argv[6] === "keep") { // 단일 봇 상주 (브라우저 육안/원격 경로 검증용)
     const solo = new Bot("netbot", (tick) => SIM.BTN.W | ((tick % 240) < 60 ? SIM.BTN.D : 0));

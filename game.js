@@ -5084,8 +5084,9 @@ function reconcile(me, T) {
   if (performance.now() < restartPendingUntil) return;
   const h = predHist[T % HIST_N];
   if (!h || h.tick !== T) {
-    // 히스토리 밖 (리싱크 직후/장기 스톨) : 크게 어긋났으면 서버 상태로 리싱크
-    if (Math.abs(simTick - T) > 30) hardResync(me, T);
+    // 미래 틱 스냅샷(T >= simTick) = 내 시계가 뒤처진 확실한 신호 — 침묵하면
+    // 발산이 조용히 쌓였다가 한 방 워프가 된다(달리다 복귀 버그). 즉시 리싱크.
+    if (T >= simTick || Math.abs(simTick - T) > 30) hardResync(me, T);
     return;
   }
   const dx = me.x - h.x, dy = me.y - h.y;
@@ -5267,9 +5268,13 @@ function frame(now) {
   if (clock.off !== null && netInputActive()) {
     const targetTick = Math.floor(estServerTick(now)) + clock.lead; // 내 예측 틱 P 목표
     const diff = targetTick - simTick;
-    if (diff > 60 || diff < -60) {
-      // 대형 어긋남(절전 복귀/서버 재시작) → 즉시 재정렬, 상태는 다음 스냅샷 reconcile 이 수복
-      simTick = targetTick; simAcc = 0; clearPrediction();
+    if (diff > 8 || diff < -60) {
+      // 뒤처짐 8틱 초과(프레임 스톨: 창 전환/폰 버벅임) 또는 대형 역행 → 즉시 재정렬.
+      //  종전엔 60틱까지 슬루(초당 2.4틱)로만 회복해 수 초간 입력이 전부 지각-폐기
+      //  → 서버 기아 정지 → 한 방에 수백 px "복귀" 워프가 났다(netbot stall 재현).
+      //  앞으로 점프는 히스토리를 유지한다(건너뛴 틱은 서버가 최신 키 유지로 이어 달림).
+      simTick = targetTick; simAcc = 0;
+      if (diff < -60) clearPrediction(); // 역행(서버 재시작 등)만 예측 전체 리셋
     } else {
       period = SIM.DT * (1 - clamp(diff, -2, 2) * 0.02);
     }
