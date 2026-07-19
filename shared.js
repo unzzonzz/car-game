@@ -659,9 +659,15 @@ function obbMTV(a, b) {
 /* 한 페어 해석. impulseScale : 클라 예측은 0.5(부드러운 쪽으로 오차), 서버 1.0.
  *  contacts : Map("a:b" -> {nx,ny,tick}) — 접촉 법선 히스테리시스(축 플립 핀볼 방지).
  *  반환 : null | { dvA, dvB } (이벤트/사운드용 크기) */
-function resolveCarCar(a, b, tick, impulseScale, contacts, pairId, posOnly) {
+function resolveCarCar(a, b, tick, impulseScale, contacts, pairId, posOnly, sustainedScale) {
   let mtv = obbMTV(a, b);
   if (!mtv) return null;
+  // 신선한 "첫 임팩트"인지 (직전 3틱 내 같은 페어 접촉 없음) — 클라 예측은 첫 임팩트를
+  // 서버와 같은 전강도로 재현해야 충돌 직후 리베이스(순간이동)가 안 생긴다.
+  // 지속 접촉(그라인딩)은 상대 미예측과 결합해 전강도가 발산을 키우므로 절반 유지.
+  const prev0 = contacts && pairId ? contacts.get(pairId) : null;
+  const fresh = !prev0 || tick - prev0.tick > 3;
+  if (!fresh && sustainedScale !== undefined) impulseScale = (impulseScale || 1) * sustainedScale;
 
   // 법선 히스테리시스 : 직전 접촉 법선과 부호 정렬 + 급전환 억제
   if (contacts && pairId) {
@@ -751,7 +757,7 @@ function stepGroup(entries, env, opts) {
           if (A.s.noCollide || B.s.noCollide) continue;
           const pairId = A.id < B.id ? A.id + ":" + B.id : B.id + ":" + A.id;
           const posOnly = A.posOnly && B.posOnly; // 전방시뮬 상대끼리 : 위치분리만(임펄스 없음 — §6)
-          const r = resolveCarCar(A.s, B.s, env.tick, (opts && opts.impulseScale) || 1, opts && opts.contacts, pairId, posOnly);
+          const r = resolveCarCar(A.s, B.s, env.tick, (opts && opts.impulseScale) || 1, opts && opts.contacts, pairId, posOnly, opts && opts.sustainedScale);
           if (r && events && r.dvA > 40) events.push({ k: "carHit", a: A.id, b: B.id, dv: r.dvA });
         }
       }

@@ -296,7 +296,7 @@ class Bot {
           collide = true;
         }
       }
-      SIM.stepGroup(entries, this.env, { collide, impulseScale: 0.5, contacts: this.contacts });
+      SIM.stepGroup(entries, this.env, { collide, impulseScale: 1, sustainedScale: 0.5, contacts: this.contacts });
       for (const e of entries) if (e._r) e._r.simTick = this.simTick;
       const h = this.hist[this.simTick % HIST_N] || (this.hist[this.simTick % HIST_N] = {});
       h.tick = this.simTick; h.buttons = btns;
@@ -380,8 +380,63 @@ async function sumoGrind() {
   process.exit(0);
 }
 
+/* ---- 고속 격돌 시나리오 : 3초 벌어졌다가 정면 돌진 반복 (충돌 보정 측정) ---- */
+async function clash() {
+  console.log(`[netbot] CLASH server=${URL} delay=${DELAY_MS} jitter=${JITTER_MS}`);
+  let mode = "apart", modeAt = performance.now(); // apart <-> charge
+  function drv() {
+    return function (tick) {
+      const rc = this.remotes.values().next().value;
+      if (!rc) return SIM.BTN.W;
+      const dx = rc.x - this.car.x, dy = rc.y - this.car.y;
+      const dist = Math.hypot(dx, dy);
+      const want = Math.atan2(mode === "apart" ? -dy : dy, mode === "apart" ? -dx : dx);
+      let d = want - this.car.angle;
+      while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
+      return SIM.BTN.W | (d > 0.06 ? SIM.BTN.D : d < -0.06 ? SIM.BTN.A : 0);
+    };
+  }
+  const botC = new Bot("botC", null); botC.driveFn = drv().bind(botC);
+  const botD = new Bot("botD", null); botD.driveFn = drv().bind(botD);
+  await botC.connect(); await botD.connect();
+  const loop = setInterval(() => { const now = performance.now(); botC.tick(now); botD.tick(now); }, 4);
+  await new Promise((r) => setTimeout(r, 3000));
+
+  let impacts = 0;
+  const phaser = setInterval(() => {
+    const dist = Math.hypot(botC.car.x - botD.car.x, botC.car.y - botD.car.y);
+    const el = performance.now() - modeAt;
+    if (mode === "apart" && (el > 1800 || dist > 900)) { mode = "charge"; modeAt = performance.now(); } // 스모 링(R1050) 안에 머무름
+    else if (mode === "charge" && (dist < 70 || el > 6000)) {
+      if (dist < 70) { impacts++; console.log(`[clash] impact #${impacts} closing=${(Math.hypot(botC.car.vx - botD.car.vx, botC.car.vy - botD.car.vy)) | 0}px/s`); }
+      mode = "apart"; modeAt = performance.now();
+    }
+  }, 30);
+
+  const agree = [];
+  const sampler = setInterval(() => {
+    const rD = botC.remotes.get(botD.id), rC = botD.remotes.get(botC.id);
+    if (!rD || !rC) return;
+    const dC = Math.hypot(botC.car.x - rD.x, botC.car.y - rD.y);
+    const dD = Math.hypot(botD.car.x - rC.x, botD.car.y - rC.y);
+    agree.push(Math.abs(dC - dD));
+  }, 200);
+
+  await new Promise((r) => setTimeout(r, 25000));
+  clearInterval(loop); clearInterval(phaser); clearInterval(sampler);
+  const p = (arr, q) => { const s = [...arr].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(s.length * q))] : 0; };
+  console.log(`\n==== 고속 격돌 (${impacts}회 충돌) ====`);
+  console.log(`화면 간 상대거리 차 p95=${p(agree, 0.95).toFixed(1)}px`);
+  for (const b of [botC, botD]) {
+    const s = b.stats;
+    console.log(`[${b.name}] corrections=${s.corrections} (max=${s.corrMax.toFixed(1)}px avg=${s.corrections ? (s.corrSum / s.corrections).toFixed(1) : 0}px) softBlends=${s.softBlends || 0} hardResyncs=${s.hardResyncs}`);
+  }
+  process.exit(0);
+}
+
 /* ---- 시나리오 ---- */
 async function main() {
+  if (process.argv[6] === "clash") return clash(); // 모드 무관 (boss 권장 — 킬/링아웃 없음)
   if (process.argv[6] === "keep") { // 단일 봇 상주 (브라우저 육안/원격 경로 검증용)
     const solo = new Bot("netbot", (tick) => SIM.BTN.W | ((tick % 240) < 60 ? SIM.BTN.D : 0));
     await solo.connect();

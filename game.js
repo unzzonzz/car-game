@@ -5096,9 +5096,9 @@ function reconcile(me, T) {
   // 접촉 인지 : 몸싸움 중엔 되감기+재생 대신 시뮬을 서버 쪽으로 부드럽게 블렌드
   //  (재생이 캐시된 상대 궤적과 임펄스를 다시 만들어 진동하는 것 방지 — 설계 리뷰 블로커)
   const knockFlight = simTick < CAR.lockUntilTick || (me.lockTicks || 0) > 0; // 넉백 비행 중
+  const recentImpact = simTick < CAR.impactSlideUntilTick + 24 || (me.slideTicks || 0) > 0;
   const inContact = !!(me.state & 16) || (CAR.contactTick >= T - 3) || knockFlight;
   const posErr2 = dx * dx + dy * dy;
-  // 넉백(2300px/s)은 지터 한 번에 200px 급 시차가 난다 — 스냅 대신 블렌드로 수렴
   const blendCap = knockFlight ? 90000 : 8100; // 300px / 90px — 넉백은 편도지연×2300px/s 갭
   if (inContact && posErr2 < blendCap) {
     const g = knockFlight ? 0.4 : 0.25; // 넉백 중엔 빨리 수렴(고속 비행이라 미끄러짐이 안 보인다)
@@ -5134,7 +5134,8 @@ function reconcile(me, T) {
   errOff.x += oldX - CAR.x; errOff.y += oldY - CAR.y;
   let dA = oldA - CAR.angle; while (dA > Math.PI) dA -= Math.PI * 2; while (dA < -Math.PI) dA += Math.PI * 2;
   errOff.a += dA;
-  if (Math.hypot(errOff.x, errOff.y) > ERR_SNAP_POS || Math.abs(errOff.a) > ERR_SNAP_ANG) {
+  const snapCap = (knockFlight || recentImpact) ? 300 : ERR_SNAP_POS; // 임팩트류는 슬라이드로 소화
+  if (Math.hypot(errOff.x, errOff.y) > snapCap || Math.abs(errOff.a) > ERR_SNAP_ANG) {
     errOff.x = 0; errOff.y = 0; errOff.a = 0; // 대형 보정 : 슬라이드 대신 깔끔한 스냅
     addShake(6);
   }
@@ -5294,7 +5295,9 @@ function frame(now) {
         collide = true;
       }
     }
-    SIM.stepGroup(entries, env, { events: simEvents, collide, impulseScale: 0.5, contacts: clientContacts });
+    // 첫 임팩트는 서버와 같은 전강도(1.0) — 결정론으로 궤적이 일치해 충돌 직후
+    // 리베이스가 안 생긴다. 지속 접촉(그라인딩)만 절반(sustainedScale)로 부드럽게.
+    SIM.stepGroup(entries, env, { events: simEvents, collide, impulseScale: 1, sustainedScale: 0.5, contacts: clientContacts });
     for (const e of entries) if (e._r) e._r.simTick = simTick; // 같이 스텝된 상대 틱 마킹
     recordHist(simTick, btns);               // 조정(reconciliation)용 사후 상태 기록
     for (const [, r] of remotePlayers) advanceRemote(r); // 나머지 상대 전방 시뮬
@@ -5306,9 +5309,19 @@ function frame(now) {
   consumeSimEvents(simEvents);      // 벽/장애물 충돌음
 
   // ----- 렌더 오차 오프셋 감쇠 (보정을 미끄러짐으로) -----
-  errOff.x *= Math.exp(-dt / 0.12);
-  errOff.y *= Math.exp(-dt / 0.12);
-  errOff.a *= Math.exp(-dt / 0.08);
+  //  지수 감쇠(τ120ms)만 쓰면 100px 급 보정의 초반 슬라이드가 ~830px/s 버스트로
+  //  보인다(고속 충돌 "순간이동" 체감의 정체). 감쇠 속도를 400px/s 로 상한해
+  //  같은 수렴을 부드러운 활강으로 바꾼다(작은 오차는 여전히 지수 즉시 소멸).
+  {
+    const mag = Math.hypot(errOff.x, errOff.y);
+    if (mag > 0.01) {
+      const expDrop = mag * (1 - Math.exp(-dt / 0.12));
+      const drop = Math.min(expDrop, 400 * dt);
+      const k = Math.max(0, 1 - drop / mag);
+      errOff.x *= k; errOff.y *= k;
+    } else { errOff.x = 0; errOff.y = 0; }
+    errOff.a *= Math.exp(-dt / 0.08);
+  }
 
   // ----- 렌더 부분 스텝 : 사본 상태로 잔여 시간만 적분 (이벤트 무음, 시뮬 비오염) -----
   Object.assign(RENDER_CAR, CAR);
