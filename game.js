@@ -5095,11 +5095,15 @@ function reconcile(me, T) {
 
   // 접촉 인지 : 몸싸움 중엔 되감기+재생 대신 시뮬을 서버 쪽으로 부드럽게 블렌드
   //  (재생이 캐시된 상대 궤적과 임펄스를 다시 만들어 진동하는 것 방지 — 설계 리뷰 블로커)
-  const inContact = !!(me.state & 16) || (CAR.contactTick >= T - 3);
+  const knockFlight = simTick < CAR.lockUntilTick || (me.lockTicks || 0) > 0; // 넉백 비행 중
+  const inContact = !!(me.state & 16) || (CAR.contactTick >= T - 3) || knockFlight;
   const posErr2 = dx * dx + dy * dy;
-  if (inContact && posErr2 < 8100) { // < 90px — 몸싸움 최악 순간도 리베이스 없이 수렴
-    CAR.x += dx * 0.25; CAR.y += dy * 0.25;
-    CAR.angle += da * 0.25;
+  // 넉백(2300px/s)은 지터 한 번에 200px 급 시차가 난다 — 스냅 대신 블렌드로 수렴
+  const blendCap = knockFlight ? 90000 : 8100; // 300px / 90px — 넉백은 편도지연×2300px/s 갭
+  if (inContact && posErr2 < blendCap) {
+    const g = knockFlight ? 0.4 : 0.25; // 넉백 중엔 빨리 수렴(고속 비행이라 미끄러짐이 안 보인다)
+    CAR.x += dx * g; CAR.y += dy * g;
+    CAR.angle += da * g;
     CAR.vx += ((me.vx || 0) - CAR.vx) * 0.35; CAR.vy += ((me.vy || 0) - CAR.vy) * 0.35;
     CAR.evx += ((me.evx || 0) - CAR.evx) * 0.35; CAR.evy += ((me.evy || 0) - CAR.evy) * 0.35;
     CAR.spinV += ((me.spinV || 0) - CAR.spinV) * 0.5; // 요 스핀도 수렴 — 회전 발산 방지

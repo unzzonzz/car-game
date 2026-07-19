@@ -127,6 +127,12 @@ class Bot {
         this.noteServerTick(msg.tick, performance.now());
         this.simTick = msg.tick + this.lead;
       }
+    } else if (msg.type === "sumoKnock") {
+      // 실클라와 동일 : 수신 즉시 ev 채널 넉백 + 입력락 (편도지연만큼 늦게 시작 — 불가피)
+      this.car.evx += Number(msg.vx) || 0; this.car.evy += Number(msg.vy) || 0;
+      this.car.vx = this.car.vy = this.car.lf = this.car.ll = 0;
+      this.car.lockUntilTick = this.simTick + SIM.SUMO.lockTicks;
+      if (typeof msg.spinV === "number") this.car.spinV = msg.spinV;
     } else if (msg.type === "spawn") {
       SIM.teleport(this.car, msg.x, msg.y, msg.angle);
       this.hist.fill(null);
@@ -223,10 +229,12 @@ class Bot {
     const dx = me.x - h.x, dy = me.y - h.y;
     const err = Math.hypot(dx, dy);
     if (err <= 0.6) return; // 양자화 경계(2쿼텀) 잡음 무시
-    const inContact = !!((me.state || 0) & 16) || (this.car.contactTick >= T - 3);
-    if (inContact && err < 90) { // 몸싸움 중 : 소프트 블렌드 (클라와 동일)
+    const knockFlight = this.simTick < this.car.lockUntilTick || (me.lockTicks || 0) > 0;
+    const inContact = !!((me.state || 0) & 16) || (this.car.contactTick >= T - 3) || knockFlight;
+    if (inContact && err < (knockFlight ? 300 : 90)) { // 몸싸움/넉백 : 소프트 블렌드 (클라와 동일)
       this.stats.softBlends = (this.stats.softBlends || 0) + 1;
-      this.car.x += dx * 0.25; this.car.y += dy * 0.25;
+      const g = knockFlight ? 0.4 : 0.25;
+      this.car.x += dx * g; this.car.y += dy * g;
       this.car.vx += ((me.vx || 0) - this.car.vx) * 0.35; this.car.vy += ((me.vy || 0) - this.car.vy) * 0.35;
       this.car.evx += ((me.evx || 0) - this.car.evx) * 0.35; this.car.evy += ((me.evy || 0) - this.car.evy) * 0.35;
       this.car.spinV += ((me.spinV || 0) - this.car.spinV) * 0.5;
@@ -340,6 +348,12 @@ async function sumoGrind() {
   await botD.connect();
   const loop = setInterval(() => { const now = performance.now(); botC.tick(now); botD.tick(now); }, 4);
   await new Promise((r) => setTimeout(r, 3000));
+  // 실제 펀치 : 3.2초마다 무작위 한쪽 — 넉백(2300px/s) 경로의 보정 거동 측정
+  const puncher = setInterval(() => {
+    const b = Math.random() < 0.5 ? botC : botD;
+    if (b.ws.readyState === WebSocket.OPEN) b.ws.send(JSON.stringify({ type: "punch" }));
+  }, 3200);
+  setTimeout(() => clearInterval(puncher), 19000);
 
   const agree = [];  // 두 화면의 상대거리 일치도
   const sampler = setInterval(() => {
