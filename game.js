@@ -964,8 +964,8 @@ function init() {
 const decompose = SIM.decompose; // 외부에서 vx/vy/angle 변경 후 lf/ll 재동기용
 
 // 키 상태 -> 입력 버튼 비트 (시뮬의 유일한 입력 형식)
-let pendingRestart = false; // R 키 → 다음 틱 입력에 RESTART 비트 1회 동봉(서버도 같은 틱에 복귀 예측)
 let restartReadyAt = 0;     // R 쿨다운(클라 미러 — 서버 RESTART_CD_TICKS 와 동일 60틱)
+let restartPendingUntil = 0; // 이 시각(performance.now)까지 R 재시작 서버 확정 대기 — 자기 차 조정 보류
 function sampleButtons(consumeEdges) {
   let b = 0;
   if (keys.w) b |= SIM.BTN.W;
@@ -973,7 +973,6 @@ function sampleButtons(consumeEdges) {
   if (keys.a) b |= SIM.BTN.A;
   if (keys.d) b |= SIM.BTN.D;
   if (keys.s) b |= SIM.BTN.S;
-  if (consumeEdges && pendingRestart) { b |= SIM.BTN.RESTART; pendingRestart = false; }
   return b;
 }
 
@@ -1101,7 +1100,15 @@ function requestRestart() {
   if (simTick < restartReadyAt) return; // 서버 RESTART_CD_TICKS(60) 미러 — 거부될 요청은 안 보냄
   restartReadyAt = simTick + 60;
   startAttack();           // 즉시 로컬 예측 (출발선 복귀 + armed)
-  pendingRestart = true;   // 다음 틱 입력에 RESTART 비트 → 서버도 같은 틱에 복귀+계측 arm
+  recentInputs.length = 0; // 이전 타임라인 입력의 중복 재전송 차단(서버는 버퍼도 폐기)
+  // 재시작은 "특정 틱 입력 비트"가 아니라 TCP-신뢰 JSON 으로 보낸다 — 비트는 중복
+  // 창(~33ms)을 넘는 지터에서 통째로 유실돼 "클라만 순간이동, 서버는 계속 주행"
+  // 상태가 되고, 조정이 차를 되끌며 격렬한 셰이크가 났다(실회선 재현 버그).
+  // 서버는 spawn{restart:true} 로 확정 응답, 그때까지 자기 차 조정은 보류한다.
+  if (net.connected && net.ws && net.ws.readyState === WebSocket.OPEN) {
+    net.ws.send(JSON.stringify({ type: "restart" }));
+    restartPendingUntil = performance.now() + 1500; // 확정 or 타임아웃까지 조정 보류
+  }
 }
 
 // 자유 모드 타임어택 : "기록 시작" → 출발선 뒤로 이동 → 움직이면 계측 → 한 바퀴 후 종료
@@ -1420,7 +1427,7 @@ function render(car) {
   }
   // 내 이름표 (설정) : 내 차 밑에도 이름+칭호 — 보스전 사망/관전 중엔 차와 함께 숨김
   if (gameMode !== "lobby" && showMyName && !(gameMode === "boss" && (bossCli.dead || bossCli.spec))) {
-    drawName(playerName, CAR.x, CAR.y, net.id);
+    drawName(playerName, car.x, car.y, net.id); // 렌더 상태(car 인자) — CAR(60Hz 틱)을 읽으면 카메라와 어긋나 떨린다
   }
 
   // 폭발 이펙트 (차량 위에)
@@ -4012,9 +4019,17 @@ function connect() {
       // 서버가 정한 입장/부활 위치 → 거기서 시작. (v4 : 전 모드 서버 권위 — 타임어택도
       //  서버가 같은 출발선 좌표를 계산하므로 클라 예측과 일치, 스냅 없음)
       if (gameMode === "lobby") return;
-      SIM.teleport(CAR, msg.x, msg.y, msg.angle); // 운동/외부속도/트랙힌트까지 완전 리셋
-      CAR.invulnUntil = performance.now() + 1500;
-      clearPrediction(); // 예측 히스토리/오프셋 리셋
+      const restartConfirm = !!msg.restart && performance.now() < restartPendingUntil;
+      restartPendingUntil = 0; // 확정 수신 — 자기 차 조정 재개
+      if (restartConfirm && Math.hypot(CAR.x - msg.x, CAR.y - msg.y) < 100) {
+        // 이미 로컬 예측으로 같은 출발선에 있다(막 출발했어도 수십 px) — 텔레포트를
+        // 생략해 초반 런치를 보존하고, 히스토리만 리셋해 새 타임라인에서 조정 시작.
+        clearPrediction();
+      } else {
+        SIM.teleport(CAR, msg.x, msg.y, msg.angle); // 운동/외부속도/트랙힌트까지 완전 리셋
+        if (!msg.restart) CAR.invulnUntil = performance.now() + 1500; // 재시작엔 무적 없음
+        clearPrediction();
+      }
       if (gameMode === "boss") { bossCli.dead = false; bossCli.respawnAt = 0; updateCamera(CAR, 0); } // 보스전 부활/배치 복귀
       if (gameMode === "sumo") { sumo.dead = false; sumo.outAt = 0; CAR.lockUntilTick = 0; updateCamera(CAR, 0); } // 스모 부활 (가운데로)
     } else if (msg.type === "sumoKnock") {
@@ -4967,10 +4982,6 @@ function clearPrediction() {
   recentInputs.length = 0;
 }
 
-/* 로컬 예측 순간이동(R 재시작) 배리어 : 이 틱 미만의 스냅샷은 서버가 아직 순간이동을
- *  처리하기 전의 "옛 위치"라 조정 대상이 아니다 — 이걸 조정하면 출발선으로 간 차가
- *  이전 위치로 되끌렸다가 다시 스냅되는 셰이크/복귀 버그가 난다. */
-let restartBarrierTick = 0;
 
 /* ---- 렌더 오차 오프셋 : 보정을 "미끄러짐"으로만 보이게 ---- */
 const errOff = { x: 0, y: 0, a: 0 };
@@ -5068,7 +5079,9 @@ function applyRemoteEnt(e, snap) {
 
 /* ---- 내 차 : 조정(reconciliation) ---- */
 function reconcile(me, T) {
-  if (T < restartBarrierTick) return; // R 순간이동 예측 이전 스냅샷 — 조정 제외(배리어)
+  // R 재시작 확정 대기 중 : 서버가 아직 순간이동을 처리하기 전 스냅샷들 — 조정 제외.
+  //  확정(spawn{restart}) 수신 시 해제 + clearPrediction, 1.5s 타임아웃 시 자연 재개.
+  if (performance.now() < restartPendingUntil) return;
   const h = predHist[T % HIST_N];
   if (!h || h.tick !== T) {
     // 히스토리 밖 (리싱크 직후/장기 스톨) : 크게 어긋났으면 서버 상태로 리싱크
@@ -5263,7 +5276,6 @@ function frame(now) {
     simTick++;
     ticked++;
     const btns = sampleButtons(true);
-    if (btns & SIM.BTN.RESTART) restartBarrierTick = simTick; // 이 틱 미만 스냅샷은 조정 제외
     pushInputRecord(simTick, btns);          // 서버로 보낼 입력 (직전 2틱 중복 동봉)
     const env = buildEnv(simTick);
     const entries = [{ s: CAR, buttons: btns, id: net.id || 0 }];

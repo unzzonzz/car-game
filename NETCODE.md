@@ -91,7 +91,10 @@ u8  count         // 이 프레임에 담긴 입력 레코드 수 (1~16)
 per record:
   u32 tick
   u8  buttons     // bit0 W, bit1 Space, bit2 A, bit3 D, bit4 S, bit5 Shift(punch),
-                  // bit6 R(restart), bit7 예약
+                  // bit6 예약(구 R — 재시작은 JSON {type:"restart"} 명령으로 이동:
+                  //   틱 비트는 지터 스파이크에서 유실돼 클라/서버 순간이동 불일치를
+                  //   만들었다. 서버는 spawn{restart:true} 로 확정 응답, 클라는
+                  //   확정까지 자기 차 조정 보류 + 양측 이전 타임라인 입력 폐기), bit7 예약
 ```
 rAF 당 1 WS 프레임(밀린 틱 일괄 + **직전 2틱 중복 포함** — TCP 지연 프레임 뒤
 서버 디지터 버퍼 공백을 즉시 메움). 터치 기기는 2틱 병합(30PPS) 허용.

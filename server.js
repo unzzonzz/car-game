@@ -457,9 +457,18 @@ function simInit(p) {
   p.lapGate = { checkpoint: false, lastPhase: 0 };
 }
 
+/* 텔레포트 직전까지 도착해 있던 입력은 "이전 타임라인"의 것 — TCP 순서 보장으로
+ *  이 시점의 버퍼 내용물은 전부 텔레포트 원인(재시작/스폰) 이전에 보낸 입력이다.
+ *  그대로 소비하면 순간이동 직후 차가 저절로 굴러간다(주행 중 R 버그의 원인). */
+function flushInputs(p) {
+  if (p.inputBuf) p.inputBuf.clear();
+  p.curButtons = 0; p.prevButtons = 0;
+}
+
 // 스폰/배치 : 시뮬 순간이동 + 판정 상태 리셋 + 클라 통지(클라도 같은 좌표로 예측 리셋)
 function spawnSim(p, x, y, angle, invulnMs) {
   if (!p.sim) simInit(p);
+  flushInputs(p); // 이전 타임라인 입력 폐기 — 스폰 직후 유령 주행 방지
   SIM.teleport(p.sim, x, y, angle);
   p.state = p.sim;
   p.prevHead = headOf(p.sim);
@@ -577,6 +586,27 @@ function sendSnap(p, body, keyframe) {
   return true;
 }
 
+/* R(출발선 복귀/기록 재시작) — TCP-신뢰 JSON 명령으로 수신해 즉시 실행하고
+ *  spawn{restart:true} 로 확정 응답한다. 입력 비트 방식은 중복 창(~33ms)을 넘는
+ *  지터 스파이크에서 통째로 유실돼 클라/서버 순간이동 불일치(셰이크 버그)를 만들었다. */
+function tryRestart(p) {
+  if (!p.active || !p.sim || !p.state) return;
+  const envDef = MODE_ENV[p.mode];
+  if (!envDef || !envDef.track) return;                    // 타임어택/테스트 모드만
+  if (serverTick < (p.restartReadyTick || 0)) return;      // 쿨다운(스팸 방지)
+  const st = SIM.placeBehindStart(envDef.track);
+  flushInputs(p); // 이전 타임라인 입력 폐기 — 재시작 직후 유령 주행 방지 (핵심)
+  SIM.teleport(p.sim, st.x, st.y, st.angle);
+  p.prevHead = headOf(p.sim);
+  p.restartReadyTick = serverTick + RESTART_CD_TICKS;
+  p.needKeyframe = true;
+  // 타임어택 계측 armed — 기록은 서버 시뮬로 산출(클라 제출 신뢰 안 함)
+  if (RECORD_FIELD[p.mode]) {
+    p.att = { state: 1, startTick: 0, checkpoint: false, lastPhase: p.sim.lastPhase01 || 0 };
+  }
+  send(p, { type: "spawn", x: st.x, y: st.y, angle: st.angle, tick: serverTick, restart: true });
+}
+
 /* 타임어택 기록 반영 — 서버 시뮬이 산출한 틱 수 기준 (기존 3s~10min·체류 검증 유지) */
 function submitTimeAttack(p, ms) {
   const field = RECORD_FIELD[p.mode];
@@ -626,18 +656,6 @@ function doTick() {
     const entries = [];
     for (const { id, p } of g.list) {
       const buttons = consumeInput(p);
-      // R : 타임어택/테스트 출발선 복귀 (엣지 + 쿨다운) — 클라도 같은 예측을 한다
-      if ((buttons & SIM.BTN.RESTART) && !(p.prevButtons & SIM.BTN.RESTART)
-          && serverTick >= (p.restartReadyTick || 0) && MODE_ENV[p.mode] && MODE_ENV[p.mode].track) {
-        const st = SIM.placeBehindStart(MODE_ENV[p.mode].track);
-        SIM.teleport(p.sim, st.x, st.y, st.angle);
-        p.restartReadyTick = serverTick + RESTART_CD_TICKS;
-        p.needKeyframe = true;
-        // 타임어택 계측 armed — 기록은 서버 시뮬로 산출(클라 제출 신뢰 안 함)
-        if (RECORD_FIELD[p.mode]) {
-          p.att = { state: 1, startTick: 0, checkpoint: false, lastPhase: p.sim.lastPhase01 || 0 };
-        }
-      }
       const env = envForPlayer(p);
       const freeze =
         p.starved
@@ -1122,6 +1140,10 @@ wss.on("connection", (ws) => {
       for (const uid in users) { const u = users[uid]; if (u[field]) arr.push({ name: u.nickname, ms: u[field] }); }
       arr.sort(RECORD_DESC[msg.mode] ? (a, b) => b.ms - a.ms : (a, b) => a.ms - b.ms);
       send(p, { type: "rankings", mode: msg.mode, entries: arr });
+
+    } else if (msg.type === "restart") {
+      // 타임어택 출발선 복귀 — TCP 보장 명령 (tryRestart 가 자격/쿨다운 검증)
+      tryRestart(p);
 
     } else if (msg.type === "timeAttack") {
       // v4 : 타임어택 기록은 서버가 자기 시뮬로 직접 산출한다(doTick attackStep) — 클라 제출 무시.
